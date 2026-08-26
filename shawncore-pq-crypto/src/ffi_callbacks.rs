@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -7,8 +6,8 @@
 //! Allows the host OS (C/C++) to inject its own hardware-specific implementations
 //! for interrupt management, cache flushing, and stack wiping.
 
-use core::sync::atomic::{AtomicPtr, Ordering};
 use crate::ffi_error::invoke_panic_hook;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 /// Trait for architecture-specific interrupt management.
 pub trait InterruptContext {
@@ -74,12 +73,14 @@ pub struct HostInterruptContext;
 impl InterruptContext for HostInterruptContext {
     fn disable_and_save() -> usize {
         let cb_ptr = DISABLE_INTERRUPTS_CB.load(Ordering::Acquire);
-        
+
         if cb_ptr.is_null() {
             invoke_panic_hook();
-            loop { core::hint::spin_loop(); } // Halt on silent concurrency failure
+            loop {
+                core::hint::spin_loop();
+            } // Halt on silent concurrency failure
         }
-        
+
         // # Safety
         // Spatial: N/A.
         // Temporal: The host OS guarantees the callback remains valid.
@@ -92,12 +93,14 @@ impl InterruptContext for HostInterruptContext {
 
     fn restore(flags: usize) {
         let cb_ptr = RESTORE_INTERRUPTS_CB.load(Ordering::Acquire);
-        
+
         if cb_ptr.is_null() {
             invoke_panic_hook();
-            loop { core::hint::spin_loop(); }
+            loop {
+                core::hint::spin_loop();
+            }
         }
-        
+
         // # Safety
         // Spatial: N/A.
         // Temporal: The host OS guarantees the callback remains valid.
@@ -112,12 +115,14 @@ impl InterruptContext for HostInterruptContext {
 /// Flushes the cache using the registered host OS callback.
 pub fn host_cache_flush(ptr: *const u8, len: usize) {
     let cb_ptr = CACHE_FLUSH_CB.load(Ordering::Acquire);
-    
+
     if cb_ptr.is_null() {
         invoke_panic_hook();
-        loop { core::hint::spin_loop(); }
+        loop {
+            core::hint::spin_loop();
+        }
     }
-    
+
     // # Safety
     // Spatial: `ptr` and `len` are validated by the caller.
     // Temporal: The host OS guarantees the callback remains valid.
@@ -131,12 +136,14 @@ pub fn host_cache_flush(ptr: *const u8, len: usize) {
 /// Wipes the stack using the registered host OS callback.
 pub fn host_stack_wipe(stack_base: u64) {
     let cb_ptr = STACK_WIPE_CB.load(Ordering::Acquire);
-    
+
     if cb_ptr.is_null() {
         invoke_panic_hook();
-        loop { core::hint::spin_loop(); }
+        loop {
+            core::hint::spin_loop();
+        }
     }
-    
+
     // # Safety
     // Spatial: `stack_base` is validated by the caller.
     // Temporal: The host OS guarantees the callback remains valid.

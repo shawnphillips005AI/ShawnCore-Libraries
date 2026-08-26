@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -21,6 +20,8 @@ pub const AEAD_KEY_SIZE: usize = 32;
 pub const AEAD_NONCE_SIZE: usize = 12;
 /// Size of the AEAD tag in bytes.
 pub const AEAD_TAG_SIZE: usize = 48;
+/// Maximum bytes processable under one ChaCha20 key and nonce.
+const CHACHA20_MAX_BYTES: u64 = (u32::MAX as u64 + 1) * 64;
 
 /// Verifies two AEAD tags in strict constant time using bitwise operations to prevent branch
 /// prediction leaks.
@@ -59,11 +60,7 @@ pub fn hmac_sha384(key: &[u8], data: &[u8]) -> Result<[u8; AEAD_TAG_SIZE], Crypt
 /// Expands a pseudorandom key using HKDF-SHA384 to an arbitrary length.
 ///
 /// Populates the `out` buffer with the expanded key material.
-pub fn hkdf_expand_sha384(
-    prk: &[u8],
-    info: &[u8],
-    out: &mut [u8],
-) -> Result<(), CryptoError> {
+pub fn hkdf_expand_sha384(prk: &[u8], info: &[u8], out: &mut [u8]) -> Result<(), CryptoError> {
     let hkdf = Hkdf::<Sha384>::from_prk(prk).map_err(|_| CryptoError::InvalidLength)?;
     let res = hkdf.expand(info, out);
 
@@ -98,22 +95,27 @@ pub fn aead_encrypt(
     ciphertext: &mut [u8],
     out_mac: &mut [u8; AEAD_TAG_SIZE],
 ) -> Result<(), CryptoError> {
-    if plaintext.len() != ciphertext.len() {
+    if plaintext.len() != ciphertext.len() || plaintext.len() as u64 > CHACHA20_MAX_BYTES {
         return Err(CryptoError::InvalidLength);
     }
 
     // 1. Encrypt the plaintext into the ciphertext buffer
     // # Safety: Lengths are verified equal above.
     unsafe {
-        core::ptr::copy_nonoverlapping(plaintext.as_ptr(), ciphertext.as_mut_ptr(), plaintext.len());
+        core::ptr::copy_nonoverlapping(
+            plaintext.as_ptr(),
+            ciphertext.as_mut_ptr(),
+            plaintext.len(),
+        );
     }
     let mut cipher = ChaCha20::new(enc_key, nonce);
-    cipher.apply_keystream(ciphertext);
+    cipher.apply_keystream(ciphertext)?;
 
     // 2. Compute the MAC over the unambiguous encoding:
     // MAC(mac_key, AAD_len || Ciphertext_len || Nonce || AAD || Ciphertext)
-    let mut mac_engine = Hmac::<Sha384>::new_from_slice(mac_key).map_err(|_| CryptoError::InvalidState)?;
-    
+    let mut mac_engine =
+        Hmac::<Sha384>::new_from_slice(mac_key).map_err(|_| CryptoError::InvalidState)?;
+
     mac_engine.update(&(aad.len() as u64).to_le_bytes());
     mac_engine.update(&(ciphertext.len() as u64).to_le_bytes());
     mac_engine.update(nonce);
@@ -150,13 +152,14 @@ pub fn aead_decrypt(
     mac: &[u8; AEAD_TAG_SIZE],
     plaintext: &mut [u8],
 ) -> Result<(), CryptoError> {
-    if plaintext.len() != ciphertext.len() {
+    if plaintext.len() != ciphertext.len() || ciphertext.len() as u64 > CHACHA20_MAX_BYTES {
         return Err(CryptoError::InvalidLength);
     }
 
     // 1. Compute the expected MAC over the unambiguous encoding
-    let mut mac_engine = Hmac::<Sha384>::new_from_slice(mac_key).map_err(|_| CryptoError::InvalidState)?;
-    
+    let mut mac_engine =
+        Hmac::<Sha384>::new_from_slice(mac_key).map_err(|_| CryptoError::InvalidState)?;
+
     mac_engine.update(&(aad.len() as u64).to_le_bytes());
     mac_engine.update(&(ciphertext.len() as u64).to_le_bytes());
     mac_engine.update(nonce);
@@ -176,10 +179,17 @@ pub fn aead_decrypt(
     // 3. Decrypt the ciphertext into the plaintext buffer
     // # Safety: Lengths are verified equal above.
     unsafe {
-        core::ptr::copy_nonoverlapping(ciphertext.as_ptr(), plaintext.as_mut_ptr(), ciphertext.len());
+        core::ptr::copy_nonoverlapping(
+            ciphertext.as_ptr(),
+            plaintext.as_mut_ptr(),
+            ciphertext.len(),
+        );
     }
     let mut cipher = ChaCha20::new(enc_key, nonce);
-    cipher.apply_keystream(plaintext);
+    if let Err(error) = cipher.apply_keystream(plaintext) {
+        secure_zeroize(plaintext);
+        return Err(error);
+    }
 
     secure_cache_flush(plaintext.as_ptr(), plaintext.len());
 
