@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -17,12 +16,10 @@
 use crate::error::CryptoError;
 use crate::hybrid_kdf::derive_hybrid_key;
 use crate::ml_kem_wrapper::{
-    ml_kem_decapsulate, ml_kem_encapsulate, ml_kem_keygen, Ciphertext1024,
-    DecapsKey1024, PublicKey1024,
+    ml_kem_decapsulate, ml_kem_encapsulate, ml_kem_keygen, Ciphertext1024, DecapsKey1024,
+    PublicKey1024,
 };
-use crate::x25519_wrapper::{
-    x25519_diffie_hellman, x25519_keygen, X25519Public, X25519Secret,
-};
+use crate::x25519_wrapper::{x25519_diffie_hellman, x25519_keygen, X25519Public, X25519Secret};
 use crate::zeroize::{secure_cache_flush, secure_stack_wipe, secure_zeroize};
 use core::sync::atomic::{compiler_fence, Ordering};
 

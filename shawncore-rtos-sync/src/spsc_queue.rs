@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -8,15 +7,15 @@
 //! Hardware-agnostic implementation for MarTac USVs.
 //! Refactored to accept host-provided, page-aligned memory buffers via `init()`
 //! to guarantee DMA memory pinning and ownership by the host OS.
-//! 
+//!
 //! # Concurrency Safety & Memory Ordering
 //! This queue relies on strict `Acquire` and `Release` memory ordering semantics
 //! to guarantee that data written by the producer is fully visible to the consumer
 //! before the index is updated, preventing data races and torn reads across cores.
 
+use crate::error::IpcError;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, AtomicUsize, Ordering};
-use crate::error::IpcError;
 
 /// A cache-line aligned atomic index to prevent false sharing between producer and consumer cores.
 #[repr(C, align(64))]
@@ -43,6 +42,8 @@ pub struct SpscQueue<T: Copy + Default, const N: usize> {
     tail: CacheAlignedIndex,
     /// Initialization flag.
     is_initialized: AtomicBool,
+    /// Prevents concurrent initialization attempts.
+    is_initializing: AtomicBool,
 }
 
 // # Safety
@@ -66,6 +67,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
             head: CacheAlignedIndex(AtomicUsize::new(0)),
             tail: CacheAlignedIndex(AtomicUsize::new(0)),
             is_initialized: AtomicBool::new(false),
+            is_initializing: AtomicBool::new(false),
         }
     }
 
@@ -77,31 +79,61 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
     ///
     /// # Returns
     /// `Ok(())` on success, or an `IpcError` if the memory is invalid or unaligned.
-    pub fn init(&self, base_ptr: *mut CacheAlignedSlot<T>, size_in_bytes: usize) -> Result<(), IpcError> {
+    ///
+    /// This operation is one-shot. The queue must be destroyed before its object
+    /// storage is reused for another initialization, and producers and consumers
+    /// must be stopped before destruction or reuse.
+    pub fn init(
+        &self,
+        base_ptr: *mut CacheAlignedSlot<T>,
+        size_in_bytes: usize,
+    ) -> Result<(), IpcError> {
         if base_ptr.is_null() {
             return Err(IpcError::InvalidMemory);
         }
 
-        let required_size = N.checked_mul(core::mem::size_of::<CacheAlignedSlot<T>>()).ok_or(IpcError::InvalidMemory)?;
+        let required_size = N
+            .checked_mul(core::mem::size_of::<CacheAlignedSlot<T>>())
+            .ok_or(IpcError::InvalidMemory)?;
         if size_in_bytes < required_size {
             return Err(IpcError::InvalidMemory);
         }
 
-        // Enforce 4096-byte (page) alignment for DMA
-        if (base_ptr as usize) % 4096 != 0 {
+        // The host contract requires page alignment, while Rust also requires the
+        // allocation to satisfy the slot type's alignment.
+        let required_alignment = core::mem::align_of::<CacheAlignedSlot<T>>();
+        if (base_ptr as usize) % 4096 != 0 || (base_ptr as usize) % required_alignment != 0 {
             return Err(IpcError::InvalidMemory);
         }
 
         // Ordering::SeqCst ensures that the initialization state is globally visible
         // before any producer or consumer attempts to access the queue.
-        if self.is_initialized.swap(true, Ordering::SeqCst) {
+        if self.is_initialized.load(Ordering::Acquire)
+            || self
+                .is_initializing
+                .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+                .is_err()
+        {
+            return Err(IpcError::AlreadyInitialized);
+        }
+
+        if self.is_initialized.load(Ordering::Acquire) {
+            self.is_initializing.store(false, Ordering::Release);
             return Err(IpcError::AlreadyInitialized);
         }
 
         self.buffer.store(base_ptr, Ordering::SeqCst);
         compiler_fence(Ordering::SeqCst);
+        self.is_initialized.store(true, Ordering::Release);
+        self.is_initializing.store(false, Ordering::Release);
 
         Ok(())
+    }
+
+    /// Returns whether the queue has been initialized with a host buffer.
+    #[must_use]
+    pub fn is_initialized(&self) -> bool {
+        self.is_initialized.load(Ordering::Acquire)
     }
 
     /// Pushes a single item into the queue. Returns an error if the queue is full.
@@ -189,21 +221,11 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
             *(*slot_ptr).data.get()
         };
 
-        // Dynamic memory zeroization of the popped slot
-        // # Safety
-        // Spatial: `ptr` and `len` are derived directly from the valid array slot.
-        // Temporal: The slot is exclusively owned by the consumer before advancing tail.
-        // Alignment: `u8` has no strict alignment requirements.
+        // Restore a valid value before making the slot available to the producer.
+        // Raw zeroing is not valid for every `T: Default` (for example, `NonZeroU8`).
         unsafe {
             let slot_ptr = base_ptr.add(index);
-            let ptr = (*slot_ptr).data.get() as *mut u8;
-            let len = core::mem::size_of::<T>();
-            
-            core::ptr::write_bytes(ptr, 0, len);
-            // Volatile write loop to prevent Dead Store Elimination (DSE)
-            for i in 0..len {
-                core::ptr::write_volatile(ptr.add(i), 0);
-            }
+            *(*slot_ptr).data.get() = T::default();
         }
 
         compiler_fence(Ordering::SeqCst);
@@ -214,5 +236,82 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
         self.tail.0.store(tail.wrapping_add(1), Ordering::Release);
 
         Some(item)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CacheAlignedSlot, SpscQueue};
+    use crate::error::IpcError;
+    use core::mem::MaybeUninit;
+
+    #[repr(C, align(4096))]
+    struct AlignedSlots<const N: usize>(MaybeUninit<[CacheAlignedSlot<u32>; N]>);
+
+    #[test]
+    fn init_rejects_invalid_memory_without_initializing() {
+        let queue = SpscQueue::<u32, 4>::new();
+
+        assert_eq!(
+            queue.init(core::ptr::null_mut(), 0),
+            Err(IpcError::InvalidMemory)
+        );
+        assert!(!queue.is_initialized());
+    }
+
+    #[test]
+    fn init_rejects_insufficient_or_unaligned_memory_without_initializing() {
+        let queue = SpscQueue::<u32, 4>::new();
+        let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
+        let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
+        let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
+
+        assert_eq!(
+            queue.init(storage_ptr, storage_size - 1),
+            Err(IpcError::InvalidMemory)
+        );
+        assert_eq!(
+            queue.init(storage_ptr.wrapping_byte_add(1), storage_size),
+            Err(IpcError::InvalidMemory)
+        );
+        assert!(!queue.is_initialized());
+    }
+
+    #[test]
+    fn init_is_one_shot_and_queue_preserves_fifo_order() {
+        let queue = SpscQueue::<u32, 4>::new();
+        let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
+        let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
+        let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
+
+        queue.init(storage_ptr, storage_size).unwrap();
+        assert_eq!(
+            queue.init(storage_ptr, storage_size),
+            Err(IpcError::AlreadyInitialized)
+        );
+
+        for value in 1..=4 {
+            queue.push(value).unwrap();
+        }
+        assert_eq!(queue.push(5), Err(IpcError::QueueFull));
+        for value in 1..=4 {
+            assert_eq!(queue.pop(), Some(value));
+        }
+        assert_eq!(queue.pop(), None);
+        drop(storage);
+    }
+
+    #[test]
+    fn queue_reuses_slots_after_wraparound() {
+        let queue = SpscQueue::<u32, 4>::new();
+        let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
+        let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
+        let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
+
+        queue.init(storage_ptr, storage_size).unwrap();
+        for value in 0..128 {
+            queue.push(value).unwrap();
+            assert_eq!(queue.pop(), Some(value));
+        }
     }
 }
