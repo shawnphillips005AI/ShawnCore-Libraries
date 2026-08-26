@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -6,8 +5,8 @@
 //! Secure memory zeroization and cache flushing wrappers.
 //! Hardware-agnostic implementation for MarTac integration.
 
-use core::sync::atomic::{compiler_fence, Ordering};
 use crate::ffi_callbacks::{host_cache_flush, host_stack_wipe};
+use core::sync::atomic::{compiler_fence, Ordering};
 
 /// Securely zeroizes a memory buffer, defeating compiler Dead Store Elimination (DSE).
 ///

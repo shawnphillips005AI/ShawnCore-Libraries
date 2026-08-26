@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -10,6 +9,7 @@
 //! CHACHA20 NONCE OVERLAP resolved by reverting to a strict 32-bit counter in `state[12]`.
 //! The 96-bit nonce MUST occupy `state[13]`, `state[14]`, and `state[15]`.
 
+use crate::error::CryptoError;
 use crate::zeroize::secure_zeroize;
 
 /// ChaCha20 state size in 32-bit words.
@@ -24,6 +24,7 @@ pub struct ChaCha20 {
     state: [u32; STATE_WORDS],
     buffer: [u8; BLOCK_SIZE],
     buffer_pos: usize,
+    exhausted: bool,
 }
 
 impl Drop for ChaCha20 {
@@ -58,7 +59,8 @@ impl ChaCha20 {
         // Key
         for i in 0..8 {
             let start = i * 4;
-            state[4 + i] = u32::from_le_bytes([key[start], key[start+1], key[start+2], key[start+3]]);
+            state[4 + i] =
+                u32::from_le_bytes([key[start], key[start + 1], key[start + 2], key[start + 3]]);
         }
 
         // Counter
@@ -67,13 +69,19 @@ impl ChaCha20 {
         // Nonce (96-bit)
         for i in 0..3 {
             let start = i * 4;
-            state[13 + i] = u32::from_le_bytes([nonce[start], nonce[start+1], nonce[start+2], nonce[start+3]]);
+            state[13 + i] = u32::from_le_bytes([
+                nonce[start],
+                nonce[start + 1],
+                nonce[start + 2],
+                nonce[start + 3],
+            ]);
         }
 
         Self {
             state,
             buffer: [0u8; BLOCK_SIZE],
             buffer_pos: BLOCK_SIZE, // Force immediate block generation on first use
+            exhausted: false,
         }
     }
 
@@ -97,7 +105,10 @@ impl ChaCha20 {
     }
 
     /// Generates the next 64-byte block of keystream.
-    fn generate_block(&mut self) {
+    fn generate_block(&mut self) -> Result<(), CryptoError> {
+        if self.exhausted {
+            return Err(CryptoError::InvalidLength);
+        }
         let mut working_state = self.state;
 
         for _ in 0..10 {
@@ -125,20 +136,25 @@ impl ChaCha20 {
         }
 
         // Strict 32-bit counter increment.
-        self.state[12] = self.state[12].wrapping_add(1);
+        if self.state[12] == u32::MAX {
+            self.exhausted = true;
+        } else {
+            self.state[12] += 1;
+        }
         self.buffer_pos = 0;
+        Ok(())
     }
 
     /// Applies the ChaCha20 keystream to the provided data (XOR).
     ///
     /// Mutates the `data` slice in place.
-    pub fn apply_keystream(&mut self, data: &mut [u8]) {
+    pub fn apply_keystream(&mut self, data: &mut [u8]) -> Result<(), CryptoError> {
         let mut i = 0;
         let len = data.len();
 
         while i < len {
             if self.buffer_pos >= BLOCK_SIZE {
-                self.generate_block();
+                self.generate_block()?;
             }
 
             let take = core::cmp::min(len - i, BLOCK_SIZE - self.buffer_pos);
@@ -150,5 +166,25 @@ impl ChaCha20 {
             i += take;
             self.buffer_pos += take;
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ChaCha20;
+    use crate::error::CryptoError;
+
+    #[test]
+    fn rejects_keystream_after_counter_exhaustion() {
+        let mut cipher = ChaCha20::new(&[0u8; 32], &[0u8; 12]);
+        cipher.state[12] = u32::MAX;
+        cipher.buffer_pos = 64;
+
+        cipher.apply_keystream(&mut [0u8; 64]).unwrap();
+        assert_eq!(
+            cipher.apply_keystream(&mut [0u8; 1]),
+            Err(CryptoError::InvalidLength)
+        );
     }
 }

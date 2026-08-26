@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -9,9 +8,9 @@
 //! for interrupt management and monotonic clock reads, ensuring the Rust core
 //! remains completely architecture-agnostic.
 
-use core::sync::atomic::{AtomicPtr, Ordering};
 use crate::ffi_error::invoke_panic_hook;
 use crate::interrupt_spinlock::InterruptContext;
+use core::sync::atomic::{AtomicPtr, Ordering};
 
 /// Type definition for the host OS callback to disable interrupts and save state.
 /// Returns an opaque `usize` representing the saved interrupt flags/state.
@@ -68,14 +67,16 @@ pub struct HostInterruptContext;
 impl InterruptContext for HostInterruptContext {
     fn disable_and_save() -> usize {
         let cb_ptr = DISABLE_INTERRUPTS_CB.load(Ordering::Acquire);
-        
+
         if cb_ptr.is_null() {
             // Critical Flaw Fix: Prevent silent concurrency failure.
             // If the host OS failed to register the callback, we cannot safely acquire spinlocks.
             invoke_panic_hook();
-            loop { core::hint::spin_loop(); }
+            loop {
+                core::hint::spin_loop();
+            }
         }
-        
+
         // # Safety
         // Spatial: N/A.
         // Temporal: The host OS guarantees the callback remains valid.
@@ -88,13 +89,15 @@ impl InterruptContext for HostInterruptContext {
 
     fn restore(flags: usize) {
         let cb_ptr = RESTORE_INTERRUPTS_CB.load(Ordering::Acquire);
-        
+
         if cb_ptr.is_null() {
             // Critical Flaw Fix: Prevent silent concurrency failure.
             invoke_panic_hook();
-            loop { core::hint::spin_loop(); }
+            loop {
+                core::hint::spin_loop();
+            }
         }
-        
+
         // # Safety
         // Spatial: N/A.
         // Temporal: The host OS guarantees the callback remains valid.
@@ -111,13 +114,15 @@ impl InterruptContext for HostInterruptContext {
 #[must_use]
 pub fn host_read_monotonic_clock() -> u64 {
     let cb_ptr = READ_MONOTONIC_CLOCK_CB.load(Ordering::Acquire);
-    
+
     if cb_ptr.is_null() {
         // Critical Flaw Fix: Prevent silent timing failure.
         invoke_panic_hook();
-        loop { core::hint::spin_loop(); }
+        loop {
+            core::hint::spin_loop();
+        }
     }
-    
+
     // # Safety
     // Spatial: N/A.
     // Temporal: The host OS guarantees the callback remains valid.

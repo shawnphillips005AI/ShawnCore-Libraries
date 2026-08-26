@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -10,9 +9,9 @@
 //! into the `EntropyPool` without stalling the cryptographic state machine or
 //! requiring complex locking mechanisms across the FFI boundary.
 
+use crate::error::CryptoError;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicUsize, Ordering};
-use crate::error::CryptoError;
 
 /// Size of a single entropy chunk in bytes (256 bits).
 /// This matches the expected input size for the SHA-384 based Fortuna accumulator.
@@ -63,11 +62,19 @@ impl EntropyQueue {
     /// Creates a new, empty `EntropyQueue`.
     #[must_use]
     pub const fn new() -> Self {
-        const { assert!(ENTROPY_QUEUE_SIZE.is_power_of_two(), "Queue size must be a power of 2") };
+        const {
+            assert!(
+                ENTROPY_QUEUE_SIZE.is_power_of_two(),
+                "Queue size must be a power of 2"
+            )
+        };
+
         Self {
-            buffer: core::array::from_fn(|_| CacheAlignedSlot {
-                data: UnsafeCell::new([0u8; ENTROPY_CHUNK_SIZE]),
-            }),
+            buffer: [const {
+                CacheAlignedSlot {
+                    data: UnsafeCell::new([0u8; ENTROPY_CHUNK_SIZE]),
+                }
+            }; ENTROPY_QUEUE_SIZE],
             head: CacheAlignedIndex(AtomicUsize::new(0)),
             tail: CacheAlignedIndex(AtomicUsize::new(0)),
         }
@@ -134,7 +141,11 @@ impl EntropyQueue {
         // Alignment: `UnsafeCell` guarantees proper alignment.
         unsafe {
             let slot_ptr = self.buffer[index].data.get();
-            core::ptr::copy_nonoverlapping(slot_ptr as *const u8, out.as_mut_ptr(), ENTROPY_CHUNK_SIZE);
+            core::ptr::copy_nonoverlapping(
+                slot_ptr as *const u8,
+                out.as_mut_ptr(),
+                ENTROPY_CHUNK_SIZE,
+            );
 
             // Dynamic memory zeroization of the popped slot
             core::ptr::write_bytes(slot_ptr as *mut u8, 0, ENTROPY_CHUNK_SIZE);

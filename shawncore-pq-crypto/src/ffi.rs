@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -11,7 +10,9 @@
 use crate::aead_wrapper::{aead_decrypt, aead_encrypt, hkdf_expand_sha384, hmac_sha384};
 use crate::entropy_pool::{GLOBAL_ENTROPY_POOL, GLOBAL_ENTROPY_QUEUE};
 use crate::ffi_error::ShawncoreCryptoErr;
-use crate::ml_dsa_wrapper::{ml_dsa_keygen, ml_dsa_sign, ml_dsa_verify, PublicKey87, Signature87, SigningKey87};
+use crate::ml_dsa_wrapper::{
+    ml_dsa_keygen, ml_dsa_sign, ml_dsa_verify, PublicKey87, Signature87, SigningKey87,
+};
 use crate::ml_kem_wrapper::{
     ml_kem_decapsulate, ml_kem_encapsulate, ml_kem_keygen, Ciphertext1024, DecapsKey1024,
     PublicKey1024, SharedKey1024,
@@ -50,9 +51,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_init(
         return ShawncoreCryptoErr::InvalidState;
     }
 
-    // Memory Leak Fix: Drop existing data before overwriting to trigger zeroization
     unsafe {
-        core::ptr::drop_in_place(manager);
         core::ptr::write(manager, SessionManager::new());
     }
 
@@ -82,6 +81,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_destroy(
 ///
 /// # Safety
 /// All pointers must be valid and non-null. `entropy` must point to exactly 96 bytes.
+/// Output regions must be distinct and must not overlap `manager` or `entropy`.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_session_manager_initiate_handshake(
     manager: *mut SessionManager,
@@ -90,8 +90,37 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_initiate_handshake(
     out_ml_kem_pk: *mut PublicKey1024,
     out_x25519_pk: *mut X25519Public,
 ) -> ShawncoreCryptoErr {
-    if manager.is_null() || entropy.is_null() || out_ml_kem_pk.is_null() || out_x25519_pk.is_null() {
+    if manager.is_null() || entropy.is_null() || out_ml_kem_pk.is_null() || out_x25519_pk.is_null()
+    {
         return ShawncoreCryptoErr::InvalidState;
+    }
+    if ranges_overlap(
+        out_ml_kem_pk,
+        core::mem::size_of::<PublicKey1024>(),
+        out_x25519_pk,
+        core::mem::size_of::<X25519Public>(),
+    ) || ranges_overlap(
+        manager,
+        core::mem::size_of::<SessionManager>(),
+        out_ml_kem_pk,
+        core::mem::size_of::<PublicKey1024>(),
+    ) || ranges_overlap(
+        manager,
+        core::mem::size_of::<SessionManager>(),
+        out_x25519_pk,
+        core::mem::size_of::<X25519Public>(),
+    ) || ranges_overlap(
+        entropy,
+        96,
+        out_ml_kem_pk,
+        core::mem::size_of::<PublicKey1024>(),
+    ) || ranges_overlap(
+        entropy,
+        96,
+        out_x25519_pk,
+        core::mem::size_of::<X25519Public>(),
+    ) {
+        return ShawncoreCryptoErr::InvalidLength;
     }
 
     let entropy_ref = unsafe { &*(entropy as *const [u8; 96]) };
@@ -134,11 +163,25 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_handshake(
     let manager_ref = unsafe { &mut *manager };
     let peer_x25519_pk_ref = unsafe { &*peer_x25519_pk };
     let ml_kem_ct_ref = unsafe { &*ml_kem_ct };
-    
-    let salt_slice = if salt_len > 0 { unsafe { core::slice::from_raw_parts(salt, salt_len) } } else { &[] };
-    let info_slice = if info_len > 0 { unsafe { core::slice::from_raw_parts(info, info_len) } } else { &[] };
 
-    match manager_ref.finalize_handshake(peer_x25519_pk_ref, ml_kem_ct_ref, salt_slice, info_slice, stack_base) {
+    let salt_slice = if salt_len > 0 {
+        unsafe { core::slice::from_raw_parts(salt, salt_len) }
+    } else {
+        &[]
+    };
+    let info_slice = if info_len > 0 {
+        unsafe { core::slice::from_raw_parts(info, info_len) }
+    } else {
+        &[]
+    };
+
+    match manager_ref.finalize_handshake(
+        peer_x25519_pk_ref,
+        ml_kem_ct_ref,
+        salt_slice,
+        info_slice,
+        stack_base,
+    ) {
         Ok(_) => ShawncoreCryptoErr::Success,
         Err(e) => e.into(),
     }
@@ -148,6 +191,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_handshake(
 ///
 /// # Safety
 /// All pointers must be valid and non-null. `entropy` must point to exactly 64 bytes.
+/// Output regions must be distinct and must not overlap any input object.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
     manager: *mut SessionManager,
@@ -162,10 +206,85 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
     out_ct: *mut Ciphertext1024,
     out_my_x25519_pk: *mut X25519Public,
 ) -> ShawncoreCryptoErr {
-    if manager.is_null() || peer_ml_kem_pk.is_null() || peer_x25519_pk.is_null() || entropy.is_null() || out_ct.is_null() || out_my_x25519_pk.is_null() {
+    if manager.is_null()
+        || peer_ml_kem_pk.is_null()
+        || peer_x25519_pk.is_null()
+        || entropy.is_null()
+        || out_ct.is_null()
+        || out_my_x25519_pk.is_null()
+    {
         return ShawncoreCryptoErr::InvalidState;
     }
     if (salt.is_null() && salt_len > 0) || (info.is_null() && info_len > 0) {
+        return ShawncoreCryptoErr::InvalidLength;
+    }
+    if ranges_overlap(
+        out_ct,
+        core::mem::size_of::<Ciphertext1024>(),
+        out_my_x25519_pk,
+        core::mem::size_of::<X25519Public>(),
+    ) || ranges_overlap(
+        out_ct,
+        core::mem::size_of::<Ciphertext1024>(),
+        peer_ml_kem_pk,
+        core::mem::size_of::<PublicKey1024>(),
+    ) || ranges_overlap(
+        out_my_x25519_pk,
+        core::mem::size_of::<X25519Public>(),
+        peer_x25519_pk,
+        core::mem::size_of::<X25519Public>(),
+    ) || ranges_overlap(
+        out_ct,
+        core::mem::size_of::<Ciphertext1024>(),
+        peer_x25519_pk,
+        core::mem::size_of::<X25519Public>(),
+    ) || ranges_overlap(
+        out_my_x25519_pk,
+        core::mem::size_of::<X25519Public>(),
+        peer_ml_kem_pk,
+        core::mem::size_of::<PublicKey1024>(),
+    ) || ranges_overlap(
+        out_ct,
+        core::mem::size_of::<Ciphertext1024>(),
+        manager,
+        core::mem::size_of::<SessionManager>(),
+    ) || ranges_overlap(
+        out_my_x25519_pk,
+        core::mem::size_of::<X25519Public>(),
+        manager,
+        core::mem::size_of::<SessionManager>(),
+    ) || ranges_overlap(out_ct, core::mem::size_of::<Ciphertext1024>(), entropy, 64)
+        || ranges_overlap(
+            out_my_x25519_pk,
+            core::mem::size_of::<X25519Public>(),
+            entropy,
+            64,
+        )
+        || ranges_overlap(
+            out_ct,
+            core::mem::size_of::<Ciphertext1024>(),
+            salt,
+            salt_len,
+        )
+        || ranges_overlap(
+            out_ct,
+            core::mem::size_of::<Ciphertext1024>(),
+            info,
+            info_len,
+        )
+        || ranges_overlap(
+            out_my_x25519_pk,
+            core::mem::size_of::<X25519Public>(),
+            salt,
+            salt_len,
+        )
+        || ranges_overlap(
+            out_my_x25519_pk,
+            core::mem::size_of::<X25519Public>(),
+            info,
+            info_len,
+        )
+    {
         return ShawncoreCryptoErr::InvalidLength;
     }
 
@@ -174,10 +293,25 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
     let peer_x25519_pk_ref = unsafe { &*peer_x25519_pk };
     let entropy_ref = unsafe { &*(entropy as *const [u8; 64]) };
 
-    let salt_slice = if salt_len > 0 { unsafe { core::slice::from_raw_parts(salt, salt_len) } } else { &[] };
-    let info_slice = if info_len > 0 { unsafe { core::slice::from_raw_parts(info, info_len) } } else { &[] };
+    let salt_slice = if salt_len > 0 {
+        unsafe { core::slice::from_raw_parts(salt, salt_len) }
+    } else {
+        &[]
+    };
+    let info_slice = if info_len > 0 {
+        unsafe { core::slice::from_raw_parts(info, info_len) }
+    } else {
+        &[]
+    };
 
-    match manager_ref.encapsulate_for_peer(peer_ml_kem_pk_ref, peer_x25519_pk_ref, entropy_ref, salt_slice, info_slice, stack_base) {
+    match manager_ref.encapsulate_for_peer(
+        peer_ml_kem_pk_ref,
+        peer_x25519_pk_ref,
+        entropy_ref,
+        salt_slice,
+        info_slice,
+        stack_base,
+    ) {
         Ok((ct, my_x25519_pk)) => {
             unsafe {
                 core::ptr::write(out_ct, ct);
@@ -200,6 +334,9 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_get_session_key(
 ) -> ShawncoreCryptoErr {
     if manager.is_null() || out_key.is_null() {
         return ShawncoreCryptoErr::InvalidState;
+    }
+    if ranges_overlap(manager, core::mem::size_of::<SessionManager>(), out_key, 32) {
+        return ShawncoreCryptoErr::InvalidLength;
     }
 
     let manager_ref = unsafe { &*manager };
@@ -237,6 +374,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_zeroize(
 ///
 /// # Safety
 /// All pointers must be valid and non-null. `entropy` must point to exactly 64 bytes.
+/// Output regions must be distinct and must not overlap `entropy`.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_ml_kem_keygen(
     entropy: *const u8,
@@ -245,6 +383,16 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_keygen(
 ) -> ShawncoreCryptoErr {
     if entropy.is_null() || out_pk.is_null() || out_dk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
+    }
+    if ranges_overlap(
+        out_pk,
+        core::mem::size_of::<PublicKey1024>(),
+        out_dk,
+        core::mem::size_of::<DecapsKey1024>(),
+    ) || ranges_overlap(entropy, 64, out_pk, core::mem::size_of::<PublicKey1024>())
+        || ranges_overlap(entropy, 64, out_dk, core::mem::size_of::<DecapsKey1024>())
+    {
+        return ShawncoreCryptoErr::InvalidLength;
     }
 
     let entropy_ref = unsafe { &*(entropy as *const [u8; 64]) };
@@ -272,7 +420,9 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_decapskey_destroy(
     if dk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
-    unsafe { core::ptr::drop_in_place(dk); }
+    unsafe {
+        core::ptr::drop_in_place(dk);
+    }
     ShawncoreCryptoErr::Success
 }
 
@@ -289,6 +439,20 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_encapsulate(
 ) -> ShawncoreCryptoErr {
     if pk.is_null() || entropy.is_null() || out_shared.is_null() || out_ct.is_null() {
         return ShawncoreCryptoErr::InvalidState;
+    }
+    if ranges_overlap(
+        out_shared,
+        core::mem::size_of::<SharedKey1024>(),
+        out_ct,
+        core::mem::size_of::<Ciphertext1024>(),
+    ) || ranges_overlap(
+        out_shared,
+        core::mem::size_of::<SharedKey1024>(),
+        entropy,
+        32,
+    ) || ranges_overlap(out_ct, core::mem::size_of::<Ciphertext1024>(), entropy, 32)
+    {
+        return ShawncoreCryptoErr::InvalidLength;
     }
 
     let pk_ref = unsafe { &*pk };
@@ -319,6 +483,19 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_decapsulate(
     if dk.is_null() || ct.is_null() || out_shared.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if ranges_overlap(
+        out_shared,
+        core::mem::size_of::<SharedKey1024>(),
+        dk,
+        core::mem::size_of::<DecapsKey1024>(),
+    ) || ranges_overlap(
+        out_shared,
+        core::mem::size_of::<SharedKey1024>(),
+        ct,
+        core::mem::size_of::<Ciphertext1024>(),
+    ) {
+        return ShawncoreCryptoErr::InvalidLength;
+    }
 
     let dk_ref = unsafe { &*dk };
     let ct_ref = unsafe { &*ct };
@@ -345,7 +522,9 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_sharedkey_destroy(
     if sk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
-    unsafe { core::ptr::drop_in_place(sk); }
+    unsafe {
+        core::ptr::drop_in_place(sk);
+    }
     ShawncoreCryptoErr::Success
 }
 
@@ -365,6 +544,16 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_keygen(
 ) -> ShawncoreCryptoErr {
     if seed.is_null() || out_pk.is_null() || out_sk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
+    }
+    if ranges_overlap(
+        out_pk,
+        core::mem::size_of::<PublicKey87>(),
+        out_sk,
+        core::mem::size_of::<SigningKey87>(),
+    ) || ranges_overlap(seed, 32, out_pk, core::mem::size_of::<PublicKey87>())
+        || ranges_overlap(seed, 32, out_sk, core::mem::size_of::<SigningKey87>())
+    {
+        return ShawncoreCryptoErr::InvalidLength;
     }
 
     let seed_ref = unsafe { &*(seed as *const [u8; 32]) };
@@ -392,7 +581,9 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_signingkey_destroy(
     if sk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
-    unsafe { core::ptr::drop_in_place(sk); }
+    unsafe {
+        core::ptr::drop_in_place(sk);
+    }
     ShawncoreCryptoErr::Success
 }
 
@@ -409,6 +600,15 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_sign(
 ) -> ShawncoreCryptoErr {
     if sk.is_null() || msg.is_null() || out_sig.is_null() {
         return ShawncoreCryptoErr::InvalidState;
+    }
+    if ranges_overlap(
+        out_sig,
+        core::mem::size_of::<Signature87>(),
+        sk,
+        core::mem::size_of::<SigningKey87>(),
+    ) || ranges_overlap(out_sig, core::mem::size_of::<Signature87>(), msg, msg_len)
+    {
+        return ShawncoreCryptoErr::InvalidLength;
     }
 
     let sk_ref = unsafe { &*sk };
@@ -467,6 +667,16 @@ pub unsafe extern "C" fn shawncore_crypto_x25519_keygen(
     if entropy.is_null() || out_pk.is_null() || out_sk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if ranges_overlap(
+        out_pk,
+        core::mem::size_of::<X25519Public>(),
+        out_sk,
+        core::mem::size_of::<X25519Secret>(),
+    ) || ranges_overlap(entropy, 32, out_pk, core::mem::size_of::<X25519Public>())
+        || ranges_overlap(entropy, 32, out_sk, core::mem::size_of::<X25519Secret>())
+    {
+        return ShawncoreCryptoErr::InvalidLength;
+    }
 
     let entropy_ref = unsafe { &*(entropy as *const [u8; 32]) };
     let (pk, sk) = x25519_keygen(entropy_ref);
@@ -490,7 +700,9 @@ pub unsafe extern "C" fn shawncore_crypto_x25519_secret_destroy(
     if sk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
-    unsafe { core::ptr::drop_in_place(sk); }
+    unsafe {
+        core::ptr::drop_in_place(sk);
+    }
     ShawncoreCryptoErr::Success
 }
 
@@ -506,6 +718,19 @@ pub unsafe extern "C" fn shawncore_crypto_x25519_diffie_hellman(
 ) -> ShawncoreCryptoErr {
     if sk.is_null() || peer_pk.is_null() || out_shared.is_null() {
         return ShawncoreCryptoErr::InvalidState;
+    }
+    if ranges_overlap(
+        out_shared,
+        core::mem::size_of::<X25519SharedSecret>(),
+        sk,
+        core::mem::size_of::<X25519Secret>(),
+    ) || ranges_overlap(
+        out_shared,
+        core::mem::size_of::<X25519SharedSecret>(),
+        peer_pk,
+        core::mem::size_of::<X25519Public>(),
+    ) {
+        return ShawncoreCryptoErr::InvalidLength;
     }
 
     let sk_ref = unsafe { &*sk };
@@ -533,13 +758,74 @@ pub unsafe extern "C" fn shawncore_crypto_x25519_sharedsecret_destroy(
     if ss.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
-    unsafe { core::ptr::drop_in_place(ss); }
+    unsafe {
+        core::ptr::drop_in_place(ss);
+    }
     ShawncoreCryptoErr::Success
 }
 
 // ============================================================================
 // AEAD & KDF FFI
 // ============================================================================
+
+fn ranges_overlap<T, U>(
+    first: *const T,
+    first_len: usize,
+    second: *const U,
+    second_len: usize,
+) -> bool {
+    let Some(first_end) = (first as usize).checked_add(first_len) else {
+        return true;
+    };
+    let Some(second_end) = (second as usize).checked_add(second_len) else {
+        return true;
+    };
+
+    (first as usize) < second_end && (second as usize) < first_end
+}
+
+fn aead_encrypt_buffers_overlap(
+    enc_key: *const u8,
+    mac_key: *const u8,
+    nonce: *const u8,
+    aad: *const u8,
+    aad_len: usize,
+    plaintext: *const u8,
+    ciphertext: *mut u8,
+    out_mac: *mut u8,
+    data_len: usize,
+) -> bool {
+    ranges_overlap(ciphertext, data_len, enc_key, 32)
+        || ranges_overlap(ciphertext, data_len, mac_key, 32)
+        || ranges_overlap(ciphertext, data_len, nonce, 12)
+        || ranges_overlap(ciphertext, data_len, aad, aad_len)
+        || ranges_overlap(ciphertext, data_len, plaintext, data_len)
+        || ranges_overlap(out_mac, 48, enc_key, 32)
+        || ranges_overlap(out_mac, 48, mac_key, 32)
+        || ranges_overlap(out_mac, 48, nonce, 12)
+        || ranges_overlap(out_mac, 48, aad, aad_len)
+        || ranges_overlap(out_mac, 48, plaintext, data_len)
+        || ranges_overlap(out_mac, 48, ciphertext, data_len)
+}
+
+fn aead_decrypt_buffers_overlap(
+    enc_key: *const u8,
+    mac_key: *const u8,
+    nonce: *const u8,
+    aad: *const u8,
+    aad_len: usize,
+    ciphertext: *const u8,
+    mac: *const u8,
+    plaintext: *mut u8,
+    data_len: usize,
+) -> bool {
+    ranges_overlap(plaintext, data_len, enc_key, 32)
+        || ranges_overlap(plaintext, data_len, mac_key, 32)
+        || ranges_overlap(plaintext, data_len, nonce, 12)
+        || ranges_overlap(plaintext, data_len, aad, aad_len)
+        || ranges_overlap(plaintext, data_len, ciphertext, data_len)
+        || ranges_overlap(plaintext, data_len, mac, 48)
+}
 
 /// Computes an HMAC-SHA384 tag.
 ///
@@ -555,6 +841,9 @@ pub unsafe extern "C" fn shawncore_crypto_hmac_sha384(
 ) -> ShawncoreCryptoErr {
     if key.is_null() || data.is_null() || out_mac.is_null() {
         return ShawncoreCryptoErr::InvalidState;
+    }
+    if ranges_overlap(out_mac, 48, key, 32) || ranges_overlap(out_mac, 48, data, data_len) {
+        return ShawncoreCryptoErr::InvalidLength;
     }
 
     let key_slice = unsafe { core::slice::from_raw_parts(key, 32) };
@@ -586,9 +875,16 @@ pub unsafe extern "C" fn shawncore_crypto_hkdf_expand_sha384(
     if prk.is_null() || (info.is_null() && info_len > 0) || out.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if ranges_overlap(out, out_len, prk, 48) || ranges_overlap(out, out_len, info, info_len) {
+        return ShawncoreCryptoErr::InvalidLength;
+    }
 
     let prk_slice = unsafe { core::slice::from_raw_parts(prk, 48) };
-    let info_slice = if info_len > 0 { unsafe { core::slice::from_raw_parts(info, info_len) } } else { &[] };
+    let info_slice = if info_len > 0 {
+        unsafe { core::slice::from_raw_parts(info, info_len) }
+    } else {
+        &[]
+    };
     let out_slice = unsafe { core::slice::from_raw_parts_mut(out, out_len) };
 
     match hkdf_expand_sha384(prk_slice, info_slice, out_slice) {
@@ -603,6 +899,7 @@ pub unsafe extern "C" fn shawncore_crypto_hkdf_expand_sha384(
 /// All pointers must be valid and non-null. `enc_key` and `mac_key` must point to 32 bytes.
 /// `nonce` must point to 12 bytes. `aad` must be valid for `aad_len`.
 /// `plaintext` and `ciphertext` must be valid for `data_len`. `out_mac` must point to 48 bytes.
+/// Input and output regions must not overlap.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_aead_encrypt(
     enc_key: *const u8,
@@ -615,22 +912,45 @@ pub unsafe extern "C" fn shawncore_crypto_aead_encrypt(
     data_len: usize,
     out_mac: *mut u8,
 ) -> ShawncoreCryptoErr {
-    if enc_key.is_null() || mac_key.is_null() || nonce.is_null() || plaintext.is_null() || ciphertext.is_null() || out_mac.is_null() {
+    if enc_key.is_null()
+        || mac_key.is_null()
+        || nonce.is_null()
+        || plaintext.is_null()
+        || ciphertext.is_null()
+        || out_mac.is_null()
+    {
         return ShawncoreCryptoErr::InvalidState;
     }
     if aad.is_null() && aad_len > 0 {
+        return ShawncoreCryptoErr::InvalidLength;
+    }
+    if aead_encrypt_buffers_overlap(
+        enc_key, mac_key, nonce, aad, aad_len, plaintext, ciphertext, out_mac, data_len,
+    ) {
         return ShawncoreCryptoErr::InvalidLength;
     }
 
     let enc_key_ref = unsafe { &*(enc_key as *const [u8; 32]) };
     let mac_key_ref = unsafe { &*(mac_key as *const [u8; 32]) };
     let nonce_ref = unsafe { &*(nonce as *const [u8; 12]) };
-    let aad_slice = if aad_len > 0 { unsafe { core::slice::from_raw_parts(aad, aad_len) } } else { &[] };
+    let aad_slice = if aad_len > 0 {
+        unsafe { core::slice::from_raw_parts(aad, aad_len) }
+    } else {
+        &[]
+    };
     let pt_slice = unsafe { core::slice::from_raw_parts(plaintext, data_len) };
     let ct_slice = unsafe { core::slice::from_raw_parts_mut(ciphertext, data_len) };
     let out_mac_ref = unsafe { &mut *(out_mac as *mut [u8; 48]) };
 
-    match aead_encrypt(enc_key_ref, mac_key_ref, nonce_ref, aad_slice, pt_slice, ct_slice, out_mac_ref) {
+    match aead_encrypt(
+        enc_key_ref,
+        mac_key_ref,
+        nonce_ref,
+        aad_slice,
+        pt_slice,
+        ct_slice,
+        out_mac_ref,
+    ) {
         Ok(_) => ShawncoreCryptoErr::Success,
         Err(e) => e.into(),
     }
@@ -642,6 +962,7 @@ pub unsafe extern "C" fn shawncore_crypto_aead_encrypt(
 /// All pointers must be valid and non-null. `enc_key` and `mac_key` must point to 32 bytes.
 /// `nonce` must point to 12 bytes. `aad` must be valid for `aad_len`.
 /// `ciphertext` and `plaintext` must be valid for `data_len`. `mac` must point to 48 bytes.
+/// Input and output regions must not overlap.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_aead_decrypt(
     enc_key: *const u8,
@@ -654,22 +975,45 @@ pub unsafe extern "C" fn shawncore_crypto_aead_decrypt(
     plaintext: *mut u8,
     data_len: usize,
 ) -> ShawncoreCryptoErr {
-    if enc_key.is_null() || mac_key.is_null() || nonce.is_null() || ciphertext.is_null() || mac.is_null() || plaintext.is_null() {
+    if enc_key.is_null()
+        || mac_key.is_null()
+        || nonce.is_null()
+        || ciphertext.is_null()
+        || mac.is_null()
+        || plaintext.is_null()
+    {
         return ShawncoreCryptoErr::InvalidState;
     }
     if aad.is_null() && aad_len > 0 {
+        return ShawncoreCryptoErr::InvalidLength;
+    }
+    if aead_decrypt_buffers_overlap(
+        enc_key, mac_key, nonce, aad, aad_len, ciphertext, mac, plaintext, data_len,
+    ) {
         return ShawncoreCryptoErr::InvalidLength;
     }
 
     let enc_key_ref = unsafe { &*(enc_key as *const [u8; 32]) };
     let mac_key_ref = unsafe { &*(mac_key as *const [u8; 32]) };
     let nonce_ref = unsafe { &*(nonce as *const [u8; 12]) };
-    let aad_slice = if aad_len > 0 { unsafe { core::slice::from_raw_parts(aad, aad_len) } } else { &[] };
+    let aad_slice = if aad_len > 0 {
+        unsafe { core::slice::from_raw_parts(aad, aad_len) }
+    } else {
+        &[]
+    };
     let ct_slice = unsafe { core::slice::from_raw_parts(ciphertext, data_len) };
     let mac_ref = unsafe { &*(mac as *const [u8; 48]) };
     let pt_slice = unsafe { core::slice::from_raw_parts_mut(plaintext, data_len) };
 
-    match aead_decrypt(enc_key_ref, mac_key_ref, nonce_ref, aad_slice, ct_slice, mac_ref, pt_slice) {
+    match aead_decrypt(
+        enc_key_ref,
+        mac_key_ref,
+        nonce_ref,
+        aad_slice,
+        ct_slice,
+        mac_ref,
+        pt_slice,
+    ) {
         Ok(_) => ShawncoreCryptoErr::Success,
         Err(e) => e.into(),
     }
@@ -684,9 +1028,7 @@ pub unsafe extern "C" fn shawncore_crypto_aead_decrypt(
 /// # Safety
 /// `chunk` must be a valid, non-null pointer to exactly 32 bytes of memory.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_crypto_entropy_push(
-    chunk: *const u8,
-) -> ShawncoreCryptoErr {
+pub unsafe extern "C" fn shawncore_crypto_entropy_push(chunk: *const u8) -> ShawncoreCryptoErr {
     if chunk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
