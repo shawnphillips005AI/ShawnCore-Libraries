@@ -1,0 +1,14 @@
+[package]
+name = "shawncore-pq-crypto"
+version = "12.2.0"
+edition = "2021"
+
+[dependencies]
+ml-kem = "0.2.0"
+ml-dsa = "0.1.0"
+x25519-dalek = { version = "2.0", default-features = false, features = ["static_secrets"] }
+sha2 = { version = "0.10", default-features = false }
+sha3 = { version = "0.10", default-features = false }
+hmac = "0.12"
+hkdf = "0.12"
+zeroize = { version = "1.7", default-features = false, features = ["zeroize_derive"] }
