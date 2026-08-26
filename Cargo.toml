@@ -1,0 +1,6 @@
+[workspace]
+members = [
+    "shawncore-pq-crypto",
+    "shawncore-rtos-sync"
+]
+resolver = "2"
