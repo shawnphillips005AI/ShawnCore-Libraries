@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -52,10 +51,22 @@ impl PerCoreScheduler {
     pub const fn new() -> Self {
         Self {
             tasks: [
-                Tcb::new(), Tcb::new(), Tcb::new(), Tcb::new(),
-                Tcb::new(), Tcb::new(), Tcb::new(), Tcb::new(),
-                Tcb::new(), Tcb::new(), Tcb::new(), Tcb::new(),
-                Tcb::new(), Tcb::new(), Tcb::new(), Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
             ],
             ready_bitmap: 0,
             current_task: 15, // Default to idle task
@@ -74,7 +85,13 @@ impl PerCoreScheduler {
     /// # Returns
     /// `Ok(())` if the task was registered successfully, or `SchedulerError::TaskFault` if the priority is out of bounds.
     pub fn create_task(&mut self, mut tcb: Tcb, canary_value: u64) -> Result<(), SchedulerError> {
-        if tcb.priority >= 16 {
+        let stack_end = tcb.stack_base.checked_add(tcb.stack_size as u64);
+        let valid_stack = tcb.stack_base == 0
+            || (tcb.stack_base % core::mem::align_of::<u64>() as u64 == 0
+                && tcb.stack_size >= core::mem::size_of::<u64>()
+                && stack_end.is_some_and(|end| tcb.rsp >= tcb.stack_base && tcb.rsp <= end));
+
+        if tcb.priority >= 16 || !valid_stack {
             return Err(SchedulerError::TaskFault);
         }
 
@@ -140,9 +157,15 @@ impl PerCoreScheduler {
         // Save the current task's stack pointer and verify its canary
         if current_idx < MAX_TASKS {
             self.tasks[current_idx].rsp = current_rsp;
-            
+
             let tcb = &self.tasks[current_idx];
             if tcb.stack_base != 0 {
+                if tcb.stack_base % core::mem::align_of::<u64>() as u64 != 0
+                    || tcb.stack_size < core::mem::size_of::<u64>()
+                {
+                    return 0;
+                }
+
                 // # Safety
                 // Spatial: `stack_base` is provided by the host OS and assumed to be valid.
                 // Temporal: The stack memory is valid for the lifetime of the task.
