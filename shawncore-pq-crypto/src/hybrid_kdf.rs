@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -50,7 +49,7 @@ pub fn derive_hybrid_key(
     combined_entropy[..PQ_SHARED_SECRET_SIZE].copy_from_slice(pq_secret);
     combined_entropy[PQ_SHARED_SECRET_SIZE..].copy_from_slice(classical_secret);
 
-    let (_, hkdf) = Hkdf::<Sha384>::new(Some(salt), &combined_entropy);
+    let hkdf = Hkdf::<Sha384>::new(Some(salt), &combined_entropy);
     let res = hkdf.expand(info, &mut derived_key);
 
     // Zeroize inputs immediately after expand and before cache flush, regardless of error

@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -50,7 +49,7 @@ pub struct EwCommand {
 
 /// Represents a processed FFT result from the SDR.
 #[repr(C, align(64))]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct FftResult {
     /// Signal-to-Noise Ratio in dB.
     pub snr_db: u32,
@@ -64,6 +63,18 @@ pub struct FftResult {
     pub _padding: [u8; 36],
 }
 
+impl Default for FftResult {
+    fn default() -> Self {
+        Self {
+            snr_db: 0,
+            center_freq: 0,
+            bandwidth: 0,
+            timestamp: 0,
+            _padding: [0; 36],
+        }
+    }
+}
+
 /// Concrete Ring Buffer for EW Commands: 1024 elements.
 pub type RingBufferEwCommand = RingBuffer<EwCommand, 1024>;
 
@@ -72,6 +83,22 @@ pub type SpscQueueFft = SpscQueue<FftResult, 256>;
 
 /// Concrete Cache Aligned Slot for FFT Results.
 pub type SpscQueueFftSlot = CacheAlignedSlot<FftResult>;
+
+fn valid_dma_region<T>(memory_base: *mut T, size_in_bytes: usize, element_count: usize) -> bool {
+    let required_alignment = core::mem::align_of::<T>();
+    if memory_base.is_null()
+        || (memory_base as usize) % 4096 != 0
+        || (memory_base as usize) % required_alignment != 0
+    {
+        return false;
+    }
+
+    element_count
+        .checked_mul(core::mem::size_of::<T>())
+        .and_then(|required_size| (size_in_bytes >= required_size).then_some(required_size))
+        .and_then(|required_size| (memory_base as usize).checked_add(required_size))
+        .is_some()
+}
 
 // ============================================================================
 // Scheduler & TCB FFI
@@ -102,7 +129,6 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_init(
     }
 
     unsafe {
-        core::ptr::drop_in_place(scheduler);
         core::ptr::write(scheduler, PerCoreScheduler::new());
     }
 
@@ -174,10 +200,7 @@ pub unsafe extern "C" fn shawncore_rtos_tcb_get_rsp(tcb: *const Tcb) -> u64 {
 /// # Safety
 /// `tcb` must be a valid, non-null pointer.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_tcb_set_rsp(
-    tcb: *mut Tcb,
-    rsp: u64,
-) -> ShawncoreRtosErr {
+pub unsafe extern "C" fn shawncore_rtos_tcb_set_rsp(tcb: *mut Tcb, rsp: u64) -> ShawncoreRtosErr {
     if tcb.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
@@ -229,6 +252,22 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_tick(
     scheduler_ref.schedule_tick(current_rsp)
 }
 
+/// Records a critical task check-in for the current watchdog window.
+///
+/// # Safety
+/// `scheduler` must be a valid, non-null pointer to an initialized scheduler.
+#[no_mangle]
+pub unsafe extern "C" fn shawncore_rtos_scheduler_task_check_in(
+    scheduler: *mut PerCoreScheduler,
+    priority: u8,
+) -> ShawncoreRtosErr {
+    if scheduler.is_null() || priority >= 16 {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    unsafe { (*scheduler).task_check_in(priority) };
+    ShawncoreRtosErr::Success
+}
+
 // ============================================================================
 // DMA Pool FFI
 // ============================================================================
@@ -248,7 +287,7 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_alignof() -> usize {
 /// Initializes a host-allocated `DmaPool2K` and binds it to a host-provided DMA memory region.
 ///
 /// # Safety
-/// `pool` must point to a valid `DmaPool2K`. `memory_base` must point to a page-aligned
+/// `pool` must point to a valid, uninitialized `DmaPool2K`. `memory_base` must point to a page-aligned
 /// region of at least `256 * 2048` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_dmapool2k_init(
@@ -256,12 +295,11 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_init(
     memory_base: *mut u8,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if pool.is_null() || memory_base.is_null() {
+    if pool.is_null() || !valid_dma_region(memory_base, size_in_bytes, 256) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
     unsafe {
-        core::ptr::drop_in_place(pool);
         core::ptr::write(pool, DmaPool2K::new());
     }
 
@@ -296,24 +334,27 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_destroy(
 /// Allocates a buffer from the DMA pool.
 ///
 /// # Safety
-/// `pool`, `out_idx`, and `out_ptr` must be valid, non-null pointers.
+/// `pool`, `out_idx`, `out_generation`, and `out_ptr` must be valid, non-null pointers.
+/// The returned generation must be supplied unchanged when freeing the returned index.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_dmapool2k_allocate(
     pool: *const DmaPool2K,
     out_idx: *mut usize,
+    out_generation: *mut u64,
     out_ptr: *mut *mut u8,
 ) -> ShawncoreRtosErr {
-    if pool.is_null() || out_idx.is_null() || out_ptr.is_null() {
+    if pool.is_null() || out_idx.is_null() || out_generation.is_null() || out_ptr.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
     let pool_ref = unsafe { &*pool };
 
     match pool_ref.allocate() {
-        Ok((idx, buf_ref)) => {
+        Ok((idx, generation, buf_ptr)) => {
             unsafe {
                 core::ptr::write(out_idx, idx);
-                core::ptr::write(out_ptr, buf_ref.as_mut_ptr());
+                core::ptr::write(out_generation, generation);
+                core::ptr::write(out_ptr, buf_ptr.as_ptr().cast::<u8>());
             }
             ShawncoreRtosErr::Success
         }
@@ -324,11 +365,13 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_allocate(
 /// Frees a buffer back to the DMA pool.
 ///
 /// # Safety
-/// `pool` must be a valid, non-null pointer.
+/// `pool` must be a valid, non-null pointer. `generation` must be the token returned
+/// by the matching allocation and must not be reused after a successful free.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_dmapool2k_free(
     pool: *const DmaPool2K,
     buffer_idx: usize,
+    generation: u64,
 ) -> ShawncoreRtosErr {
     if pool.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
@@ -336,7 +379,7 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_free(
 
     let pool_ref = unsafe { &*pool };
 
-    match pool_ref.free(buffer_idx) {
+    match pool_ref.free(buffer_idx, generation) {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(e) => e.into(),
     }
@@ -361,20 +404,21 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_alignof() -> usize {
 /// Initializes a host-allocated `SpscQueueTelemetry` and binds it to a host-provided memory region.
 ///
 /// # Safety
-/// `queue` must point to a valid `SpscQueueTelemetry`. `memory_base` must point to a page-aligned
-/// region of at least `64 * sizeof(SpscQueueTelemetrySlot)` bytes.
+/// `queue` must point to valid, properly aligned storage that has not previously
+/// been initialized. `memory_base` must point to a page-aligned region of at
+/// least `64 * sizeof(SpscQueueTelemetrySlot)` bytes. Initialization is one-shot;
+/// stop all producers and consumers before destroying the queue and reusing its storage.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_init(
     queue: *mut SpscQueueTelemetry,
     memory_base: *mut SpscQueueTelemetrySlot,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if queue.is_null() || memory_base.is_null() {
+    if queue.is_null() || !valid_dma_region(memory_base, size_in_bytes, 64) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
     unsafe {
-        core::ptr::drop_in_place(queue);
         core::ptr::write(queue, SpscQueueTelemetry::new());
     }
 
@@ -423,7 +467,7 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_push(
 
     match queue_ref.push(event_val) {
         Ok(_) => ShawncoreRtosErr::Success,
-        Err(_) => ShawncoreRtosErr::QueueFull,
+        Err(error) => error.into(),
     }
 }
 
@@ -442,6 +486,10 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_pop(
 
     let queue_ref = unsafe { &*queue };
 
+    if !queue_ref.is_initialized() {
+        return ShawncoreRtosErr::NotInitialized;
+    }
+
     match queue_ref.pop() {
         Some(event) => {
             unsafe {
@@ -449,7 +497,7 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_pop(
             }
             ShawncoreRtosErr::Success
         }
-        None => ShawncoreRtosErr::NotInitialized, // Used here to indicate empty
+        None => ShawncoreRtosErr::QueueEmpty,
     }
 }
 
@@ -472,19 +520,20 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_alignof() -> usize {
 /// Initializes a host-allocated `RingBufferEwCommand`.
 ///
 /// # Safety
-/// `rb` must point to a valid, properly aligned, UNINITIALIZED memory region.
+/// `rb` must point to valid, properly aligned storage that has not previously
+/// been initialized. Initialization is one-shot; stop all producers and
+/// consumers before destroying the ring buffer and reusing its storage.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_init(
     rb: *mut RingBufferEwCommand,
     memory_base: *mut CacheAlignedSlot<EwCommand>,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if rb.is_null() || memory_base.is_null() {
+    if rb.is_null() || !valid_dma_region(memory_base, size_in_bytes, 1024) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
     unsafe {
-        core::ptr::drop_in_place(rb);
         core::ptr::write(rb, RingBufferEwCommand::new());
     }
 
@@ -533,7 +582,7 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_push(
 
     match rb_ref.push(item_val) {
         Ok(_) => ShawncoreRtosErr::Success,
-        Err(_) => ShawncoreRtosErr::QueueFull,
+        Err(error) => error.into(),
     }
 }
 
@@ -552,6 +601,10 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_pop(
 
     let rb_ref = unsafe { &*rb };
 
+    if !rb_ref.is_initialized() {
+        return ShawncoreRtosErr::NotInitialized;
+    }
+
     match rb_ref.pop() {
         Some(item) => {
             unsafe {
@@ -559,7 +612,7 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_pop(
             }
             ShawncoreRtosErr::Success
         }
-        None => ShawncoreRtosErr::NotInitialized, // Used here to indicate empty
+        None => ShawncoreRtosErr::QueueEmpty,
     }
 }
 
@@ -578,6 +631,10 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_peek(
 
     let rb_ref = unsafe { &*rb };
 
+    if !rb_ref.is_initialized() {
+        return ShawncoreRtosErr::NotInitialized;
+    }
+
     match rb_ref.peek() {
         Some(item) => {
             unsafe {
@@ -585,7 +642,7 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_peek(
             }
             ShawncoreRtosErr::Success
         }
-        None => ShawncoreRtosErr::NotInitialized, // Used here to indicate empty
+        None => ShawncoreRtosErr::QueueEmpty,
     }
 }
 
@@ -608,20 +665,21 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_alignof() -> usize {
 /// Initializes a host-allocated `SpscQueueFft` and binds it to a host-provided memory region.
 ///
 /// # Safety
-/// `queue` must point to a valid `SpscQueueFft`. `memory_base` must point to a page-aligned
-/// region of at least `256 * sizeof(SpscQueueFftSlot)` bytes.
+/// `queue` must point to valid, properly aligned storage that has not previously
+/// been initialized. `memory_base` must point to a page-aligned region of at
+/// least `256 * sizeof(SpscQueueFftSlot)` bytes. Initialization is one-shot;
+/// stop all producers and consumers before destroying the queue and reusing its storage.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_fft_init(
     queue: *mut SpscQueueFft,
     memory_base: *mut SpscQueueFftSlot,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if queue.is_null() || memory_base.is_null() {
+    if queue.is_null() || !valid_dma_region(memory_base, size_in_bytes, 256) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
     unsafe {
-        core::ptr::drop_in_place(queue);
         core::ptr::write(queue, SpscQueueFft::new());
     }
 
@@ -670,7 +728,7 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_push(
 
     match queue_ref.push(item_val) {
         Ok(_) => ShawncoreRtosErr::Success,
-        Err(_) => ShawncoreRtosErr::QueueFull,
+        Err(error) => error.into(),
     }
 }
 
@@ -689,6 +747,10 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_pop(
 
     let queue_ref = unsafe { &*queue };
 
+    if !queue_ref.is_initialized() {
+        return ShawncoreRtosErr::NotInitialized;
+    }
+
     match queue_ref.pop() {
         Some(item) => {
             unsafe {
@@ -696,7 +758,7 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_pop(
             }
             ShawncoreRtosErr::Success
         }
-        None => ShawncoreRtosErr::NotInitialized, // Used here to indicate empty
+        None => ShawncoreRtosErr::QueueEmpty,
     }
 }
 
@@ -719,7 +781,7 @@ pub unsafe extern "C" fn shawncore_rtos_state_machine_alignof() -> usize {
 /// Initializes a host-allocated `StateMachine`.
 ///
 /// # Safety
-/// `machine` must point to a valid `StateMachine`.
+/// `machine` must point to a valid, uninitialized `StateMachine`.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_state_machine_init(
     machine: *mut StateMachine,
@@ -729,7 +791,6 @@ pub unsafe extern "C" fn shawncore_rtos_state_machine_init(
     }
 
     unsafe {
-        core::ptr::drop_in_place(machine);
         core::ptr::write(machine, StateMachine::new());
     }
 
@@ -804,7 +865,7 @@ pub unsafe extern "C" fn shawncore_rtos_latency_tracker_alignof() -> usize {
 /// Initializes a host-allocated `LatencyTracker`.
 ///
 /// # Safety
-/// `tracker` must point to a valid `LatencyTracker`.
+/// `tracker` must point to a valid, uninitialized `LatencyTracker`.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_latency_tracker_init(
     tracker: *mut LatencyTracker,
@@ -814,7 +875,6 @@ pub unsafe extern "C" fn shawncore_rtos_latency_tracker_init(
     }
 
     unsafe {
-        core::ptr::drop_in_place(tracker);
         core::ptr::write(tracker, LatencyTracker::new());
     }
 

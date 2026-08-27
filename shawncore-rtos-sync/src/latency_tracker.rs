@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -8,11 +7,12 @@
 //! Provides lock-free tracking of maximum and cumulative execution times
 //! for deterministic RTOS task profiling.
 
-use core::sync::atomic::{AtomicU64, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 /// A lock-free telemetry tracker for execution latency.
 #[repr(C, align(64))]
 pub struct LatencyTracker {
+    started: AtomicBool,
     start_time: AtomicU64,
     max_latency: AtomicU64,
     total_latency: AtomicU64,
@@ -30,6 +30,7 @@ impl LatencyTracker {
     #[must_use]
     pub const fn new() -> Self {
         Self {
+            started: AtomicBool::new(false),
             start_time: AtomicU64::new(0),
             max_latency: AtomicU64::new(0),
             total_latency: AtomicU64::new(0),
@@ -40,12 +41,16 @@ impl LatencyTracker {
     /// Marks the beginning of a timed execution block.
     pub fn mark_start(&self, current_timestamp: u64) {
         self.start_time.store(current_timestamp, Ordering::Release);
+        self.started.store(true, Ordering::Release);
     }
 
     /// Marks the end of a timed execution block, updating maximums and averages.
     pub fn mark_end(&self, current_timestamp: u64) {
+        if !self.started.swap(false, Ordering::AcqRel) {
+            return;
+        }
         let start = self.start_time.load(Ordering::Acquire);
-        if start == 0 || current_timestamp < start {
+        if current_timestamp < start {
             return;
         }
 
@@ -65,7 +70,57 @@ impl LatencyTracker {
             }
         }
 
-        self.total_latency.fetch_add(delta, Ordering::Relaxed);
+        let _ = self
+            .total_latency
+            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
+                Some(total.saturating_add(delta))
+            });
         self.samples.fetch_add(1, Ordering::Release);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LatencyTracker;
+
+    #[test]
+    fn timestamp_zero_is_a_valid_start_and_end_is_single_use() {
+        let tracker = LatencyTracker::new();
+
+        tracker.mark_start(0);
+        tracker.mark_end(5);
+        assert_eq!(
+            tracker
+                .total_latency
+                .load(core::sync::atomic::Ordering::Relaxed),
+            5
+        );
+        assert_eq!(
+            tracker.samples.load(core::sync::atomic::Ordering::Relaxed),
+            1
+        );
+
+        tracker.mark_end(10);
+        assert_eq!(
+            tracker.samples.load(core::sync::atomic::Ordering::Relaxed),
+            1
+        );
+    }
+
+    #[test]
+    fn total_latency_saturates() {
+        let tracker = LatencyTracker::new();
+        tracker
+            .total_latency
+            .store(u64::MAX - 1, core::sync::atomic::Ordering::Relaxed);
+        tracker.mark_start(1);
+        tracker.mark_end(5);
+
+        assert_eq!(
+            tracker
+                .total_latency
+                .load(core::sync::atomic::Ordering::Relaxed),
+            u64::MAX
+        );
     }
 }
