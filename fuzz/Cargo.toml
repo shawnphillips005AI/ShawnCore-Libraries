@@ -1,0 +1,19 @@
+[package]
+name = "shawncore-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+shawncore-pq-crypto = { path = "../shawncore-pq-crypto" }
+
+[[bin]]
+name = "ffi_aead_fuzz"
+path = "fuzz_targets/ffi_aead_fuzz.rs"
+test = false
+doc = false
+bench = false

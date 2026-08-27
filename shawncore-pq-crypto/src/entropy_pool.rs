@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -52,18 +51,20 @@ impl<T, C: InterruptContext> CryptoSpinlock<T, C> {
     pub fn lock(&self) -> CryptoSpinlockGuard<'_, T, C> {
         let saved_flags = C::disable_and_save();
 
-        while self.locked.compare_exchange_weak(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_err() {
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             while self.locked.load(Ordering::Relaxed) {
                 core::hint::spin_loop();
             }
         }
 
-        CryptoSpinlockGuard { lock: self, saved_flags }
+        CryptoSpinlockGuard {
+            lock: self,
+            saved_flags,
+        }
     }
 }
 

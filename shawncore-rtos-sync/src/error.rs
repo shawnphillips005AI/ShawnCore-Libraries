@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -47,4 +46,11 @@ pub enum IpcError {
 pub enum SchedulerError {
     /// Task fault or unrecoverable execution error requiring a micro-reboot.
     TaskFault,
+}
+
+/// Internal state validation errors.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StateError {
+    /// The provided state transition is invalid.
+    InvalidState,
 }
