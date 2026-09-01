@@ -10,6 +10,7 @@
 //! requiring complex locking mechanisms across the FFI boundary.
 
 use crate::error::CryptoError;
+use crate::zeroize::secure_zeroize;
 use core::cell::UnsafeCell;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
@@ -148,10 +149,10 @@ impl EntropyQueue {
             );
 
             // Dynamic memory zeroization of the popped slot
-            core::ptr::write_bytes(slot_ptr as *mut u8, 0, ENTROPY_CHUNK_SIZE);
-            for i in 0..ENTROPY_CHUNK_SIZE {
-                core::ptr::write_volatile((slot_ptr as *mut u8).add(i), 0);
-            }
+            secure_zeroize(core::slice::from_raw_parts_mut(
+                slot_ptr.cast::<u8>(),
+                ENTROPY_CHUNK_SIZE,
+            ));
         }
 
         // Hardware Memory Barrier via Release semantics

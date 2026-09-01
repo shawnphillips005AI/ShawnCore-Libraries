@@ -14,8 +14,9 @@
 //! before the index is updated, preventing data races and torn reads across cores.
 
 use crate::error::IpcError;
+use crate::ffi_callbacks::{host_cache_flush, host_cache_invalidate};
 use core::cell::UnsafeCell;
-use core::sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use core::sync::atomic::{compiler_fence, fence, AtomicBool, AtomicUsize, Ordering};
 
 /// A cache-line aligned atomic index to prevent false sharing between producer and consumer cores.
 #[repr(C, align(64))]
@@ -26,6 +27,8 @@ pub struct CacheAlignedIndex(pub AtomicUsize);
 pub struct CacheAlignedSlot<T> {
     /// The underlying data cell.
     pub data: UnsafeCell<T>,
+    /// Even while stable, odd while a producer is modifying the slot.
+    pub sequence_counter: AtomicUsize,
 }
 
 /// A lock-free, single-producer, single-consumer queue optimized for cross-core telemetry.
@@ -35,7 +38,13 @@ pub struct CacheAlignedSlot<T> {
 #[repr(C, align(64))]
 pub struct SpscQueue<T: Copy + Default, const N: usize> {
     /// Pointer to the host-provided buffer storing the elements.
-    buffer: AtomicPtr<CacheAlignedSlot<T>>,
+    ///
+    /// Written exactly once during `init()`, then read directly (no atomic load)
+    /// by `push()`/`pop()`: the `Acquire` load of `is_initialized` performed by
+    /// both callers already synchronizes with the `Release` store at the end of
+    /// `init()`, so an additional atomic load here would only cost cycles on the
+    /// RTOS hot path without adding any further ordering guarantee.
+    buffer: UnsafeCell<*mut CacheAlignedSlot<T>>,
     /// The atomic index representing the head (write position).
     head: CacheAlignedIndex,
     /// The atomic index representing the tail (read position).
@@ -63,7 +72,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
     pub const fn new() -> Self {
         const { assert!(N.is_power_of_two(), "Queue size must be a power of 2") };
         Self {
-            buffer: AtomicPtr::new(core::ptr::null_mut()),
+            buffer: UnsafeCell::new(core::ptr::null_mut()),
             head: CacheAlignedIndex(AtomicUsize::new(0)),
             tail: CacheAlignedIndex(AtomicUsize::new(0)),
             is_initialized: AtomicBool::new(false),
@@ -122,7 +131,22 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
             return Err(IpcError::AlreadyInitialized);
         }
 
-        self.buffer.store(base_ptr, Ordering::SeqCst);
+        // # Safety
+        // Spatial: N/A, this is a plain pointer-sized write.
+        // Temporal: `is_initializing`'s compare-exchange above guarantees no other
+        // caller can be inside `init()` concurrently.
+        // Alignment: N/A.
+        unsafe {
+            *self.buffer.get() = base_ptr;
+        }
+        for index in 0..N {
+            unsafe {
+                core::ptr::write(
+                    core::ptr::addr_of_mut!((*base_ptr.add(index)).sequence_counter),
+                    AtomicUsize::new(0),
+                );
+            }
+        }
         compiler_fence(Ordering::SeqCst);
         self.is_initialized.store(true, Ordering::Release);
         self.is_initializing.store(false, Ordering::Release);
@@ -161,7 +185,12 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
         // Hardware-agnostic compiler fence to prevent instruction reordering prior to the write.
         compiler_fence(Ordering::SeqCst);
 
-        let base_ptr = self.buffer.load(Ordering::Acquire);
+        // # Safety
+        // Spatial: N/A.
+        // Temporal: The `Acquire` load of `is_initialized` above synchronizes with
+        // the `Release` store at the end of `init()`, so this plain read is
+        // guaranteed to observe the initialized buffer pointer.
+        let base_ptr = unsafe { *self.buffer.get() };
 
         // # Safety
         // Spatial: `index` is masked by `N`, ensuring it is strictly within bounds.
@@ -169,7 +198,18 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
         // Alignment: The host OS guarantees page alignment via `init()`.
         unsafe {
             let slot_ptr = base_ptr.add(index);
+            let sequence = (*slot_ptr).sequence_counter.load(Ordering::Relaxed);
+            (*slot_ptr)
+                .sequence_counter
+                .store(sequence.wrapping_add(1) | 1, Ordering::Release);
             *(*slot_ptr).data.get() = item;
+            host_cache_flush(
+                (*slot_ptr).data.get().cast::<u8>(),
+                core::mem::size_of::<T>(),
+            );
+            (*slot_ptr)
+                .sequence_counter
+                .store(sequence.wrapping_add(2) & !1, Ordering::Release);
         }
 
         // Hardware Memory Barrier via Release semantics.
@@ -210,7 +250,12 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
 
         compiler_fence(Ordering::SeqCst);
 
-        let base_ptr = self.buffer.load(Ordering::Acquire);
+        // # Safety
+        // Spatial: N/A.
+        // Temporal: The `Acquire` load of `is_initialized` above synchronizes with
+        // the `Release` store at the end of `init()`, so this plain read is
+        // guaranteed to observe the initialized buffer pointer.
+        let base_ptr = unsafe { *self.buffer.get() };
 
         // # Safety
         // Spatial: `index` is masked by `N`, ensuring it is strictly within bounds.
@@ -218,7 +263,20 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
         // Alignment: The host OS guarantees page alignment via `init()`.
         let item = unsafe {
             let slot_ptr = base_ptr.add(index);
-            *(*slot_ptr).data.get()
+            let first_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
+            if first_sequence & 1 != 0 {
+                return None;
+            }
+            host_cache_invalidate(
+                (*slot_ptr).data.get().cast::<u8>(),
+                core::mem::size_of::<T>(),
+            );
+            let item = *(*slot_ptr).data.get();
+            let second_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
+            if first_sequence != second_sequence || second_sequence & 1 != 0 {
+                return None;
+            }
+            item
         };
 
         // Restore a valid value before making the slot available to the producer.
@@ -243,7 +301,20 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
 mod tests {
     use super::{CacheAlignedSlot, SpscQueue};
     use crate::error::IpcError;
+    use crate::ffi_callbacks::{
+        shawncore_rtos_register_cache_flush, shawncore_rtos_register_cache_invalidate,
+    };
     use core::mem::MaybeUninit;
+    use core::sync::atomic::Ordering;
+
+    extern "C" fn test_cache_callback(_: *const u8, _: usize) {}
+
+    fn install_test_callbacks() {
+        unsafe {
+            shawncore_rtos_register_cache_flush(test_cache_callback);
+            shawncore_rtos_register_cache_invalidate(test_cache_callback);
+        }
+    }
 
     #[repr(C, align(4096))]
     struct AlignedSlots<const N: usize>(MaybeUninit<[CacheAlignedSlot<u32>; N]>);
@@ -279,6 +350,7 @@ mod tests {
 
     #[test]
     fn init_is_one_shot_and_queue_preserves_fifo_order() {
+        install_test_callbacks();
         let queue = SpscQueue::<u32, 4>::new();
         let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
         let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
@@ -303,6 +375,7 @@ mod tests {
 
     #[test]
     fn queue_reuses_slots_after_wraparound() {
+        install_test_callbacks();
         let queue = SpscQueue::<u32, 4>::new();
         let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
         let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
@@ -313,5 +386,25 @@ mod tests {
             queue.push(value).unwrap();
             assert_eq!(queue.pop(), Some(value));
         }
+    }
+
+    #[test]
+    fn odd_slot_sequence_aborts_pop_without_consuming_data() {
+        install_test_callbacks();
+        let queue = SpscQueue::<u32, 4>::new();
+        let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
+        let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
+        let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
+
+        queue.init(storage_ptr, storage_size).unwrap();
+        queue.push(42).unwrap();
+        unsafe {
+            (*storage_ptr).sequence_counter.store(1, Ordering::Release);
+        }
+        assert_eq!(queue.pop(), None);
+        unsafe {
+            (*storage_ptr).sequence_counter.store(2, Ordering::Release);
+        }
+        assert_eq!(queue.pop(), Some(42));
     }
 }

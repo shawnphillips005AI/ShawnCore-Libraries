@@ -15,7 +15,8 @@
 
 use crate::error::IpcError;
 use crate::spsc_queue::{CacheAlignedIndex, CacheAlignedSlot};
-use core::sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, AtomicUsize, Ordering};
+use core::cell::UnsafeCell;
+use core::sync::atomic::{compiler_fence, fence, AtomicBool, AtomicUsize, Ordering};
 
 /// A lock-free, single-producer, single-consumer ring buffer.
 ///
@@ -24,7 +25,13 @@ use core::sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, AtomicUsi
 #[repr(C, align(64))]
 pub struct RingBuffer<T: Copy + Default, const N: usize> {
     /// Pointer to the host-provided buffer storing the elements.
-    buffer: AtomicPtr<CacheAlignedSlot<T>>,
+    ///
+    /// Written exactly once during `init()`, then read directly (no atomic load)
+    /// by `push()`/`pop()`/`peek()`: the `Acquire` load of `is_initialized`
+    /// performed by every caller already synchronizes with the `Release` store
+    /// at the end of `init()`, so an additional atomic load here would only
+    /// cost cycles on the RTOS hot path without adding any further guarantee.
+    buffer: UnsafeCell<*mut CacheAlignedSlot<T>>,
     /// The atomic index representing the head (write position).
     pub head: CacheAlignedIndex,
     /// The atomic index representing the tail (read position).
@@ -52,7 +59,7 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
     pub const fn new() -> Self {
         const { assert!(N.is_power_of_two(), "Queue size must be a power of 2") };
         Self {
-            buffer: AtomicPtr::new(core::ptr::null_mut()),
+            buffer: UnsafeCell::new(core::ptr::null_mut()),
             head: CacheAlignedIndex(AtomicUsize::new(0)),
             tail: CacheAlignedIndex(AtomicUsize::new(0)),
             is_initialized: AtomicBool::new(false),
@@ -109,7 +116,22 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
             return Err(IpcError::AlreadyInitialized);
         }
 
-        self.buffer.store(base_ptr, Ordering::SeqCst);
+        // # Safety
+        // Spatial: N/A, this is a plain pointer-sized write.
+        // Temporal: `is_initializing`'s compare-exchange above guarantees no other
+        // caller can be inside `init()` concurrently.
+        // Alignment: N/A.
+        unsafe {
+            *self.buffer.get() = base_ptr;
+        }
+        for index in 0..N {
+            unsafe {
+                core::ptr::write(
+                    core::ptr::addr_of_mut!((*base_ptr.add(index)).sequence_counter),
+                    AtomicUsize::new(0),
+                );
+            }
+        }
         compiler_fence(Ordering::SeqCst);
         self.is_initialized.store(true, Ordering::Release);
         self.is_initializing.store(false, Ordering::Release);
@@ -145,7 +167,12 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
 
         compiler_fence(Ordering::SeqCst);
 
-        let base_ptr = self.buffer.load(Ordering::Acquire);
+        // # Safety
+        // Spatial: N/A.
+        // Temporal: The `Acquire` load of `is_initialized` above synchronizes with
+        // the `Release` store at the end of `init()`, so this plain read is
+        // guaranteed to observe the initialized buffer pointer.
+        let base_ptr = unsafe { *self.buffer.get() };
 
         // # Safety
         // Spatial: `idx` is masked by `N`, ensuring it is strictly within bounds.
@@ -190,7 +217,12 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
 
         compiler_fence(Ordering::SeqCst);
 
-        let base_ptr = self.buffer.load(Ordering::Acquire);
+        // # Safety
+        // Spatial: N/A.
+        // Temporal: The `Acquire` load of `is_initialized` above synchronizes with
+        // the `Release` store at the end of `init()`, so this plain read is
+        // guaranteed to observe the initialized buffer pointer.
+        let base_ptr = unsafe { *self.buffer.get() };
 
         // # Safety
         // Spatial: `idx` is masked by `N`, ensuring it is strictly within bounds.
@@ -242,7 +274,12 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
 
         compiler_fence(Ordering::SeqCst);
 
-        let base_ptr = self.buffer.load(Ordering::Acquire);
+        // # Safety
+        // Spatial: N/A.
+        // Temporal: The `Acquire` load of `is_initialized` above synchronizes with
+        // the `Release` store at the end of `init()`, so this plain read is
+        // guaranteed to observe the initialized buffer pointer.
+        let base_ptr = unsafe { *self.buffer.get() };
 
         // # Safety
         // Spatial: `idx` is masked by `N`.

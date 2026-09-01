@@ -16,10 +16,12 @@ extern void shawncore_crypto_register_panic_hook(void (*callback)(void));
 extern void shawncore_crypto_register_disable_interrupts(uintptr_t (*callback)(void));
 extern void shawncore_crypto_register_restore_interrupts(void (*callback)(uintptr_t));
 extern void shawncore_crypto_register_cache_flush(void (*callback)(const uint8_t *, size_t));
-extern void shawncore_crypto_register_stack_wipe(void (*callback)(uint64_t));
 extern void shawncore_rtos_register_disable_interrupts(uintptr_t (*callback)(void));
 extern void shawncore_rtos_register_restore_interrupts(void (*callback)(uintptr_t));
 extern void shawncore_rtos_register_read_monotonic_clock(uint64_t (*callback)(void));
+extern void shawncore_rtos_register_cache_invalidate(void (*callback)(const uint8_t *, size_t));
+extern void shawncore_rtos_register_cache_flush(void (*callback)(const uint8_t *, size_t));
+extern void shawncore_rtos_register_pet_watchdog(void (*callback)(void));
 
 void host_panic_handler(void)
 {
@@ -64,14 +66,16 @@ void host_cache_flush(const uint8_t *ptr, size_t len)
      */
 }
 
-void host_stack_wipe(uint64_t stack_base)
+void host_cache_invalidate(const uint8_t *ptr, size_t len)
 {
-    (void)stack_base;
-    /*
-     * ARM Cortex-R: call the approved assembly routine that wipes the defined
-     * stack range without clobbering the return path.
-     * RISC-V: use the approved stack-wipe assembly routine and fence sequence.
-     */
+    (void)ptr;
+    (void)len;
+    /* Replace with the board-approved DMA cache invalidate primitive. */
+}
+
+void host_pet_watchdog(void)
+{
+    /* Replace with the board-approved watchdog service operation. */
 }
 
 uint64_t host_read_monotonic_clock(void)
@@ -91,8 +95,10 @@ void martac_hal_register_callbacks(void)
     shawncore_crypto_register_disable_interrupts(host_disable_interrupts);
     shawncore_crypto_register_restore_interrupts(host_restore_interrupts);
     shawncore_crypto_register_cache_flush(host_cache_flush);
-    shawncore_crypto_register_stack_wipe(host_stack_wipe);
     shawncore_rtos_register_disable_interrupts(host_disable_interrupts);
     shawncore_rtos_register_restore_interrupts(host_restore_interrupts);
     shawncore_rtos_register_read_monotonic_clock(host_read_monotonic_clock);
+    shawncore_rtos_register_cache_invalidate(host_cache_invalidate);
+    shawncore_rtos_register_cache_flush(host_cache_flush);
+    shawncore_rtos_register_pet_watchdog(host_pet_watchdog);
 }
