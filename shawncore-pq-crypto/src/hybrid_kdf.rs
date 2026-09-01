@@ -1,4 +1,3 @@
-#![no_std]
 #![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
@@ -13,13 +12,14 @@ use crate::error::CryptoError;
 use crate::zeroize::{secure_cache_flush, secure_zeroize};
 use hkdf::Hkdf;
 use sha2::Sha384;
+use zeroize::Zeroize;
 
 /// Size of the post-quantum shared secret in bytes.
 pub const PQ_SHARED_SECRET_SIZE: usize = 32;
 /// Size of the classical shared secret in bytes.
 pub const CLASSICAL_SHARED_SECRET_SIZE: usize = 32;
 /// Size of the derived hybrid key in bytes.
-pub const HYBRID_OUTPUT_SIZE: usize = 64;
+pub const HYBRID_OUTPUT_SIZE: usize = 128;
 
 /// Derives a hybrid key from post-quantum and classical shared secrets.
 ///
@@ -50,13 +50,13 @@ pub fn derive_hybrid_key(
     combined_entropy[..PQ_SHARED_SECRET_SIZE].copy_from_slice(pq_secret);
     combined_entropy[PQ_SHARED_SECRET_SIZE..].copy_from_slice(classical_secret);
 
-    let (_, hkdf) = Hkdf::<Sha384>::new(Some(salt), &combined_entropy);
+    let hkdf = Hkdf::<Sha384>::new(Some(salt), &combined_entropy);
     let res = hkdf.expand(info, &mut derived_key);
 
     // Zeroize inputs immediately after expand and before cache flush, regardless of error
     secure_zeroize(pq_secret);
     secure_zeroize(classical_secret);
-    secure_zeroize(&mut combined_entropy);
+    combined_entropy.zeroize();
 
     res.map_err(|_| CryptoError::HkdfError)?;
 
