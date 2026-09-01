@@ -24,6 +24,14 @@ pub type RestoreInterruptsCb = extern "C" fn(usize);
 /// Returns a `u64` representing the current timestamp (e.g., TSC, generic timer).
 pub type ReadMonotonicClockCb = extern "C" fn() -> u64;
 
+/// Type definition for the host OS callback to invalidate a cache range.
+pub type CacheInvalidateCb = extern "C" fn(*const u8, usize);
+
+/// Type definition for the host OS callback to flush a cache range.
+pub type CacheFlushCb = extern "C" fn(*const u8, usize);
+/// Type definition for the host OS callback to pet the hardware watchdog.
+pub type PetWatchdogCb = extern "C" fn();
+
 /// Global registry for the disable interrupts callback.
 static DISABLE_INTERRUPTS_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
@@ -32,6 +40,9 @@ static RESTORE_INTERRUPTS_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut
 
 /// Global registry for the monotonic clock callback.
 static READ_MONOTONIC_CLOCK_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static CACHE_INVALIDATE_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static CACHE_FLUSH_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
+static PET_WATCHDOG_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 
 /// Registers the host OS callback for disabling interrupts.
 ///
@@ -58,6 +69,33 @@ pub unsafe extern "C" fn shawncore_rtos_register_restore_interrupts(cb: RestoreI
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_register_read_monotonic_clock(cb: ReadMonotonicClockCb) {
     READ_MONOTONIC_CLOCK_CB.store(cb as *mut (), Ordering::SeqCst);
+}
+
+/// Registers the host OS callback for invalidating a cache range before a DMA read.
+///
+/// # Safety
+/// `cb` must be a valid function pointer to a C-ABI compatible function.
+#[no_mangle]
+pub unsafe extern "C" fn shawncore_rtos_register_cache_invalidate(cb: CacheInvalidateCb) {
+    CACHE_INVALIDATE_CB.store(cb as *mut (), Ordering::SeqCst);
+}
+
+/// Registers the host OS callback for flushing a cache range after a DMA write.
+///
+/// # Safety
+/// `cb` must be a valid function pointer to a C-ABI compatible function.
+#[no_mangle]
+pub unsafe extern "C" fn shawncore_rtos_register_cache_flush(cb: CacheFlushCb) {
+    CACHE_FLUSH_CB.store(cb as *mut (), Ordering::SeqCst);
+}
+
+/// Registers the host OS callback for petting the hardware watchdog.
+///
+/// # Safety
+/// `cb` must be a valid function pointer to a C-ABI compatible function.
+#[no_mangle]
+pub unsafe extern "C" fn shawncore_rtos_register_pet_watchdog(cb: PetWatchdogCb) {
+    PET_WATCHDOG_CB.store(cb as *mut (), Ordering::SeqCst);
 }
 
 /// A concrete implementation of `InterruptContext` that delegates to the registered
@@ -130,5 +168,50 @@ pub fn host_read_monotonic_clock() -> u64 {
     unsafe {
         let cb: ReadMonotonicClockCb = core::mem::transmute(cb_ptr);
         cb()
+    }
+}
+
+/// Invalidates a host cache range before the consumer reads a DMA slot.
+pub fn host_cache_invalidate(ptr: *const u8, len: usize) {
+    let cb_ptr = CACHE_INVALIDATE_CB.load(Ordering::Acquire);
+    if cb_ptr.is_null() {
+        invoke_panic_hook();
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+    unsafe {
+        let cb: CacheInvalidateCb = core::mem::transmute(cb_ptr);
+        cb(ptr, len);
+    }
+}
+
+/// Flushes a host cache range after the producer writes a DMA slot.
+pub fn host_cache_flush(ptr: *const u8, len: usize) {
+    let cb_ptr = CACHE_FLUSH_CB.load(Ordering::Acquire);
+    if cb_ptr.is_null() {
+        invoke_panic_hook();
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+    unsafe {
+        let cb: CacheFlushCb = core::mem::transmute(cb_ptr);
+        cb(ptr, len);
+    }
+}
+
+/// Pets the hardware watchdog using the registered host callback.
+pub fn host_pet_watchdog() {
+    let cb_ptr = PET_WATCHDOG_CB.load(Ordering::Acquire);
+    if cb_ptr.is_null() {
+        invoke_panic_hook();
+        loop {
+            core::hint::spin_loop();
+        }
+    }
+    unsafe {
+        let cb: PetWatchdogCb = core::mem::transmute(cb_ptr);
+        cb();
     }
 }

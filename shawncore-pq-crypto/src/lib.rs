@@ -8,8 +8,6 @@
 //! Designed for seamless C/C++ host OS integration via FFI.
 
 pub mod aead_wrapper;
-#[path = "ChaCha20.rs"]
-pub mod chacha20;
 pub mod entropy_pool;
 pub mod entropy_queue;
 #[path = "Error.rs"]
@@ -35,9 +33,7 @@ mod tests {
         shawncore_crypto_aead_decrypt, shawncore_crypto_aead_encrypt,
         shawncore_crypto_x25519_keygen,
     };
-    use super::ffi_callbacks::{
-        shawncore_crypto_register_cache_flush, shawncore_crypto_register_stack_wipe,
-    };
+    use super::ffi_callbacks::shawncore_crypto_register_cache_flush;
     use super::ffi_error::ShawncoreCryptoErr;
     use super::hybrid_kdf::derive_hybrid_key;
     use super::ml_dsa_wrapper::{ml_dsa_keygen, ml_dsa_sign, ml_dsa_verify};
@@ -47,12 +43,9 @@ mod tests {
 
     extern "C" fn test_cache_flush(_: *const u8, _: usize) {}
 
-    extern "C" fn test_stack_wipe(_: u64) {}
-
     fn install_test_callbacks() {
         unsafe {
             shawncore_crypto_register_cache_flush(test_cache_flush);
-            shawncore_crypto_register_stack_wipe(test_stack_wipe);
         }
     }
 
@@ -241,7 +234,7 @@ mod tests {
         let mut receiver = SessionManager::new();
         let mut sender = SessionManager::new();
         let (receiver_kem_pk, receiver_x25519_pk) =
-            receiver.initiate_handshake(&[0x91; 96], 0).unwrap();
+            receiver.initiate_handshake(&[0x91; 96]).unwrap();
         let (ciphertext, sender_x25519_pk) = sender
             .encapsulate_for_peer(
                 &receiver_kem_pk,
@@ -249,24 +242,22 @@ mod tests {
                 &[0x92; 64],
                 b"salt",
                 b"MarTac session",
-                0,
             )
             .unwrap();
 
         receiver
-            .finalize_handshake(
-                &sender_x25519_pk,
-                &ciphertext,
-                b"salt",
-                b"MarTac session",
-                0,
-            )
+            .finalize_handshake(&sender_x25519_pk, &ciphertext, b"salt", b"MarTac session")
             .unwrap();
 
-        let mut receiver_key = [0u8; 32];
-        let mut sender_key = [0u8; 32];
-        receiver.get_session_key(&mut receiver_key).unwrap();
-        sender.get_session_key(&mut sender_key).unwrap();
-        assert_eq!(receiver_key, sender_key);
+        let mut receiver_rx_key = [0u8; 32];
+        let mut sender_rx_key = [0u8; 32];
+        let mut receiver_tx_key = [0u8; 32];
+        receiver.get_rx_key(&mut receiver_rx_key).unwrap();
+        receiver.get_tx_key(&mut receiver_tx_key).unwrap();
+        sender.get_rx_key(&mut sender_rx_key).unwrap();
+        assert_eq!(receiver_rx_key, sender_rx_key);
+        assert_ne!(receiver_tx_key, receiver_rx_key);
+        receiver.verify_key_integrity().unwrap();
+        sender.verify_key_integrity().unwrap();
     }
 }

@@ -7,12 +7,14 @@
 //! a robust Encrypt-then-MAC AEAD construction.
 //! Hardware-agnostic implementation for MarTac USVs.
 
-use crate::chacha20::ChaCha20;
 use crate::error::CryptoError;
 use crate::zeroize::{secure_cache_flush, secure_zeroize};
+use chacha20::cipher::{KeyIvInit, StreamCipher};
+use chacha20::ChaCha20;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha384;
+use subtle::ConstantTimeEq;
 
 /// Size of the AEAD key in bytes.
 pub const AEAD_KEY_SIZE: usize = 32;
@@ -23,23 +25,14 @@ pub const AEAD_TAG_SIZE: usize = 48;
 /// Maximum bytes processable under one ChaCha20 key and nonce.
 const CHACHA20_MAX_BYTES: u64 = (u32::MAX as u64 + 1) * 64;
 
-/// Verifies two AEAD tags in strict constant time using bitwise operations to prevent branch
-/// prediction leaks.
+/// Verifies two AEAD tags in strict constant time.
 ///
-/// This function guarantees that the execution time depends only on the length of the tags,
-/// not on their contents, preventing timing side-channel attacks.
+/// Delegates to the audited `subtle` crate, whose `ConstantTimeEq` implementation is
+/// verified not to be optimized into a branching, early-exit comparison by LLVM.
 #[must_use]
 #[inline(never)]
 pub fn verify_tag_constant_time(a: &[u8; AEAD_TAG_SIZE], b: &[u8; AEAD_TAG_SIZE]) -> bool {
-    let mut result = 0u8;
-
-    for i in 0..AEAD_TAG_SIZE {
-        // Bitwise OR accumulates any differences without branching
-        result |= a[i] ^ b[i];
-    }
-
-    // Ensure the compiler does not optimize the loop into an early-return memcmp
-    core::hint::black_box(result) == 0
+    a.as_slice().ct_eq(b.as_slice()).into()
 }
 
 /// Computes an HMAC-SHA384 tag over the provided data.
@@ -108,8 +101,11 @@ pub fn aead_encrypt(
             plaintext.len(),
         );
     }
-    let mut cipher = ChaCha20::new(enc_key, nonce);
-    cipher.apply_keystream(ciphertext)?;
+    let mut cipher =
+        ChaCha20::new_from_slices(enc_key, nonce).map_err(|_| CryptoError::InvalidState)?;
+    cipher
+        .try_apply_keystream(ciphertext)
+        .map_err(|_| CryptoError::InvalidLength)?;
 
     // 2. Compute the MAC over the unambiguous encoding:
     // MAC(mac_key, AAD_len || Ciphertext_len || Nonce || AAD || Ciphertext)
@@ -185,10 +181,11 @@ pub fn aead_decrypt(
             ciphertext.len(),
         );
     }
-    let mut cipher = ChaCha20::new(enc_key, nonce);
-    if let Err(error) = cipher.apply_keystream(plaintext) {
+    let mut cipher =
+        ChaCha20::new_from_slices(enc_key, nonce).map_err(|_| CryptoError::InvalidState)?;
+    if cipher.try_apply_keystream(plaintext).is_err() {
         secure_zeroize(plaintext);
-        return Err(error);
+        return Err(CryptoError::InvalidLength);
     }
 
     secure_cache_flush(plaintext.as_ptr(), plaintext.len());

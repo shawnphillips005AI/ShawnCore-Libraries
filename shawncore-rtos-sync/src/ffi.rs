@@ -252,6 +252,22 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_tick(
     scheduler_ref.schedule_tick(current_rsp)
 }
 
+/// Records a critical task check-in for the current watchdog window.
+///
+/// # Safety
+/// `scheduler` must be a valid, non-null pointer to an initialized scheduler.
+#[no_mangle]
+pub unsafe extern "C" fn shawncore_rtos_scheduler_task_check_in(
+    scheduler: *mut PerCoreScheduler,
+    priority: u8,
+) -> ShawncoreRtosErr {
+    if scheduler.is_null() || priority >= 16 {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    unsafe { (*scheduler).task_check_in(priority) };
+    ShawncoreRtosErr::Success
+}
+
 // ============================================================================
 // DMA Pool FFI
 // ============================================================================

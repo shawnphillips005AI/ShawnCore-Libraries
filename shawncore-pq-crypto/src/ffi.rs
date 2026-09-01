@@ -86,7 +86,6 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_destroy(
 pub unsafe extern "C" fn shawncore_crypto_session_manager_initiate_handshake(
     manager: *mut SessionManager,
     entropy: *const u8,
-    stack_base: u64,
     out_ml_kem_pk: *mut PublicKey1024,
     out_x25519_pk: *mut X25519Public,
 ) -> ShawncoreCryptoErr {
@@ -126,7 +125,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_initiate_handshake(
     let entropy_ref = unsafe { &*(entropy as *const [u8; 96]) };
     let manager_ref = unsafe { &mut *manager };
 
-    match manager_ref.initiate_handshake(entropy_ref, stack_base) {
+    match manager_ref.initiate_handshake(entropy_ref) {
         Ok((ml_kem_pk, x25519_pk)) => {
             unsafe {
                 core::ptr::write(out_ml_kem_pk, ml_kem_pk);
@@ -151,7 +150,6 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_handshake(
     salt_len: usize,
     info: *const u8,
     info_len: usize,
-    stack_base: u64,
 ) -> ShawncoreCryptoErr {
     if manager.is_null() || peer_x25519_pk.is_null() || ml_kem_ct.is_null() {
         return ShawncoreCryptoErr::InvalidState;
@@ -175,13 +173,8 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_handshake(
         &[]
     };
 
-    match manager_ref.finalize_handshake(
-        peer_x25519_pk_ref,
-        ml_kem_ct_ref,
-        salt_slice,
-        info_slice,
-        stack_base,
-    ) {
+    match manager_ref.finalize_handshake(peer_x25519_pk_ref, ml_kem_ct_ref, salt_slice, info_slice)
+    {
         Ok(_) => ShawncoreCryptoErr::Success,
         Err(e) => e.into(),
     }
@@ -202,7 +195,6 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
     salt_len: usize,
     info: *const u8,
     info_len: usize,
-    stack_base: u64,
     out_ct: *mut Ciphertext1024,
     out_my_x25519_pk: *mut X25519Public,
 ) -> ShawncoreCryptoErr {
@@ -310,7 +302,6 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
         entropy_ref,
         salt_slice,
         info_slice,
-        stack_base,
     ) {
         Ok((ct, my_x25519_pk)) => {
             unsafe {
@@ -328,7 +319,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
 /// # Safety
 /// `manager` and `out_key` must be valid, non-null pointers. `out_key` must point to 32 bytes.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_crypto_session_manager_get_session_key(
+pub unsafe extern "C" fn shawncore_crypto_session_manager_get_tx_key(
     manager: *const SessionManager,
     out_key: *mut u8,
 ) -> ShawncoreCryptoErr {
@@ -342,8 +333,34 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_get_session_key(
     let manager_ref = unsafe { &*manager };
     let out_key_ref = unsafe { &mut *(out_key as *mut [u8; 32]) };
 
-    match manager_ref.get_session_key(out_key_ref) {
+    match manager_ref.get_tx_key(out_key_ref) {
         Ok(_) => ShawncoreCryptoErr::Success,
+        Err(e) => e.into(),
+    }
+}
+
+/// Retrieves the active 32-byte receive key.
+///
+/// # Safety
+/// `manager` and `out_key` must be valid, non-null pointers. `out_key` must point to 32 bytes.
+#[no_mangle]
+pub unsafe extern "C" fn shawncore_crypto_session_manager_get_rx_key(
+    manager: *const SessionManager,
+    out_key: *mut u8,
+) -> ShawncoreCryptoErr {
+    if manager.is_null() || out_key.is_null() {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
+    if ranges_overlap(manager, core::mem::size_of::<SessionManager>(), out_key, 32) {
+        return ShawncoreCryptoErr::InvalidLength;
+    }
+
+    let manager_ref = unsafe { &*manager };
+    let out_key_ref = unsafe { &mut *(out_key as *mut [u8; 32]) };
+
+    match manager_ref.get_rx_key(out_key_ref) {
+        Ok(()) => ShawncoreCryptoErr::Success,
         Err(e) => e.into(),
     }
 }
@@ -1042,6 +1059,13 @@ pub unsafe extern "C" fn shawncore_crypto_entropy_push(chunk: *const u8) -> Shaw
 }
 
 /// Drains the global entropy queue and mixes it into the global entropy pool.
+///
+/// # WARNING: NMI DEADLOCK VECTOR
+///
+/// `shawncore_crypto_entropy_push` is lock-free and safe for use from any ISR.
+/// This function acquires a spinlock and MUST NOT be called from a Non-Maskable
+/// Interrupt (NMI) or ARM Fast Interrupt (FIQ). Call it from a standard thread
+/// or Deferred Procedure Call (DPC) context after the interrupt has been deferred.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_entropy_mix() -> ShawncoreCryptoErr {
     GLOBAL_ENTROPY_POOL.mix_entropy();

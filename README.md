@@ -4,7 +4,7 @@ No-std Rust libraries for embedded systems that need hybrid cryptography and det
 
 ## Crates
 
-- `shawncore-pq-crypto`: ML-KEM-1024, ML-DSA-87, X25519, hybrid HKDF derivation, ChaCha20/HMAC-SHA384 AEAD, entropy management, and C FFI.
+- `shawncore-pq-crypto`: ML-KEM-1024, ML-DSA-87, X25519, hybrid HKDF derivation with separate Tx/Rx keys, ChaCha20/HMAC-SHA384 AEAD, entropy management, and C FFI.
 - `shawncore-rtos-sync`: static DMA pools, SPSC queues, ring buffers, scheduling, state machines, and telemetry support.
 
 ## Verification
@@ -33,6 +33,10 @@ The `fuzz/` directory contains a cargo-fuzz harness for bounded malformed-input 
 The host must allocate each opaque object with the `sizeof` and `alignof` functions exported by its crate, initialize it exactly once, and destroy it exactly once. Object storage may be reused only after destruction, with all producers and consumers stopped. Host callbacks for cache flushing, stack wiping, panic handling, and RTOS interrupt save/restore must be registered before invoking paths that require them.
 
 The FFI contracts require valid pointers, correct buffer lengths, and single-producer/single-consumer ownership where documented. The host must provide hardware-in-the-loop validation for DMA coherency, interrupt behavior, stack wiping, and target ABI integration.
+
+RTOS SPSC queues require registered cache invalidate and flush callbacks before use. The DMA pool uses an ABA-tagged lock-free Treiber free list and returns an ownership generation with each allocation; both the index and generation are required to release a buffer. Lock-free does not mean wait-free under arbitrary contention, so callers must handle allocation failure deterministically.
+
+Version 1.2 adds per-session Tx/Rx key integrity checks, per-slot seqlock validation against torn DMA reads, and a scheduler watchdog matrix. Critical tasks must call the scheduler check-in API before the configured watchdog window closes. A zero critical-task mask disables watchdog petting until configured by the host.
 
 ## Toolchain Note
 

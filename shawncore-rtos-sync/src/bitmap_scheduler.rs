@@ -16,6 +16,7 @@
 //! * **Stack Overflow Protection:** Integrates stack canary verification on every context switch.
 
 use crate::error::SchedulerError;
+use crate::ffi_callbacks::host_pet_watchdog;
 use crate::tcb::Tcb;
 use core::sync::atomic::{compiler_fence, Ordering};
 
@@ -35,6 +36,10 @@ pub struct PerCoreScheduler {
     pub ready_bitmap: u16,
     /// Index of the currently executing task.
     pub current_task: usize,
+    /// Bits for critical tasks that checked in during the current watchdog window.
+    pub watchdog_matrix: u16,
+    /// Tasks required to check in before the watchdog may be petted.
+    pub critical_task_mask: u16,
 }
 
 impl Default for PerCoreScheduler {
@@ -70,6 +75,8 @@ impl PerCoreScheduler {
             ],
             ready_bitmap: 0,
             current_task: 15, // Default to idle task
+            watchdog_matrix: 0,
+            critical_task_mask: 0,
         }
     }
 
@@ -139,6 +146,13 @@ impl PerCoreScheduler {
         }
     }
 
+    /// Records a critical task check-in for the current watchdog window.
+    pub fn task_check_in(&mut self, priority: u8) {
+        if priority < 16 {
+            self.watchdog_matrix |= 1 << priority;
+        }
+    }
+
     /// The core scheduling logic (Preemptive & Cooperative).
     ///
     /// Implements O(1) Lock-Free Partitioned Scheduling.
@@ -152,6 +166,12 @@ impl PerCoreScheduler {
     /// The stack pointer of the next task to execute. Returns `0` if a stack overflow (canary corruption) is detected.
     #[must_use]
     pub fn schedule_tick(&mut self, current_rsp: u64) -> u64 {
+        if self.critical_task_mask != 0
+            && (self.watchdog_matrix & self.critical_task_mask) == self.critical_task_mask
+        {
+            host_pet_watchdog();
+            self.watchdog_matrix = 0;
+        }
         let current_idx = self.current_task;
 
         // Save the current task's stack pointer and verify its canary
@@ -197,5 +217,35 @@ impl PerCoreScheduler {
         compiler_fence(Ordering::SeqCst);
 
         self.tasks[next_idx].rsp
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PerCoreScheduler;
+    use crate::ffi_callbacks::shawncore_rtos_register_pet_watchdog;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    static WATCHDOG_PETS: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn count_watchdog_pet() {
+        WATCHDOG_PETS.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn watchdog_pets_only_after_all_critical_tasks_check_in() {
+        unsafe { shawncore_rtos_register_pet_watchdog(count_watchdog_pet) };
+        WATCHDOG_PETS.store(0, Ordering::Relaxed);
+        let mut scheduler = PerCoreScheduler::new();
+        scheduler.critical_task_mask = (1 << 2) | (1 << 5);
+
+        scheduler.task_check_in(2);
+        let _ = scheduler.schedule_tick(0);
+        assert_eq!(WATCHDOG_PETS.load(Ordering::Relaxed), 0);
+
+        scheduler.task_check_in(5);
+        let _ = scheduler.schedule_tick(0);
+        assert_eq!(WATCHDOG_PETS.load(Ordering::Relaxed), 1);
+        assert_eq!(scheduler.watchdog_matrix, 0);
     }
 }
