@@ -1,78 +1,182 @@
 # ShawnCore Libraries
 
-ShawnCore is a no-std Rust prototype for embedded systems that need hybrid cryptographic session establishment alongside deterministic RTOS synchronization primitives. It provides Rust APIs and C-callable FFI boundaries; platform integration remains the responsibility of the host firmware.
+**Hybrid post-quantum session establishment and deterministic RTOS
+synchronization for embedded systems, in `no_std` Rust with a C ABI.**
 
-It is a release-candidate prototype for external technical evaluation, not certified or hardware-qualified production software.
+ShawnCore gives firmware two things that are hard to get right and dangerous to
+get wrong: a hybrid ML-KEM-1024 + X25519 secure channel, and a set of lock-free
+RTOS primitives with analyzable worst-case behavior. It ships as a single
+self-contained static library with a C11 header.
 
-## Why It Exists
+> **Status:** release-candidate prototype for external technical evaluation.
+> Not certified, not hardware-qualified, not independently reviewed.
+> [VALIDATION.md](VALIDATION.md) records exactly what has been executed and what
+> has not.
 
-The project is an evaluable prototype for firmware teams considering hybrid post-quantum session establishment and bounded RTOS coordination. It keeps platform-specific hardware control, cache maintenance, interrupt behavior, stack provisioning, and entropy collection outside the Rust libraries so those assumptions are visible for review.
+---
 
-## Architecture
+## Why this is different
 
-- `shawncore-pq-crypto`: ML-KEM-1024, ML-DSA-87, X25519, hybrid HKDF-SHA384 derivation, ChaCha20/HMAC-SHA384 authenticated encryption, entropy handling, session lifecycle management, and C FFI.
-- `shawncore-rtos-sync`: DMA-pool ownership tracking, SPSC and ring buffers, priority scheduling, state machines, interrupt spinlocks, latency tracking, and telemetry support.
-- `shawncore-ffi`: the C-linkable `staticlib` facade. It owns the required `no_std` panic handler and includes both component crates' exported FFI symbols.
+Most embedded crypto libraries quietly reach into the platform — flushing caches
+with inline assembly, wiping stacks, reading RNGs, assuming coherency. Each reach
+is a correctness claim the library cannot verify on a board it has never seen.
 
-The hybrid KDF returns exactly 128 bytes. For a responder, transmit material is bytes `0..32 || 96..128` and receive material is bytes `32..96`. The initiator applies the complementary assignment. Each directional key is therefore 64 bytes: 32 bytes for ChaCha20 encryption and 32 bytes for HMAC-SHA384 authentication. The handshake transcript includes a fixed protocol label, the ML-KEM ciphertext, the sender X25519 public key, and application info.
+**ShawnCore makes every hardware assumption explicit and finite.** There are
+exactly seven, and they are all registered host callbacks:
 
-## Security Boundaries
+`panic` · `disable_interrupts` · `restore_interrupts` · `cache_flush` ·
+`cache_invalidate` · `monotonic_clock` · `pet_watchdog`
 
-[SECURITY.md](SECURITY.md) is the authoritative statement of the trust boundaries, the threats this repository does and does not mitigate, known limitations, and the host integration contract. Read it before integrating.
+That is the complete list of things a target integrator must validate. Nothing
+is hidden inside the library, which is why the open validation gates in this
+repository are enumerated rather than implied.
 
-Session decryption authenticates the packet before committing replay-window state. Duplicate and out-of-window nonces are rejected. Failed packet encryption does not advance the transmit sequence; exhaustion is rejected before a nonce is reused. Re-establishment zeroizes prior directional keys and resets transmit and replay state before installing replacement keys. Session and temporary derivation material are explicitly zeroized by the implementation where supported by the underlying types.
+---
 
-The raw AEAD API requires a unique 96-bit nonce for every encryption under a given key pair. Session packet encryption assigns and tracks nonces internally; raw AEAD callers own nonce generation and uniqueness.
+## Verified properties
 
-## RTOS and Concurrency Model
+Every claim below is reproducible from a clean checkout with the commands in
+[REVIEW.md](REVIEW.md).
 
-SPSC queues and the entropy queue require one stable producer and one stable consumer for their full initialized lifetimes. The Rust APIs mark producer/consumer operations `unsafe` because their roles cannot be proven by a shared reference; C callers carry the same contract. Slots transfer ownership through publication and consumption using Acquire/Release ordering, and tested software behavior covers FIFO, full/empty, repeated reuse, and unstable slot sequence rejection.
+| | |
+|---|---|
+| **Zero external symbols** | The `aarch64-unknown-none` archive resolves entirely within itself. `memcpy`/`memset`/`memcmp` and soft-float builtins are bundled. No libc required. |
+| **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
+| **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
+| **134 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
+| **49 tests** | Crypto round trips, tampering, replay, reordering, wire round trips, queue reuse, DMA stale generations, scheduler bounds. |
+| **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
+| **Fuzzed** | `ffi_aead_fuzz` with an 87-input regression corpus; CI runs 10,000 executions. |
+| **Bare-metal clean** | `cargo check --target aarch64-unknown-none` with `clippy -D warnings`. |
 
-The scheduler validates priority bounds, stack range arithmetic, stack alignment, and stack size. The host is responsible for mapped writable task-stack memory, stack lifetime and ownership, and platform context-switch behavior. The scheduler writes and verifies a canary at the stack base; it is not a substitute for target stack analysis or an MPU configuration.
+---
 
-## DMA and Cache Model
+## Architecture at a glance
 
-Rust atomic ordering establishes ordering and visibility under the Rust memory model. It does not itself flush processor caches, make data visible to a DMA device, or prove board-level coherency. The host must register platform-specific cache flush/invalidate callbacks where required and validate the resulting cache, barrier, interrupt, and DMA behavior on the target hardware.
+```mermaid
+graph LR
+    subgraph HOST["Host firmware (C/C++)"]
+        APP["Application"]
+        HAL["Platform HAL"]
+    end
+    subgraph SC["ShawnCore — no_std Rust"]
+        FFI["shawncore-ffi<br/>staticlib facade"]
+        PQ["pq-crypto<br/>ML-KEM · ML-DSA · X25519<br/>HKDF · AEAD · sessions"]
+        RT["rtos-sync<br/>scheduler · SPSC · DMA pool<br/>spinlocks · telemetry"]
+    end
+    APP -->|shawncore.h| FFI
+    FFI --> PQ
+    FFI --> RT
+    PQ -.->|7 callbacks| HAL
+    RT -.->|7 callbacks| HAL
 
-The SPSC queues and ring buffer invoke registered cache callbacks around CPU producer/consumer slot transitions. The DMA pool flushes a CPU-side zeroization before it republishes a freed slot. These calls do not establish DMA pinning, physical ownership, or a complete device protocol. Page alignment is an alignment/storage requirement, not proof of DMA pinning. The host must quiesce any device before freeing its allocation and define cache ownership transitions before target validation.
+    classDef host fill:#e8f0fe,stroke:#4285f4,color:#000
+    classDef rust fill:#e6f4ea,stroke:#34a853,color:#000
+    class APP,HAL host
+    class FFI,PQ,RT rust
+```
 
-## C FFI Model
+**[Read ARCHITECTURE.md](ARCHITECTURE.md)** for the design rationale, handshake
+sequence, replay-window ordering, DMA/cache boundary, and measured footprint.
 
-Build the C artifact with `cargo build -p shawncore-ffi --release`. Link the resulting `target/release/libshawncore_ffi.a` and include [`shawncore-ffi/include/shawncore.h`](shawncore-ffi/include/shawncore.h). [`integration/Makefile`](integration/Makefile) drives the C syntax check, smoke build, execution, and the optional sanitizer and Valgrind variants. The header exposes every ABI function, stable C payload layouts, and size/alignment queries for opaque Rust objects and queue slots.
+---
 
-Opaque objects must use the crate-exported `sizeof` and `alignof` values, be initialized exactly once, and be destroyed exactly once after all concurrent users stop. Pointer arguments must be valid, aligned for their declared object types, and live for the entire call. Buffers must satisfy their documented lengths and non-overlap requirements. A non-null pointer is not sufficient evidence that it is mapped, writable, owned by the caller, or valid for the required lifetime; those are host obligations.
+## Quickstart
 
-Register panic, interrupt, monotonic-clock, watchdog, and cache callbacks before calling paths that require them. Callback registrations may be cleared with `NULL`, but registration/replacement must not race invocation; callbacks must remain valid for the duration of any possible call and must not unwind, throw, or `longjmp` through Rust. The provided C HAL file is compile-only scaffolding, not an implementation of cache, interrupt, watchdog, panic, or clock behavior.
+```bash
+cargo build -p shawncore-ffi --release   # produces target/release/libshawncore_ffi.a
+make -C integration run                  # builds and runs the C integration binary
+```
 
-## Cryptographic Components
+Link the archive and include [`shawncore-ffi/include/shawncore.h`](shawncore-ffi/include/shawncore.h).
 
-The project integrates ML-KEM-1024, ML-DSA-87, X25519, HKDF-SHA384, and a ChaCha20/HMAC-SHA384 Encrypt-then-MAC construction through selected no-std dependencies and local wrappers. It does not claim certification, interoperability, or platform approval for those components.
+```c
+#include "shawncore.h"
 
-## Testing
+/* 1. Register the platform callbacks this code path needs. */
+shawncore_crypto_register_cache_flush(host_cache_flush);
+shawncore_crypto_register_panic_hook(host_panic);
 
-Rust unit tests cover cryptographic round trips and tampering, FFI null/zero-length/overlap handling, re-establishment, replay rejection and reordering, queue corruption/reuse, DMA-pool exhaustion and stale generations, and scheduler boundary behavior. The C smoke program compiles, links, and executes basic public ABI, null, and zero-length checks against the release static library.
+/* 2. Allocate the session object yourself — the library never allocates. */
+static _Alignas(64) uint8_t storage[8192];
+shawncore_crypto_session_manager *s = (void *)storage;
+assert(shawncore_crypto_session_manager_sizeof() <= sizeof storage);
+shawncore_crypto_session_manager_init(s);
 
-## Fuzzing
+/* 3. Publish your hybrid public keys, in wire format. */
+shawncore_crypto_session_manager_initiate_handshake(s, entropy96, pk, xpk);
 
-The `ffi_aead_fuzz` cargo-fuzz target supplies valid backing storage while varying bounded lengths and data, including malformed ciphertext, overlap, and null-with-length cases. Its regression corpus and lockfile are retained in the source tree. A successful compile check is not a fuzz campaign; the configured CI fuzz job runs 10,000 executions on the Rust nightly toolchain.
+uint8_t ek_wire[1568], x_wire[32];
+shawncore_crypto_ml_kem_publickey_to_bytes(pk,  ek_wire, sizeof ek_wire);
+shawncore_crypto_x25519_publickey_to_bytes(xpk, x_wire,  sizeof x_wire);
+link_send(ek_wire, sizeof ek_wire);
+link_send(x_wire,  sizeof x_wire);
 
-## Validation Status
+/* 4. Rebuild the peer's values from received bytes and finalize. */
+shawncore_crypto_ml_kem_ciphertext_from_bytes(ct_wire, 1568, ct);
+shawncore_crypto_x25519_publickey_from_bytes(peer_wire, 32, peer);
+shawncore_crypto_session_manager_finalize_handshake(s, peer, ct, NULL, 0, NULL, 0);
 
-**IMPLEMENTED:** AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF/session keys, FFI surfaces, RTOS primitives, and C HAL stubs.
+/* 5. Send. Nonces are assigned and tracked internally. */
+shawncore_crypto_session_manager_encrypt_packet(
+    s, aad, aad_len, pt, ct_out, len, out_nonce, out_tag);
+```
 
-**TESTED:** local Rust unit tests cover crypto round trips and tampering, FFI null/zero-length/overlap handling, session re-establishment and replay paths, queue reuse/corruption paths, DMA-pool exhaustion and stale-generation rejection, scheduler boundaries, state transitions, and the FFT one-cache-line ABI. A C11 smoke program compiles, links, and executes against the release static library.
+[`integration/c_api_smoke.c`](integration/c_api_smoke.c) runs this end to end —
+two session managers completing a full hybrid handshake with every public value
+passed through its wire encoding, then an authenticated packet exchange and a
+replay rejection.
 
-**FUZZED:** a fuzz target, regression corpus, and a 10,000-execution CI fuzz job are configured. Compile checks are not reported as fuzz executions.
+---
 
-**STATICALLY REVIEWED:** strict Clippy, formatting, workspace checks, documentation build, C syntax compilation, and a bare-metal AArch64 type check are configured in CI.
+## Components
 
-**MODEL TESTED:** no formal model checking or exhaustive concurrency-state model has been performed. Rust unit tests exercise implementation behavior only; they do not model cache-coherent DMA hardware.
+| Crate | Contents |
+|---|---|
+| [`shawncore-pq-crypto`](shawncore-pq-crypto) | ML-KEM-1024, ML-DSA-87, X25519, HKDF-SHA384 hybrid derivation, ChaCha20/HMAC-SHA384 Encrypt-then-MAC, entropy pool and queue, session lifecycle, replay handling, wire codecs |
+| [`shawncore-rtos-sync`](shawncore-rtos-sync) | O(1) bitmap scheduler, ABA-tagged DMA pool, SPSC and ring queues, interrupt-aware spinlocks, atomic state machine, latency tracking, telemetry |
+| [`shawncore-ffi`](shawncore-ffi) | C-linkable `staticlib` facade; owns the single `no_std` panic handler |
 
-**HARDWARE VALIDATED:** not yet validated by this repository.
+---
 
-**NOT YET VALIDATED:** target ABI interoperability, cache coherency, DMA visibility, ISR/NMI/FIQ behavior, watchdog behavior, entropy-source quality, sanitizer-backed native FFI misuse tests, ML-KEM/ML-DSA known-answer and external interoperability tests, free-list ABA-tag wraparound, and independent security review.
+## Security model in one paragraph
 
-## Reproducible Checks
+Session decryption authenticates a packet **before** committing any replay-window
+state, so forged traffic cannot poison the window or lock out a legitimate peer.
+Failed encryption never advances the transmit sequence, so no failure path can
+reuse a nonce. Re-establishment zeroizes prior directional keys and resets
+transmit and replay state before installing replacements. Sensitive material is
+explicitly zeroized on every return path, success or error. Secret keys have no
+serialization entry point and cannot be exported through the ABI.
+
+Full trust boundaries, in-scope and out-of-scope threats, known limitations, and
+the host integration contract: **[SECURITY.md](SECURITY.md)**.
+
+---
+
+## Key facts an integrator needs early
+
+**The 128-byte hybrid KDF split.** For a responder, transmit material is bytes
+`0..32 ‖ 96..128` and receive material is bytes `32..96`; the initiator uses the
+complementary assignment. Each 64-byte directional key is 32 bytes of ChaCha20
+key plus 32 bytes of HMAC-SHA384 key.
+
+**ML-DSA-87 is RAM-expensive in this representation.** A verifying key is 73,856
+bytes in memory versus 2,592 on the wire; a signing key is 104,640 bytes versus
+4,896. The dependency caches expanded matrices for speed. Budget roughly 178 KB
+for a signing identity, or use ML-DSA selectively.
+
+**Page alignment is not DMA pinning, and atomics are not cache maintenance.**
+The library requires 4096-byte alignment as a storage property and calls your
+cache callbacks at ownership transitions. Physical residency, pinning, device
+quiesce, and board-level coherency remain yours.
+
+**The SPSC contract is a safety requirement.** One stable producer, one stable
+consumer, for the entire initialized lifetime. Not enforced at runtime.
+
+---
+
+## Reproducible checks
 
 ```text
 cargo fmt --all -- --check
@@ -83,30 +187,83 @@ cargo build --workspace --release
 cargo doc --workspace --no-deps
 cargo check --target aarch64-unknown-none --workspace
 cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz
-cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include -fsyntax-only integration/martac_hal_stubs.c
-cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include integration/c_api_smoke.c target/release/libshawncore_ffi.a -o /tmp/shawncore-c-api-smoke
-/tmp/shawncore-c-api-smoke
+make -C integration syntax
+make -C integration run
+make -C integration asan
+make -C integration valgrind
 ```
 
-`rust-toolchain.toml` pins Rust `1.85.0`, the `rustfmt` and `clippy` components, and the `aarch64-unknown-none` target used by the configured target check. Release profiles use `panic = "abort"` so a Rust panic cannot unwind through the C ABI; the host panic callback still needs a platform fail-safe response.
+`rust-toolchain.toml` pins Rust `1.85.0`, the `rustfmt` and `clippy` components,
+and the `aarch64-unknown-none` target.
+
+---
+
+## Validation status
+
+**IMPLEMENTED** — AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF and
+directional session keys, wire codecs, FFI surfaces, RTOS primitives, C HAL stubs.
+
+**TESTED** — 49 Rust unit tests covering crypto round trips and tampering, wire
+round trips proving semantic equivalence after decode, FFI null/zero-length and
+overlap handling, session re-establishment and replay paths, queue reuse and
+corruption paths, DMA-pool exhaustion and stale-generation rejection, scheduler
+boundaries, state transitions, and the FFT one-cache-line ABI. A C11 integration
+binary compiles, links, and executes a full wire handshake against the release
+archive, clean under AddressSanitizer and Valgrind.
+
+**FUZZED** — `ffi_aead_fuzz` target with an 87-input regression corpus and a
+10,000-execution CI job. Compile checks are not reported as fuzz executions.
+
+**STATICALLY REVIEWED** — strict Clippy, formatting, workspace checks,
+documentation build, C syntax compilation, header/archive symbol parity, and a
+bare-metal AArch64 type check, all in CI.
+
+**MODEL TESTED** — no formal model checking or exhaustive concurrency-state model
+has been performed. Unit tests exercise implementation behavior only; they do not
+model cache-coherent DMA hardware.
+
+**HARDWARE VALIDATED** — not yet validated by this repository.
+
+**NOT YET VALIDATED** — target ABI interoperability, cache coherency, DMA
+visibility, ISR/NMI/FIQ behavior, watchdog behavior, entropy-source quality,
+Rust-instrumented sanitizer tests, ML-KEM/ML-DSA known-answer and external
+interoperability tests, free-list ABA-tag wraparound, and independent security
+review.
+
+---
 
 ## Limitations
 
-This is a prototype intended for technical evaluation. It is not a claim of FIPS certification, CNSA approval, operational USV readiness, or comprehensive security assurance. The 32-bit DMA-pool free-list ABA tag can wrap after $2^{32}$ free-list mutations; deployments must bound that operational lifetime or reinitialize the pool. The retained regression tests do not establish target timing, cache, or physical-memory behavior.
+This is a prototype for technical evaluation. It is not a claim of FIPS
+certification, CNSA approval, operational USV readiness, or comprehensive
+security assurance. The 32-bit DMA-pool free-list ABA tag can wrap after $2^{32}$
+free-list mutations; deployments must bound that operational lifetime or
+reinitialize the pool. No peer identity, PKI, trust-anchor, or revocation model
+is defined here — that protocol layer belongs to the integrator. Retained
+regression tests do not establish target timing, cache, or physical-memory
+behavior.
 
-## External Review Status
+## External review status
 
-Independent security review, ML-KEM/ML-DSA known-answer and interoperability testing, target ABI validation, and board-level cache/DMA, interrupt, watchdog, entropy, and stack validation remain required before deployment or any certification/approval conclusion.
+Independent security review, ML-KEM/ML-DSA known-answer and interoperability
+testing, target ABI validation, and board-level cache/DMA, interrupt, watchdog,
+entropy, and stack validation remain required before deployment or any
+certification or approval conclusion.
+
+---
+
+## Repository map
+
+| Document | Contents |
+|---|---|
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Design rationale, diagrams, measured footprint, concurrency model |
+| [SECURITY.md](SECURITY.md) | Trust boundaries, threat model, host integration contract |
+| [REVIEW.md](REVIEW.md) | Reviewer quickstart and requested review scope |
+| [VALIDATION.md](VALIDATION.md) | Host-side validation record and open external gates |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes |
 
 ## Distribution
 
-This repository is proprietary and all rights are reserved. The crates are intentionally excluded from registry publication; distribution, evaluation, and integration require a separate written agreement with the copyright holder.
-
-## Repository Map
-
-| Document | Contents |
-| --- | --- |
-| [SECURITY.md](SECURITY.md) | Trust boundaries, threat model, known limitations, host integration contract |
-| [REVIEW.md](REVIEW.md) | External reviewer quickstart and requested review scope |
-| [VALIDATION.md](VALIDATION.md) | Host-side validation record and open external gates |
-| [CHANGELOG.md](CHANGELOG.md) | Release notes |
+This repository is proprietary and all rights are reserved. The crates are
+intentionally excluded from registry publication; distribution, evaluation, and
+integration require a separate written agreement with the copyright holder.

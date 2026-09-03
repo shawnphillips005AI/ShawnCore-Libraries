@@ -46,6 +46,7 @@ of their dependencies and of the host contract:
 | Packet reordering | Sequence numbers below the window edge are rejected; in-window duplicates are rejected by bitmask. |
 | Nonce reuse on transmit | Session packet encryption owns nonce assignment. A failed encryption does not advance the transmit sequence, and counter exhaustion is rejected before a nonce could repeat. |
 | Key material left in memory | Shared secrets, combined KDF entropy, and directional keys are explicitly zeroized on every return path, success or error, using volatile clears plus a compiler fence. |
+| Secret key exfiltration through the ABI | Decapsulation keys, signing keys, and shared secrets have no serialization entry point. Only public keys, ciphertexts, and signatures can be encoded to bytes. |
 | Stale keys after rekey | Re-establishment zeroizes prior directional keys and resets transmit and replay state before installing replacements. |
 | Single-algorithm cryptanalytic break | Hybrid construction: ML-KEM-1024 and X25519 secrets are both fed into HKDF-SHA384 extract, so recovering the session key requires breaking both. |
 | Handshake transcript confusion | The KDF `info` binds a fixed protocol label, the ML-KEM ciphertext, the sender X25519 public key, and application info. |
@@ -205,6 +206,14 @@ on role assignment or the session will not interoperate.
 Every FFI entry point returns a typed status. Do not discard it. In particular,
 decryption failure means the packet was not authenticated and its plaintext
 buffer contents must not be used.
+
+### 9. Wire codecs do not authenticate
+
+`*_from_bytes` validates length and structure only. A well-formed encoding of the
+correct length always decodes. Binding a public key to a peer identity — through
+ML-DSA signatures over a transcript, a pre-provisioned trust anchor, or an
+out-of-band channel — is your protocol layer's responsibility. Without it the
+handshake is unauthenticated and open to an active man-in-the-middle.
 
 ## Build and Link
 

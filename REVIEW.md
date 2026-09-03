@@ -11,7 +11,8 @@ hardware-qualified software.
 The host validation record is in [VALIDATION.md](VALIDATION.md). It identifies
 what executed locally and the target-hardware, interoperability, and independent
 review gates that remain open. The trust boundaries, threat model, and host
-integration contract are in [SECURITY.md](SECURITY.md).
+integration contract are in [SECURITY.md](SECURITY.md). The design rationale,
+diagrams, and measured footprint are in [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Architecture
 
@@ -44,6 +45,10 @@ uses the complementary assignment.
   task-stack mapping, writability, lifetime, ownership, and context switching.
 - Opaque C objects require the exported size/alignment functions, one
   initialization, no concurrent destruction/use, and caller-owned valid storage.
+- Values that cross a link use fixed-length wire codecs. In-memory forms are
+  expanded and larger than their encodings. Decoding validates length and
+  structure only and does not authenticate a peer. Secret key material has no
+  serialization entry point.
 - Callback registration can be cleared with `NULL`; replacement must not race
   invocation, and a registered callback must remain valid until all calls stop.
 

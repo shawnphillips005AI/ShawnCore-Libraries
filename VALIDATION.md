@@ -24,7 +24,7 @@ hardware behavior, certification, production approval, or independent review.
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets` | PASS | Actually executed and passed: 43 unit tests (23 crypto, 20 RTOS); the FFI facade has no unit tests. |
+| `cargo test --workspace --all-targets` | PASS | Actually executed and passed: 49 unit tests (29 crypto, 20 RTOS); the FFI facade has no unit tests. |
 
 The executed tests cover AEAD and in-place round trips, authentication failure,
 FFI null/zero-length/overlap handling, session re-establishment, replay,
@@ -32,20 +32,30 @@ reordering, replay-window commit for sequences below the window, entropy queue
 reuse, DMA-pool stale-generation rejection, queue behavior, scheduler boundaries,
 and state transitions.
 
+The wire codec tests assert semantic equivalence rather than byte equality: a
+decoded ML-KEM key is used to encapsulate and the original decapsulation key
+recovers the same secret; a decoded X25519 key produces the same Diffie-Hellman
+output as the peer; a decoded ML-DSA key verifies a signature decoded from its
+own wire form and rejects a single-bit mutation of it.
+
 ## FFI VALIDATION
 
 | Command or check | Result | Evidence |
 | --- | --- | --- |
 | C11 HAL syntax check | PASS | `make -C integration syntax` executed and passed. |
 | C smoke executable | PASS | `make -C integration run` built and executed `integration/c_api_smoke.c` against `target/release/libshawncore_ffi.a`; exit status 0. |
-| Public-symbol check | PASS | Header declarations and archive exports were compared and matched exactly: 119 symbols, empty diff. |
+| C wire handshake | PASS | The smoke binary drives two session managers through a complete hybrid handshake with every public value passed through its wire codec, then an authenticated packet exchange and a replay rejection. |
+| Public-symbol check | PASS | Header declarations and archive exports were compared and matched exactly: 134 symbols, empty diff. |
+| Self-contained archive check | PASS | For `aarch64-unknown-none`, the set of undefined symbols minus the set of archive-defined symbols is empty; `nm` shows no `malloc`, `free`, `__rust_alloc`, libc I/O, or pthread references. |
 | AddressSanitizer C smoke | PASS | `make -C integration asan` built with `-fsanitize=address` and executed with `ASAN_OPTIONS=detect_leaks=1`; no findings. |
-| Valgrind C smoke | PASS | `make -C integration valgrind` reported `ERROR SUMMARY: 0 errors from 0 contexts` and no leaks (0 allocs, 0 frees). |
+| Valgrind C smoke | PASS | `make -C integration valgrind` reported `ERROR SUMMARY: 0 errors from 0 contexts` and `in use at exit: 0 bytes in 0 blocks`. |
 | Rust-instrumented AddressSanitizer | BLOCKED | Attempted, but nightly failed to resolve `zeroize_derive` in sanitizer build mode (`E0463`). No Rust ASan result is claimed. |
 
 The C smoke test checks ABI size/alignment, selected null errors, zero-length
-AEAD/HKDF calls, and static-library linkage. It is not target C ABI or hardware
-integration validation.
+AEAD/HKDF calls, wire codec rejection of null and wrong-length arguments, a full
+two-party hybrid handshake conducted entirely through wire encodings, an
+authenticated packet exchange, replay rejection, and static-library linkage. It
+is not target C ABI or hardware integration validation.
 
 ## FUZZING
 

@@ -11,9 +11,16 @@ use crate::error::CryptoError;
 use crate::zeroize::secure_cache_flush;
 use core::sync::atomic::{compiler_fence, Ordering};
 use ml_dsa::{
-    Keypair, MlDsa87, Signature, SignatureEncoding, Signer, SigningKey, Verifier, VerifyingKey,
+    EncodedVerifyingKey, Keypair, MlDsa87, Signature, SignatureEncoding, Signer, SigningKey,
+    Verifier, VerifyingKey,
 };
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+/// Wire-format length of an ML-DSA-87 verifying key (FIPS 204 `pk`).
+pub const ML_DSA_PUBLICKEY_BYTES: usize = 2592;
+
+/// Wire-format length of an ML-DSA-87 signature (FIPS 204 `sigma`).
+pub const ML_DSA_SIGNATURE_BYTES: usize = 4627;
 
 /// Public verifying key for ML-DSA-87.
 /// Used to verify the authenticity and integrity of signed messages.
@@ -33,6 +40,29 @@ pub struct SigningKey87(#[zeroize(skip)] pub SigningKey<MlDsa87>);
 #[repr(C, align(64))]
 #[derive(Clone)]
 pub struct Signature87(pub [u8; 4627]);
+
+impl PublicKey87 {
+    /// Serializes the key into its FIPS 204 `pk` wire encoding.
+    ///
+    /// The in-memory representation caches an expanded matrix and is substantially
+    /// larger than this encoding; only the encoding is interoperable.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; ML_DSA_PUBLICKEY_BYTES] {
+        let mut out = [0u8; ML_DSA_PUBLICKEY_BYTES];
+        out.copy_from_slice(self.0.encode().as_slice());
+        out
+    }
+
+    /// Reconstructs a key from its FIPS 204 `pk` wire encoding.
+    ///
+    /// Decoding does not authenticate the peer. Any byte string of the correct
+    /// length decodes; binding a key to an identity belongs to the caller's protocol layer.
+    pub fn from_bytes(bytes: &[u8; ML_DSA_PUBLICKEY_BYTES]) -> Result<Self, CryptoError> {
+        let encoded = EncodedVerifyingKey::<MlDsa87>::try_from(bytes.as_slice())
+            .map_err(|_| CryptoError::InvalidLength)?;
+        Ok(Self(VerifyingKey::<MlDsa87>::decode(&encoded)))
+    }
+}
 
 /// Generates an ML-DSA-87 keypair deterministically from the provided seed.
 ///

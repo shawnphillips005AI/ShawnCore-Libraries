@@ -8,17 +8,20 @@
 
 use crate::aead_wrapper::{aead_decrypt, aead_encrypt, hkdf_expand_sha384, hmac_sha384};
 use crate::entropy_pool::{GLOBAL_ENTROPY_POOL, GLOBAL_ENTROPY_QUEUE};
+use crate::error::CryptoError;
 use crate::ffi_error::ShawncoreCryptoErr;
 use crate::ml_dsa_wrapper::{
     ml_dsa_keygen, ml_dsa_sign, ml_dsa_verify, PublicKey87, Signature87, SigningKey87,
+    ML_DSA_PUBLICKEY_BYTES, ML_DSA_SIGNATURE_BYTES,
 };
 use crate::ml_kem_wrapper::{
     ml_kem_decapsulate, ml_kem_encapsulate, ml_kem_keygen, Ciphertext1024, DecapsKey1024,
-    PublicKey1024, SharedKey1024,
+    PublicKey1024, SharedKey1024, ML_KEM_CIPHERTEXT_BYTES, ML_KEM_PUBLICKEY_BYTES,
 };
 use crate::session_manager::SessionManager;
 use crate::x25519_wrapper::{
     x25519_diffie_hellman, x25519_keygen, X25519Public, X25519Secret, X25519SharedSecret,
+    X25519_PUBLICKEY_BYTES,
 };
 
 macro_rules! opaque_type_layout {
@@ -977,6 +980,168 @@ pub unsafe extern "C" fn shawncore_crypto_x25519_sharedsecret_destroy(
 }
 
 // ============================================================================
+// Wire Encoding FFI
+// ============================================================================
+//
+// Handshake values that must cross a link are opaque to C, so each one exposes a
+// fixed-length wire codec here. Secret key material is deliberately excluded:
+// decapsulation keys, signing keys, and shared secrets have no export path.
+
+fn ml_kem_ciphertext_encode(value: &Ciphertext1024) -> [u8; ML_KEM_CIPHERTEXT_BYTES] {
+    value.0
+}
+
+fn ml_kem_ciphertext_decode(
+    bytes: &[u8; ML_KEM_CIPHERTEXT_BYTES],
+) -> Result<Ciphertext1024, CryptoError> {
+    Ok(Ciphertext1024(*bytes))
+}
+
+fn x25519_publickey_encode(value: &X25519Public) -> [u8; X25519_PUBLICKEY_BYTES] {
+    value.0
+}
+
+fn x25519_publickey_decode(
+    bytes: &[u8; X25519_PUBLICKEY_BYTES],
+) -> Result<X25519Public, CryptoError> {
+    Ok(X25519Public(*bytes))
+}
+
+fn ml_dsa_signature_encode(value: &Signature87) -> [u8; ML_DSA_SIGNATURE_BYTES] {
+    value.0
+}
+
+fn ml_dsa_signature_decode(
+    bytes: &[u8; ML_DSA_SIGNATURE_BYTES],
+) -> Result<Signature87, CryptoError> {
+    Ok(Signature87(*bytes))
+}
+
+macro_rules! wire_codec {
+    ($type:ty, $len:expr, $len_fn:ident, $to_fn:ident, $from_fn:ident, $encode:path, $decode:path) => {
+        #[doc = concat!("Returns the wire-encoded length in bytes of a `", stringify!($type), "`.")]
+        #[no_mangle]
+        pub extern "C" fn $len_fn() -> usize {
+            $len
+        }
+
+        #[doc = concat!("Writes the wire encoding of a `", stringify!($type), "` into `out`.")]
+        ///
+        /// `out_len` must equal the value reported by the matching `_encoded_len`
+        /// function. The in-memory object may be larger than its encoding.
+        ///
+        /// # Safety
+        /// `value` must point to a valid, initialized object of this type. `out` must
+        /// be writable for `out_len` bytes and must not overlap `value`.
+        #[no_mangle]
+        pub unsafe extern "C" fn $to_fn(
+            value: *const $type,
+            out: *mut u8,
+            out_len: usize,
+        ) -> ShawncoreCryptoErr {
+            if value.is_null() || out.is_null() {
+                return ShawncoreCryptoErr::InvalidState;
+            }
+            if out_len != $len {
+                return ShawncoreCryptoErr::InvalidLength;
+            }
+            if ranges_overlap(value, core::mem::size_of::<$type>(), out, out_len) {
+                return ShawncoreCryptoErr::InvalidLength;
+            }
+
+            let encoded = $encode(unsafe { &*value });
+            unsafe {
+                core::ptr::copy_nonoverlapping(encoded.as_ptr(), out, $len);
+            }
+            ShawncoreCryptoErr::Success
+        }
+
+        #[doc = concat!("Reconstructs a `", stringify!($type), "` from its wire encoding.")]
+        ///
+        /// Decoding validates length and structure only. It does not authenticate the
+        /// peer; binding a key to an identity belongs to the caller's protocol layer.
+        ///
+        /// # Safety
+        /// `bytes` must be readable for `len` bytes. `out` must point to writable
+        /// storage with this type's size and alignment, must not overlap `bytes`, and
+        /// is fully overwritten on success and left unmodified on failure.
+        #[no_mangle]
+        pub unsafe extern "C" fn $from_fn(
+            bytes: *const u8,
+            len: usize,
+            out: *mut $type,
+        ) -> ShawncoreCryptoErr {
+            if bytes.is_null() || out.is_null() {
+                return ShawncoreCryptoErr::InvalidState;
+            }
+            if len != $len {
+                return ShawncoreCryptoErr::InvalidLength;
+            }
+            if ranges_overlap(bytes, len, out, core::mem::size_of::<$type>()) {
+                return ShawncoreCryptoErr::InvalidLength;
+            }
+
+            let input = unsafe { &*(bytes as *const [u8; $len]) };
+            match $decode(input) {
+                Ok(value) => {
+                    unsafe {
+                        core::ptr::write(out, value);
+                    }
+                    ShawncoreCryptoErr::Success
+                }
+                Err(e) => e.into(),
+            }
+        }
+    };
+}
+
+wire_codec!(
+    PublicKey1024,
+    ML_KEM_PUBLICKEY_BYTES,
+    shawncore_crypto_ml_kem_publickey_encoded_len,
+    shawncore_crypto_ml_kem_publickey_to_bytes,
+    shawncore_crypto_ml_kem_publickey_from_bytes,
+    PublicKey1024::to_bytes,
+    PublicKey1024::from_bytes
+);
+wire_codec!(
+    Ciphertext1024,
+    ML_KEM_CIPHERTEXT_BYTES,
+    shawncore_crypto_ml_kem_ciphertext_encoded_len,
+    shawncore_crypto_ml_kem_ciphertext_to_bytes,
+    shawncore_crypto_ml_kem_ciphertext_from_bytes,
+    ml_kem_ciphertext_encode,
+    ml_kem_ciphertext_decode
+);
+wire_codec!(
+    X25519Public,
+    X25519_PUBLICKEY_BYTES,
+    shawncore_crypto_x25519_publickey_encoded_len,
+    shawncore_crypto_x25519_publickey_to_bytes,
+    shawncore_crypto_x25519_publickey_from_bytes,
+    x25519_publickey_encode,
+    x25519_publickey_decode
+);
+wire_codec!(
+    PublicKey87,
+    ML_DSA_PUBLICKEY_BYTES,
+    shawncore_crypto_ml_dsa_publickey_encoded_len,
+    shawncore_crypto_ml_dsa_publickey_to_bytes,
+    shawncore_crypto_ml_dsa_publickey_from_bytes,
+    PublicKey87::to_bytes,
+    PublicKey87::from_bytes
+);
+wire_codec!(
+    Signature87,
+    ML_DSA_SIGNATURE_BYTES,
+    shawncore_crypto_ml_dsa_signature_encoded_len,
+    shawncore_crypto_ml_dsa_signature_to_bytes,
+    shawncore_crypto_ml_dsa_signature_from_bytes,
+    ml_dsa_signature_encode,
+    ml_dsa_signature_decode
+);
+
+// ============================================================================
 // AEAD & KDF FFI
 // ============================================================================
 
@@ -1354,4 +1519,272 @@ pub unsafe extern "C" fn shawncore_crypto_entropy_push(chunk: *const u8) -> Shaw
 pub unsafe extern "C" fn shawncore_crypto_entropy_mix() -> ShawncoreCryptoErr {
     GLOBAL_ENTROPY_POOL.mix_entropy();
     ShawncoreCryptoErr::Success
+}
+
+#[cfg(test)]
+mod wire_codec_tests {
+    use super::*;
+    use crate::ffi_callbacks::shawncore_crypto_register_cache_flush;
+    use core::mem::MaybeUninit;
+
+    extern "C" fn test_cache_flush(_: *const u8, _: usize) {}
+
+    fn install_callbacks() {
+        unsafe { shawncore_crypto_register_cache_flush(Some(test_cache_flush)) };
+    }
+
+    /// Decoding an encoded ML-KEM key must yield a key that encapsulates to a secret
+    /// the original decapsulation key recovers. Byte equality alone would not prove this.
+    #[test]
+    fn ml_kem_publickey_survives_a_wire_round_trip() {
+        install_callbacks();
+        let entropy = [7u8; 64];
+        let (pk, dk) = crate::ml_kem_wrapper::ml_kem_keygen(&entropy).unwrap();
+
+        let mut encoded = [0u8; ML_KEM_PUBLICKEY_BYTES];
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_publickey_to_bytes(&pk, encoded.as_mut_ptr(), encoded.len())
+            },
+            ShawncoreCryptoErr::Success
+        );
+
+        let mut decoded = MaybeUninit::<PublicKey1024>::uninit();
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_publickey_from_bytes(
+                    encoded.as_ptr(),
+                    encoded.len(),
+                    decoded.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+        let decoded = unsafe { decoded.assume_init() };
+
+        assert_eq!(decoded.to_bytes(), encoded);
+
+        let (shared, ciphertext) =
+            crate::ml_kem_wrapper::ml_kem_encapsulate(&decoded, &[3u8; 32]).unwrap();
+        let recovered = crate::ml_kem_wrapper::ml_kem_decapsulate(&dk, &ciphertext).unwrap();
+        assert_eq!(shared.0, recovered.0);
+    }
+
+    #[test]
+    fn ml_kem_ciphertext_survives_a_wire_round_trip() {
+        install_callbacks();
+        let (pk, dk) = crate::ml_kem_wrapper::ml_kem_keygen(&[9u8; 64]).unwrap();
+        let (shared, ciphertext) = crate::ml_kem_wrapper::ml_kem_encapsulate(&pk, &[5u8; 32])
+            .expect("encapsulation must succeed");
+
+        let mut encoded = [0u8; ML_KEM_CIPHERTEXT_BYTES];
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_ciphertext_to_bytes(
+                    &ciphertext,
+                    encoded.as_mut_ptr(),
+                    encoded.len(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+
+        let mut decoded = MaybeUninit::<Ciphertext1024>::uninit();
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_ciphertext_from_bytes(
+                    encoded.as_ptr(),
+                    encoded.len(),
+                    decoded.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+        let decoded = unsafe { decoded.assume_init() };
+
+        let recovered = crate::ml_kem_wrapper::ml_kem_decapsulate(&dk, &decoded).unwrap();
+        assert_eq!(shared.0, recovered.0);
+    }
+
+    #[test]
+    fn x25519_publickey_survives_a_wire_round_trip() {
+        install_callbacks();
+        let (alice_pk, alice_sk) = crate::x25519_wrapper::x25519_keygen(&[0x11; 32]);
+        let (bob_pk, bob_sk) = crate::x25519_wrapper::x25519_keygen(&[0x22; 32]);
+
+        let mut encoded = [0u8; X25519_PUBLICKEY_BYTES];
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_x25519_publickey_to_bytes(
+                    &bob_pk,
+                    encoded.as_mut_ptr(),
+                    encoded.len(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+
+        let mut decoded = MaybeUninit::<X25519Public>::uninit();
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_x25519_publickey_from_bytes(
+                    encoded.as_ptr(),
+                    encoded.len(),
+                    decoded.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+        let decoded = unsafe { decoded.assume_init() };
+
+        let from_decoded = crate::x25519_wrapper::x25519_diffie_hellman(&alice_sk, &decoded)
+            .expect("diffie-hellman with the decoded key must succeed");
+        let from_peer = crate::x25519_wrapper::x25519_diffie_hellman(&bob_sk, &alice_pk)
+            .expect("diffie-hellman must succeed");
+        assert_eq!(from_decoded.0, from_peer.0);
+    }
+
+    /// Runs on an explicit large stack: an ML-DSA-87 verifying key is 73,856 bytes and a
+    /// signing key is 104,640 bytes in memory, and an unoptimized build copies them on move.
+    #[test]
+    fn ml_dsa_publickey_and_signature_survive_a_wire_round_trip() {
+        std::thread::Builder::new()
+            .stack_size(16 * 1024 * 1024)
+            .spawn(ml_dsa_wire_round_trip)
+            .expect("test thread must spawn")
+            .join()
+            .expect("test thread must not panic");
+    }
+
+    fn ml_dsa_wire_round_trip() {
+        install_callbacks();
+        let (pk, sk) = crate::ml_dsa_wrapper::ml_dsa_keygen(&[0x3C; 32]).unwrap();
+        let message = b"telemetry frame";
+        let signature = crate::ml_dsa_wrapper::ml_dsa_sign(&sk, message).unwrap();
+
+        let mut encoded_pk = [0u8; ML_DSA_PUBLICKEY_BYTES];
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_dsa_publickey_to_bytes(
+                    &pk,
+                    encoded_pk.as_mut_ptr(),
+                    encoded_pk.len(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+        let mut decoded_pk = MaybeUninit::<PublicKey87>::uninit();
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_dsa_publickey_from_bytes(
+                    encoded_pk.as_ptr(),
+                    encoded_pk.len(),
+                    decoded_pk.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+        let decoded_pk = unsafe { decoded_pk.assume_init() };
+
+        let mut encoded_sig = [0u8; ML_DSA_SIGNATURE_BYTES];
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_dsa_signature_to_bytes(
+                    &signature,
+                    encoded_sig.as_mut_ptr(),
+                    encoded_sig.len(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+        let mut decoded_sig = MaybeUninit::<Signature87>::uninit();
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_dsa_signature_from_bytes(
+                    encoded_sig.as_ptr(),
+                    encoded_sig.len(),
+                    decoded_sig.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+        let decoded_sig = unsafe { decoded_sig.assume_init() };
+
+        assert!(crate::ml_dsa_wrapper::ml_dsa_verify(&decoded_pk, message, &decoded_sig).is_ok());
+
+        let mut tampered = decoded_sig;
+        tampered.0[0] ^= 1;
+        assert!(crate::ml_dsa_wrapper::ml_dsa_verify(&decoded_pk, message, &tampered).is_err());
+    }
+
+    #[test]
+    fn encoded_lengths_match_the_published_wire_sizes() {
+        assert_eq!(shawncore_crypto_ml_kem_publickey_encoded_len(), 1568);
+        assert_eq!(shawncore_crypto_ml_kem_ciphertext_encoded_len(), 1568);
+        assert_eq!(shawncore_crypto_x25519_publickey_encoded_len(), 32);
+        assert_eq!(shawncore_crypto_ml_dsa_publickey_encoded_len(), 2592);
+        assert_eq!(shawncore_crypto_ml_dsa_signature_encoded_len(), 4627);
+    }
+
+    #[test]
+    fn wire_codec_rejects_null_wrong_length_and_overlap() {
+        install_callbacks();
+        let (pk, _dk) = crate::ml_kem_wrapper::ml_kem_keygen(&[1u8; 64]).unwrap();
+        let mut buffer = [0u8; ML_KEM_PUBLICKEY_BYTES];
+
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_publickey_to_bytes(
+                    core::ptr::null(),
+                    buffer.as_mut_ptr(),
+                    buffer.len(),
+                )
+            },
+            ShawncoreCryptoErr::InvalidState
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_publickey_to_bytes(&pk, core::ptr::null_mut(), buffer.len())
+            },
+            ShawncoreCryptoErr::InvalidState
+        );
+        assert_eq!(
+            unsafe { shawncore_crypto_ml_kem_publickey_to_bytes(&pk, buffer.as_mut_ptr(), 1567) },
+            ShawncoreCryptoErr::InvalidLength
+        );
+
+        // Encoding into the object's own storage must be refused, not silently corrupt it.
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_publickey_to_bytes(
+                    &pk,
+                    (&pk as *const PublicKey1024).cast::<u8>().cast_mut(),
+                    ML_KEM_PUBLICKEY_BYTES,
+                )
+            },
+            ShawncoreCryptoErr::InvalidLength
+        );
+
+        let mut out = MaybeUninit::<PublicKey1024>::uninit();
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_publickey_from_bytes(
+                    core::ptr::null(),
+                    ML_KEM_PUBLICKEY_BYTES,
+                    out.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::InvalidState
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_publickey_from_bytes(
+                    buffer.as_ptr(),
+                    ML_KEM_PUBLICKEY_BYTES + 1,
+                    out.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::InvalidLength
+        );
+    }
 }

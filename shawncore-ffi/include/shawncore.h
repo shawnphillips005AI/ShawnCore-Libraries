@@ -193,6 +193,68 @@ shawncore_crypto_err shawncore_crypto_x25519_diffie_hellman(
     shawncore_crypto_x25519_sharedsecret *out_shared);
 shawncore_crypto_err shawncore_crypto_x25519_sharedsecret_destroy(shawncore_crypto_x25519_sharedsecret *shared);
 
+/*
+ * Wire codecs.
+ *
+ * Handshake values that cross a link are opaque in memory and larger than their
+ * encodings, so each exposes a fixed-length codec. Pass a buffer whose length
+ * equals the matching *_encoded_len() value; any other length is rejected.
+ * Buffers must not overlap the object. Decoding validates length and structure
+ * only: it does not authenticate a peer.
+ *
+ * Secret material is deliberately not exportable. Decapsulation keys, signing
+ * keys, and shared secrets have no serialization entry point.
+ */
+size_t shawncore_crypto_ml_kem_publickey_encoded_len(void);   /* 1568 */
+shawncore_crypto_err shawncore_crypto_ml_kem_publickey_to_bytes(
+    const shawncore_crypto_ml_kem_publickey *value,
+    uint8_t *out,
+    size_t out_len);
+shawncore_crypto_err shawncore_crypto_ml_kem_publickey_from_bytes(
+    const uint8_t *bytes,
+    size_t len,
+    shawncore_crypto_ml_kem_publickey *out);
+
+size_t shawncore_crypto_ml_kem_ciphertext_encoded_len(void);  /* 1568 */
+shawncore_crypto_err shawncore_crypto_ml_kem_ciphertext_to_bytes(
+    const shawncore_crypto_ml_kem_ciphertext *value,
+    uint8_t *out,
+    size_t out_len);
+shawncore_crypto_err shawncore_crypto_ml_kem_ciphertext_from_bytes(
+    const uint8_t *bytes,
+    size_t len,
+    shawncore_crypto_ml_kem_ciphertext *out);
+
+size_t shawncore_crypto_x25519_publickey_encoded_len(void);   /* 32 */
+shawncore_crypto_err shawncore_crypto_x25519_publickey_to_bytes(
+    const shawncore_crypto_x25519_publickey *value,
+    uint8_t *out,
+    size_t out_len);
+shawncore_crypto_err shawncore_crypto_x25519_publickey_from_bytes(
+    const uint8_t *bytes,
+    size_t len,
+    shawncore_crypto_x25519_publickey *out);
+
+size_t shawncore_crypto_ml_dsa_publickey_encoded_len(void);   /* 2592 */
+shawncore_crypto_err shawncore_crypto_ml_dsa_publickey_to_bytes(
+    const shawncore_crypto_ml_dsa_publickey *value,
+    uint8_t *out,
+    size_t out_len);
+shawncore_crypto_err shawncore_crypto_ml_dsa_publickey_from_bytes(
+    const uint8_t *bytes,
+    size_t len,
+    shawncore_crypto_ml_dsa_publickey *out);
+
+size_t shawncore_crypto_ml_dsa_signature_encoded_len(void);   /* 4627 */
+shawncore_crypto_err shawncore_crypto_ml_dsa_signature_to_bytes(
+    const shawncore_crypto_ml_dsa_signature *value,
+    uint8_t *out,
+    size_t out_len);
+shawncore_crypto_err shawncore_crypto_ml_dsa_signature_from_bytes(
+    const uint8_t *bytes,
+    size_t len,
+    shawncore_crypto_ml_dsa_signature *out);
+
 shawncore_crypto_err shawncore_crypto_hmac_sha384(
     const uint8_t *key,
     const uint8_t *data,

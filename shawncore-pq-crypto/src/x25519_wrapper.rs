@@ -12,6 +12,9 @@ use crate::zeroize::secure_cache_flush;
 use x25519_dalek::{PublicKey, StaticSecret};
 use zeroize::Zeroize;
 
+/// Wire-format length of an X25519 public key (RFC 7748 u-coordinate).
+pub const X25519_PUBLICKEY_BYTES: usize = 32;
+
 /// Public key for X25519.
 /// Used by the peer to perform the Diffie-Hellman key exchange.
 #[repr(C, align(64))]

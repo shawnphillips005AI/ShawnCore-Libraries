@@ -7,6 +7,46 @@ qualification, or production readiness.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [12.3.0] — 2026-09-03
+
+Closes a functional gap that blocked C integration, and documents the
+architecture for external technical review.
+
+### Added
+
+- **Wire codecs for the C ABI.** Every handshake value that crosses a link now
+  has a fixed-length encoder and decoder: ML-KEM-1024 public key (1,568 B) and
+  ciphertext (1,568 B), X25519 public key (32 B), ML-DSA-87 verifying key
+  (2,592 B) and signature (4,627 B). Each exposes `_encoded_len`, `_to_bytes`,
+  and `_from_bytes`. 15 new symbols; the C ABI grew from 119 to 134 exports.
+  All additions are additive — no existing signature changed.
+- `ARCHITECTURE.md`: design rationale, layering, handshake sequence, the
+  128-byte KDF split, nonce and replay-window ordering, DMA/cache boundary,
+  concurrency model, and measured object footprints.
+- Six wire codec unit tests asserting semantic equivalence after decode, plus
+  null, wrong-length, and overlap rejection. Test count is now 49, up from 43.
+- The C integration binary now drives a complete two-party hybrid handshake with
+  every public value passed through its wire encoding, followed by an
+  authenticated packet exchange and a replay rejection.
+- `SECURITY.md`: secret material is explicitly non-exportable, and wire decoding
+  explicitly does not authenticate a peer.
+
+### Fixed
+
+- A C host could not complete a handshake over a link. ML-KEM public keys and
+  ciphertexts, X25519 public keys, ML-DSA verifying keys, and signatures were
+  opaque handles with no serialization, so a caller could neither transmit its
+  own public values nor reconstruct a peer's from received bytes. Rust callers
+  were unaffected because the wrapper fields are public.
+
+### Notes
+
+- Secret material remains deliberately non-serializable. Decapsulation keys,
+  signing keys, and shared secrets have no export path through the ABI.
+- ML-DSA-87 in-memory objects are the dependency's expanded representations:
+  a verifying key is 73,856 bytes and a signing key is 104,640 bytes, versus
+  2,592 and 4,896 bytes encoded. This is now published for RAM planning.
+
 ## [12.2.0] — 2026-09-03
 
 Release-candidate prototype prepared for external technical review.

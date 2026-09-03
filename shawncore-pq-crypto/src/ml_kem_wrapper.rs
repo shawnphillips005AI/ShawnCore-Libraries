@@ -10,8 +10,14 @@
 
 use crate::error::CryptoError;
 use crate::zeroize::secure_cache_flush;
-use ml_kem::{KemCore, MlKem1024};
+use ml_kem::{Encoded, EncodedSizeUser, KemCore, MlKem1024};
 use zeroize::{Zeroize, ZeroizeOnDrop};
+
+/// Wire-format length of an ML-KEM-1024 encapsulation key (FIPS 203 `ek`).
+pub const ML_KEM_PUBLICKEY_BYTES: usize = 1568;
+
+/// Wire-format length of an ML-KEM-1024 ciphertext (FIPS 203 `c`).
+pub const ML_KEM_CIPHERTEXT_BYTES: usize = 1568;
 
 /// Public key for ML-KEM-1024.
 /// Used by the peer to encapsulate a shared secret.
@@ -40,6 +46,31 @@ pub struct SharedKey1024(pub [u8; 32]);
 #[repr(C, align(64))]
 #[derive(Clone)]
 pub struct Ciphertext1024(pub [u8; 1568]);
+
+impl PublicKey1024 {
+    /// Serializes the key into its FIPS 203 `ek` wire encoding.
+    ///
+    /// The in-memory representation is an expanded form and is larger than this
+    /// encoding; only the encoding is interoperable.
+    #[must_use]
+    pub fn to_bytes(&self) -> [u8; ML_KEM_PUBLICKEY_BYTES] {
+        let mut out = [0u8; ML_KEM_PUBLICKEY_BYTES];
+        out.copy_from_slice(self.0.as_bytes().as_slice());
+        out
+    }
+
+    /// Reconstructs a key from its FIPS 203 `ek` wire encoding.
+    ///
+    /// Decoding does not authenticate the peer. Any byte string of the correct
+    /// length decodes; binding a key to an identity belongs to the caller's protocol layer.
+    pub fn from_bytes(bytes: &[u8; ML_KEM_PUBLICKEY_BYTES]) -> Result<Self, CryptoError> {
+        let encoded = Encoded::<ml_kem::kem::EncapsulationKey<ml_kem::MlKem1024Params>>::try_from(
+            bytes.as_slice(),
+        )
+        .map_err(|_| CryptoError::InvalidLength)?;
+        Ok(Self(ml_kem::kem::EncapsulationKey::from_bytes(&encoded)))
+    }
+}
 
 /// Generates an ML-KEM-1024 keypair deterministically from the provided entropy.
 ///
