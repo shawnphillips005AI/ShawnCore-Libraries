@@ -2,7 +2,7 @@
 #![deny(missing_docs)]
 
 //! Post-Quantum Session Key Manager.
-//! True Hybrid Handshake (CNSA 2.0 Compliance).
+//! Hybrid ML-KEM-1024 and X25519 handshake.
 //! Hardware-agnostic implementation for MarTac USVs.
 //! Manages both ML-KEM-1024 and X25519 key encapsulation/decapsulation to establish
 //! a secure, forward-secret hybrid symmetric key for network communications.
@@ -33,9 +33,9 @@ pub struct SessionManager {
     ml_kem_dk: Option<DecapsKey1024>,
     /// The secret X25519 key (held temporarily during handshake).
     x25519_sk: Option<X25519Secret>,
-    /// The established transmit key, derived from the first half of the hybrid output.
+    /// The established transmit key for this session role.
     tx_key: Option<[u8; 64]>,
-    /// The established receive key, derived from the second half of the hybrid output.
+    /// The established receive key for this session role.
     rx_key: Option<[u8; 64]>,
     /// Integrity checksum for the transmit key.
     tx_key_checksum: u32,
@@ -362,16 +362,25 @@ impl SessionManager {
         if !self.is_established || ciphertext.len() != plaintext.len() {
             return Err(CryptoError::InvalidState);
         }
+        if self.tx_counter == u64::MAX {
+            return Err(CryptoError::InvalidState);
+        }
         let key = self.tx_key.as_ref().ok_or(CryptoError::InvalidState)?;
         let mut enc_key = [0u8; 32];
         let mut mac_key = [0u8; 32];
         enc_key.copy_from_slice(&key[..32]);
         mac_key.copy_from_slice(&key[32..]);
-        self.get_next_tx_nonce(nonce)?;
+        nonce[..8].copy_from_slice(&self.tx_counter.to_le_bytes());
+        nonce[8..].fill(0);
         let result = aead_encrypt(&enc_key, &mac_key, nonce, aad, plaintext, ciphertext, tag);
         enc_key.zeroize();
         mac_key.zeroize();
-        result
+        result?;
+        self.tx_counter = self
+            .tx_counter
+            .checked_add(1)
+            .ok_or(CryptoError::InvalidState)?;
+        Ok(())
     }
 
     /// Authenticates and decrypts a packet, committing its nonce only on success.
@@ -505,5 +514,33 @@ mod tests {
             manager.verify_key_integrity(),
             Err(CryptoError::InvalidState)
         );
+    }
+
+    #[test]
+    fn failed_encryption_does_not_consume_a_nonce() {
+        unsafe {
+            shawncore_crypto_register_cache_flush(test_cache_flush);
+        }
+        let mut manager = SessionManager {
+            ml_kem_dk: None,
+            x25519_sk: None,
+            tx_key: Some([0x11; 64]),
+            rx_key: Some([0x22; 64]),
+            tx_key_checksum: key_checksum(&[0x11; 64]),
+            rx_key_checksum: key_checksum(&[0x22; 64]),
+            is_established: true,
+            tx_counter: 7,
+            rx_counter: 0,
+            rx_window: 0,
+        };
+        let mut ciphertext = [0u8; 1];
+        let mut nonce = [0u8; 12];
+        let mut tag = [0u8; 48];
+
+        assert_eq!(
+            manager.encrypt_packet(b"", b"too long", &mut ciphertext, &mut nonce, &mut tag),
+            Err(CryptoError::InvalidState)
+        );
+        assert_eq!(manager.tx_counter, 7);
     }
 }

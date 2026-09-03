@@ -48,7 +48,7 @@ pub struct EwCommand {
 
 /// Represents a processed FFT result from the SDR.
 #[repr(C, align(64))]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct FftResult {
     /// Signal-to-Noise Ratio in dB.
     pub snr_db: u32,
@@ -59,19 +59,7 @@ pub struct FftResult {
     /// Timestamp of the detection.
     pub timestamp: u64,
     /// Padding to ensure 64-byte alignment.
-    pub _padding: [u8; 36],
-}
-
-impl Default for FftResult {
-    fn default() -> Self {
-        Self {
-            snr_db: 0,
-            center_freq: 0,
-            bandwidth: 0,
-            timestamp: 0,
-            _padding: [0; 36],
-        }
-    }
+    pub _padding: [u8; 32],
 }
 
 /// Concrete Ring Buffer for EW Commands: 1024 elements.
@@ -82,6 +70,49 @@ pub type SpscQueueFft = SpscQueue<FftResult, 256>;
 
 /// Concrete Cache Aligned Slot for FFT Results.
 pub type SpscQueueFftSlot = CacheAlignedSlot<FftResult>;
+
+macro_rules! ffi_type_layout {
+    ($type:ty, $sizeof:ident, $alignof:ident) => {
+        #[doc = concat!("Returns the memory size required to allocate a `", stringify!($type), "`.")]
+        #[no_mangle]
+        pub extern "C" fn $sizeof() -> usize {
+            core::mem::size_of::<$type>()
+        }
+
+        #[doc = concat!("Returns the memory alignment required to allocate a `", stringify!($type), "`.")]
+        #[no_mangle]
+        pub extern "C" fn $alignof() -> usize {
+            core::mem::align_of::<$type>()
+        }
+    };
+}
+
+ffi_type_layout!(Tcb, shawncore_rtos_tcb_sizeof, shawncore_rtos_tcb_alignof);
+ffi_type_layout!(
+    TelemetryEvent,
+    shawncore_rtos_telemetry_event_sizeof,
+    shawncore_rtos_telemetry_event_alignof
+);
+ffi_type_layout!(
+    FftResult,
+    shawncore_rtos_fft_result_sizeof,
+    shawncore_rtos_fft_result_alignof
+);
+ffi_type_layout!(
+    SpscQueueTelemetrySlot,
+    shawncore_rtos_spsc_telemetry_slot_sizeof,
+    shawncore_rtos_spsc_telemetry_slot_alignof
+);
+ffi_type_layout!(
+    CacheAlignedSlot<EwCommand>,
+    shawncore_rtos_ringbuffer_ew_slot_sizeof,
+    shawncore_rtos_ringbuffer_ew_slot_alignof
+);
+ffi_type_layout!(
+    SpscQueueFftSlot,
+    shawncore_rtos_spsc_fft_slot_sizeof,
+    shawncore_rtos_spsc_fft_slot_alignof
+);
 
 fn valid_dma_region<T>(memory_base: *mut T, size_in_bytes: usize, element_count: usize) -> bool {
     let required_alignment = core::mem::align_of::<T>();

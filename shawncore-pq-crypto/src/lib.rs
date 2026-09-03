@@ -4,7 +4,7 @@
 #![warn(missing_docs)]
 
 //! ShawnCore Post-Quantum Cryptography Library
-//! Hardware-agnostic CNSA 2.0 compliant cryptographic stack for MarTac USVs.
+//! Hardware-agnostic hybrid cryptographic building blocks for MarTac USVs.
 //! Designed for seamless C/C++ host OS integration via FFI.
 
 pub mod aead_wrapper;
@@ -34,7 +34,7 @@ mod tests {
     };
     use super::ffi::{
         shawncore_crypto_aead_decrypt, shawncore_crypto_aead_encrypt,
-        shawncore_crypto_x25519_keygen,
+        shawncore_crypto_session_manager_encrypt_packet, shawncore_crypto_x25519_keygen,
     };
     use super::ffi_callbacks::shawncore_crypto_register_cache_flush;
     use super::ffi_error::ShawncoreCryptoErr;
@@ -178,6 +178,30 @@ mod tests {
             )
         };
         assert_eq!(overlap_result, ShawncoreCryptoErr::InvalidLength);
+    }
+
+    #[test]
+    fn session_ffi_rejects_overlapping_output_buffers() {
+        let mut manager = SessionManager::new();
+        let aad = [0u8; 1];
+        let plaintext = [0u8; 48];
+        let mut ciphertext_and_tag = [0u8; 48];
+        let mut nonce = [0u8; 12];
+
+        let result = unsafe {
+            shawncore_crypto_session_manager_encrypt_packet(
+                &mut manager,
+                aad.as_ptr(),
+                0,
+                plaintext.as_ptr(),
+                ciphertext_and_tag.as_mut_ptr(),
+                plaintext.len(),
+                nonce.as_mut_ptr(),
+                ciphertext_and_tag.as_mut_ptr(),
+            )
+        };
+
+        assert_eq!(result, ShawncoreCryptoErr::InvalidLength);
     }
 
     #[test]

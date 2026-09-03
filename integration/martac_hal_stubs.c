@@ -8,20 +8,7 @@
  * do not provide real interrupt, cache, stack, or panic handling.
  */
 
-#include <stddef.h>
-#include <stdint.h>
-
-/* Rust callback registration entry points. */
-extern void shawncore_crypto_register_panic_hook(void (*callback)(void));
-extern void shawncore_crypto_register_disable_interrupts(uintptr_t (*callback)(void));
-extern void shawncore_crypto_register_restore_interrupts(void (*callback)(uintptr_t));
-extern void shawncore_crypto_register_cache_flush(void (*callback)(const uint8_t *, size_t));
-extern void shawncore_rtos_register_disable_interrupts(uintptr_t (*callback)(void));
-extern void shawncore_rtos_register_restore_interrupts(void (*callback)(uintptr_t));
-extern void shawncore_rtos_register_read_monotonic_clock(uint64_t (*callback)(void));
-extern void shawncore_rtos_register_cache_invalidate(void (*callback)(const uint8_t *, size_t));
-extern void shawncore_rtos_register_cache_flush(void (*callback)(const uint8_t *, size_t));
-extern void shawncore_rtos_register_pet_watchdog(void (*callback)(void));
+#include "shawncore.h"
 
 void host_panic_handler(void)
 {
@@ -97,6 +84,7 @@ void martac_hal_register_callbacks(void)
     shawncore_crypto_register_cache_flush(host_cache_flush);
     shawncore_rtos_register_disable_interrupts(host_disable_interrupts);
     shawncore_rtos_register_restore_interrupts(host_restore_interrupts);
+    shawncore_rtos_register_panic_hook(host_panic_handler);
     shawncore_rtos_register_read_monotonic_clock(host_read_monotonic_clock);
     shawncore_rtos_register_cache_invalidate(host_cache_invalidate);
     shawncore_rtos_register_cache_flush(host_cache_flush);

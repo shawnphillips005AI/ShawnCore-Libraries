@@ -4,8 +4,8 @@
 //! NIST SP 800-56C Rev. 2 Hybrid Key Derivation Function.
 //! Combines classical and post-quantum shared secrets into a single key.
 //! Hardware-agnostic implementation for MarTac USVs.
-//! Guarantees CNSA 2.0 compliance by securely mixing entropy from multiple
-//! cryptographic algorithms to prevent single-algorithm collapse.
+//! Designed as a building block for hybrid security architectures. Platform
+//! approval and independent review remain outside this crate's scope.
 
 use crate::error::CryptoError;
 use crate::zeroize::{secure_cache_flush, secure_zeroize};
@@ -32,7 +32,7 @@ pub const HYBRID_OUTPUT_SIZE: usize = 128;
 /// * `info` - Context and application specific information for the HKDF expansion phase.
 ///
 /// # Returns
-/// A 64-byte derived hybrid key, or a `CryptoError` if derivation fails.
+/// A 128-byte derived hybrid key, or a `CryptoError` if derivation fails.
 ///
 /// # Security
 /// The input secrets (`pq_secret` and `classical_secret`) are securely zeroized
