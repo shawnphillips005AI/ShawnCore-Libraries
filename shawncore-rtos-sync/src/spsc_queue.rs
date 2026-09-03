@@ -4,13 +4,14 @@
 //! Lock-free Single-Producer Single-Consumer (SPSC) queue.
 //!
 //! Hardware-agnostic implementation for MarTac USVs.
-//! Refactored to accept host-provided, page-aligned memory buffers via `init()`
-//! to guarantee DMA memory pinning and ownership by the host OS.
+//! It accepts host-provided, page-aligned memory buffers via `init()`. Page
+//! alignment is a storage requirement; it does not establish DMA pinning or
+//! cache coherency.
 //!
 //! # Concurrency Safety & Memory Ordering
 //! This queue relies on strict `Acquire` and `Release` memory ordering semantics
-//! to guarantee that data written by the producer is fully visible to the consumer
-//! before the index is updated, preventing data races and torn reads across cores.
+//! to publish prior writes under the Rust memory model. Platform cache
+//! maintenance is responsible for DMA visibility where required.
 
 use crate::error::IpcError;
 use crate::ffi_callbacks::{host_cache_flush, host_cache_invalidate};
@@ -32,8 +33,8 @@ pub struct CacheAlignedSlot<T> {
 
 /// A lock-free, single-producer, single-consumer queue optimized for cross-core telemetry.
 ///
-/// Designed to be initialized by the C/C++ host OS with a pre-allocated,
-/// page-aligned memory region to ensure strict DMA pinning.
+/// The caller supplies page-aligned storage. The queue is SPSC only: one stable
+/// producer and one stable consumer own `push` and `pop` respectively.
 #[repr(C, align(64))]
 pub struct SpscQueue<T: Copy + Default, const N: usize> {
     /// Pointer to the host-provided buffer storing the elements.
@@ -93,8 +94,10 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
     /// must be stopped before destruction or reuse.
     ///
     /// # Safety
-    /// `base_ptr` must point to writable storage for `N` initialized
-    /// `CacheAlignedSlot<T>` values and remain valid until destruction.
+    /// `base_ptr` must point to writable, correctly aligned storage for `N`
+    /// `CacheAlignedSlot<T>` values and remain valid until destruction. Payload
+    /// fields may be uninitialized because `pop` never reads one before a
+    /// successful `push` publishes it.
     pub unsafe fn init(
         &self,
         base_ptr: *mut CacheAlignedSlot<T>,
@@ -169,9 +172,13 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
     /// * `head` is loaded with `Relaxed` because only the producer modifies it.
     /// * `tail` is loaded with `Acquire` to synchronize with the consumer's `Release` store,
     ///   ensuring we see the most up-to-date read position.
-    /// * `head` is stored with `Release` to guarantee that the data written to the buffer
-    ///   is globally visible before the consumer sees the updated head index.
-    pub fn push(&self, item: T) -> Result<(), IpcError> {
+    /// * `head` is stored with `Release` to publish the preceding payload write.
+    ///
+    /// # Safety
+    /// The caller must be the queue's sole producer for its full initialized
+    /// lifetime. The host must complete any device ownership transition before
+    /// calling this method.
+    pub unsafe fn push(&self, item: T) -> Result<(), IpcError> {
         if !self.is_initialized.load(Ordering::Acquire) {
             return Err(IpcError::NotInitialized);
         }
@@ -215,9 +222,8 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
                 .store(sequence.wrapping_add(2) & !1, Ordering::Release);
         }
 
-        // Hardware Memory Barrier via Release semantics.
-        // This fence strictly guarantees that the payload write completes in physical memory
-        // BEFORE the head index is incremented, preventing the consumer from reading garbage data.
+        // Release ordering publishes preceding writes under the Rust memory model.
+        // The registered cache callback handles device visibility where required.
         fence(Ordering::Release);
         self.head.0.store(head.wrapping_add(1), Ordering::Release);
 
@@ -230,9 +236,13 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
     /// * `tail` is loaded with `Relaxed` because only the consumer modifies it.
     /// * `head` is loaded with `Acquire` to synchronize with the producer's `Release` store,
     ///   ensuring all data writes to the buffer are visible before we read them.
-    /// * `tail` is stored with `Release` to guarantee that the data read is complete
-    ///   before the producer sees the freed slot.
-    pub fn pop(&self) -> Option<T> {
+    /// * `tail` is stored with `Release` to publish completion of the read and reset.
+    ///
+    /// # Safety
+    /// The caller must be the queue's sole consumer for its full initialized
+    /// lifetime. The host must complete any device ownership transition before
+    /// calling this method.
+    pub unsafe fn pop(&self) -> Option<T> {
         if !self.is_initialized.load(Ordering::Acquire) {
             return None;
         }
@@ -291,8 +301,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
 
         compiler_fence(Ordering::SeqCst);
 
-        // Hardware Memory Barrier via Release semantics.
-        // Ensures the zeroization is complete before the producer is allowed to overwrite the slot.
+        // Release ordering publishes preceding writes under the Rust memory model.
         fence(Ordering::Release);
         self.tail.0.store(tail.wrapping_add(1), Ordering::Release);
 
@@ -314,8 +323,8 @@ mod tests {
 
     fn install_test_callbacks() {
         unsafe {
-            shawncore_rtos_register_cache_flush(test_cache_callback);
-            shawncore_rtos_register_cache_invalidate(test_cache_callback);
+            shawncore_rtos_register_cache_flush(Some(test_cache_callback));
+            shawncore_rtos_register_cache_invalidate(Some(test_cache_callback));
         }
     }
 
@@ -366,13 +375,13 @@ mod tests {
         );
 
         for value in 1..=4 {
-            queue.push(value).unwrap();
+            unsafe { queue.push(value) }.unwrap();
         }
-        assert_eq!(queue.push(5), Err(IpcError::QueueFull));
+        assert_eq!(unsafe { queue.push(5) }, Err(IpcError::QueueFull));
         for value in 1..=4 {
-            assert_eq!(queue.pop(), Some(value));
+            assert_eq!(unsafe { queue.pop() }, Some(value));
         }
-        assert_eq!(queue.pop(), None);
+        assert_eq!(unsafe { queue.pop() }, None);
     }
 
     #[test]
@@ -385,8 +394,8 @@ mod tests {
 
         unsafe { queue.init(storage_ptr, storage_size) }.unwrap();
         for value in 0..128 {
-            queue.push(value).unwrap();
-            assert_eq!(queue.pop(), Some(value));
+            unsafe { queue.push(value) }.unwrap();
+            assert_eq!(unsafe { queue.pop() }, Some(value));
         }
     }
 
@@ -399,14 +408,14 @@ mod tests {
         let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
 
         unsafe { queue.init(storage_ptr, storage_size) }.unwrap();
-        queue.push(42).unwrap();
+        unsafe { queue.push(42) }.unwrap();
         unsafe {
             (*storage_ptr).sequence_counter.store(1, Ordering::Release);
         }
-        assert_eq!(queue.pop(), None);
+        assert_eq!(unsafe { queue.pop() }, None);
         unsafe {
             (*storage_ptr).sequence_counter.store(2, Ordering::Release);
         }
-        assert_eq!(queue.pop(), Some(42));
+        assert_eq!(unsafe { queue.pop() }, Some(42));
     }
 }

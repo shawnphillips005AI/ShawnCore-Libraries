@@ -115,18 +115,9 @@ impl SessionManager {
         ml_kem_entropy.zeroize();
         x25519_entropy.zeroize();
 
+        self.zeroize_session();
         self.ml_kem_dk = Some(ml_kem_dk);
         self.x25519_sk = Some(x25519_sk);
-        self.tx_key = None;
-        self.rx_key = None;
-        self.tx_key_checksum = 0;
-        self.rx_key_checksum = 0;
-        self.is_established = false;
-        self.tx_counter = 0;
-        self.rx_counter = 0;
-        self.rx_window = 0;
-
-        compiler_fence(Ordering::SeqCst);
 
         Ok((ml_kem_pk, x25519_pk))
     }
@@ -195,6 +186,7 @@ impl SessionManager {
         rx_key.copy_from_slice(&hybrid_key_64[32..96]);
         hybrid_key_64.zeroize();
 
+        self.zeroize_session();
         self.tx_key = Some(tx_key);
         self.rx_key = Some(rx_key);
         self.tx_key_checksum = key_checksum(&tx_key);
@@ -285,6 +277,7 @@ impl SessionManager {
         rx_key[32..].copy_from_slice(&hybrid_key_64[96..]);
         hybrid_key_64.zeroize();
 
+        self.zeroize_session();
         self.tx_key = Some(tx_key);
         self.rx_key = Some(rx_key);
         self.tx_key_checksum = key_checksum(&tx_key);
@@ -305,6 +298,9 @@ impl SessionManager {
 
     /// Assigns a unique RFC 8439 nonce to the next outbound packet.
     pub fn get_next_tx_nonce(&mut self, nonce: &mut [u8; 12]) -> Result<(), CryptoError> {
+        if self.tx_counter == u64::MAX {
+            return Err(CryptoError::InvalidState);
+        }
         nonce[..8].copy_from_slice(&self.tx_counter.to_le_bytes());
         nonce[8..].fill(0);
         self.tx_counter = self
@@ -436,11 +432,11 @@ impl SessionManager {
 
         if let Some(ref mut key) = self.tx_key {
             secure_zeroize(key);
-            secure_cache_flush(key.as_ptr(), key.len());
+            secure_cache_flush(key);
         }
         if let Some(ref mut key) = self.rx_key {
             secure_zeroize(key);
-            secure_cache_flush(key.as_ptr(), key.len());
+            secure_cache_flush(key);
         }
         self.tx_key = None;
         self.rx_key = None;
@@ -493,7 +489,7 @@ mod tests {
     #[test]
     fn key_integrity_detects_single_bit_corruption() {
         unsafe {
-            shawncore_crypto_register_cache_flush(test_cache_flush);
+            shawncore_crypto_register_cache_flush(Some(test_cache_flush));
         }
         let mut manager = SessionManager {
             ml_kem_dk: None,
@@ -519,7 +515,7 @@ mod tests {
     #[test]
     fn failed_encryption_does_not_consume_a_nonce() {
         unsafe {
-            shawncore_crypto_register_cache_flush(test_cache_flush);
+            shawncore_crypto_register_cache_flush(Some(test_cache_flush));
         }
         let mut manager = SessionManager {
             ml_kem_dk: None,
@@ -542,5 +538,18 @@ mod tests {
             Err(CryptoError::InvalidState)
         );
         assert_eq!(manager.tx_counter, 7);
+    }
+
+    #[test]
+    fn exhausted_nonce_does_not_modify_output() {
+        let mut manager = SessionManager::new();
+        manager.tx_counter = u64::MAX;
+        let mut nonce = [0xA5; 12];
+
+        assert_eq!(
+            manager.get_next_tx_nonce(&mut nonce),
+            Err(CryptoError::InvalidState)
+        );
+        assert_eq!(nonce, [0xA5; 12]);
     }
 }

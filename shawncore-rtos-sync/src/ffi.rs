@@ -3,9 +3,9 @@
 
 //! Foreign Function Interface (FFI) for the RTOS Sync Stack.
 //!
-//! Provides safe, opaque C-callable boundaries for the MarTac host OS.
-//! Prevents cross-boundary Undefined Behavior (UB) by encapsulating all
-//! complex Rust types and returning C-compatible error codes.
+//! Defines opaque C-callable boundaries for the MarTac host OS. The host must
+//! uphold each exported function's documented pointer, lifetime, alignment,
+//! ownership, and concurrency preconditions.
 
 use crate::bitmap_scheduler::PerCoreScheduler;
 use crate::ffi_error::ShawncoreRtosErr;
@@ -245,7 +245,11 @@ pub unsafe extern "C" fn shawncore_rtos_tcb_set_rsp(tcb: *mut Tcb, rsp: u64) -> 
 /// Registers a task with the scheduler.
 ///
 /// # Safety
-/// `scheduler` and `tcb` must be valid, non-null pointers.
+/// `scheduler` and `tcb` must be valid, non-null pointers. The TCB stack range
+/// must be mapped writable memory, remain valid for the task lifetime, be owned
+/// by that task, and contain `rsp`. Rust checks alignment, range arithmetic,
+/// stack size, and priority; the host establishes mapping, writability,
+/// ownership, and lifetime.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_scheduler_create_task(
     scheduler: *mut PerCoreScheduler,
@@ -259,7 +263,7 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_create_task(
     let scheduler_ref = unsafe { &mut *scheduler };
     let tcb_val = unsafe { *tcb };
 
-    match scheduler_ref.create_task(tcb_val, canary_value) {
+    match unsafe { scheduler_ref.create_task(tcb_val, canary_value) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(_) => ShawncoreRtosErr::TaskFault,
     }
@@ -268,7 +272,9 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_create_task(
 /// Executes a scheduling tick, returning the stack pointer of the next task to run.
 ///
 /// # Safety
-/// `scheduler` must be a valid, non-null pointer.
+/// `scheduler` must be a valid, non-null pointer. Every registered stack must
+/// continue to satisfy `shawncore_rtos_scheduler_create_task`'s host-memory
+/// contract for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_scheduler_tick(
     scheduler: *mut PerCoreScheduler,
@@ -279,7 +285,24 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_tick(
     }
 
     let scheduler_ref = unsafe { &mut *scheduler };
-    scheduler_ref.schedule_tick(current_rsp)
+    unsafe { scheduler_ref.schedule_tick(current_rsp) }
+}
+
+/// Configures the critical-task mask for the watchdog window.
+///
+/// # Safety
+/// `scheduler` must be a valid, non-null pointer to an initialized scheduler.
+#[no_mangle]
+pub unsafe extern "C" fn shawncore_rtos_scheduler_set_critical_task_mask(
+    scheduler: *mut PerCoreScheduler,
+    critical_task_mask: u16,
+) -> ShawncoreRtosErr {
+    if scheduler.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+
+    unsafe { (*scheduler).set_critical_task_mask(critical_task_mask) };
+    ShawncoreRtosErr::Success
 }
 
 /// Records a critical task check-in for the current watchdog window.
@@ -336,7 +359,7 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_init(
     let pool_ref = unsafe { &mut *pool };
     let typed_base = memory_base as *mut [u8; 2048];
 
-    match pool_ref.init(typed_base, size_in_bytes) {
+    match unsafe { pool_ref.init(typed_base, size_in_bytes) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(e) => e.into(),
     }
@@ -482,7 +505,8 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_destroy(
 /// Enqueues a telemetry event.
 ///
 /// # Safety
-/// `queue` and `event` must be valid, non-null pointers.
+/// `queue` and `event` must be valid, non-null pointers. The caller must remain
+/// the queue's sole producer until the queue is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_push(
     queue: *const SpscQueueTelemetry,
@@ -495,7 +519,7 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_push(
     let queue_ref = unsafe { &*queue };
     let event_val = unsafe { *event };
 
-    match queue_ref.push(event_val) {
+    match unsafe { queue_ref.push(event_val) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(error) => error.into(),
     }
@@ -504,7 +528,8 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_push(
 /// Dequeues a telemetry event.
 ///
 /// # Safety
-/// `queue` and `out_event` must be valid, non-null pointers.
+/// `queue` and `out_event` must be valid, non-null pointers. The caller must
+/// remain the queue's sole consumer until the queue is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_pop(
     queue: *const SpscQueueTelemetry,
@@ -520,7 +545,7 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_pop(
         return ShawncoreRtosErr::NotInitialized;
     }
 
-    match queue_ref.pop() {
+    match unsafe { queue_ref.pop() } {
         Some(event) => {
             unsafe {
                 core::ptr::write(out_event, event);
@@ -597,7 +622,8 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_destroy(
 /// Pushes an item into the `RingBufferEwCommand`.
 ///
 /// # Safety
-/// `rb` and `item` must be valid, non-null pointers.
+/// `rb` and `item` must be valid, non-null pointers. The caller must remain the
+/// ring buffer's sole producer until the ring buffer is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_push(
     rb: *const RingBufferEwCommand,
@@ -610,7 +636,7 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_push(
     let rb_ref = unsafe { &*rb };
     let item_val = unsafe { *item };
 
-    match rb_ref.push(item_val) {
+    match unsafe { rb_ref.push(item_val) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(error) => error.into(),
     }
@@ -619,7 +645,8 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_push(
 /// Pops an item from the `RingBufferEwCommand`.
 ///
 /// # Safety
-/// `rb` and `out_item` must be valid, non-null pointers.
+/// `rb` and `out_item` must be valid, non-null pointers. The caller must remain
+/// the ring buffer's sole consumer until the ring buffer is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_pop(
     rb: *const RingBufferEwCommand,
@@ -635,7 +662,7 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_pop(
         return ShawncoreRtosErr::NotInitialized;
     }
 
-    match rb_ref.pop() {
+    match unsafe { rb_ref.pop() } {
         Some(item) => {
             unsafe {
                 core::ptr::write(out_item, item);
@@ -649,7 +676,8 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_pop(
 /// Peeks an item from the `RingBufferEwCommand`.
 ///
 /// # Safety
-/// `rb` and `out_item` must be valid, non-null pointers.
+/// `rb` and `out_item` must be valid, non-null pointers. The caller must remain
+/// the ring buffer's sole consumer until the ring buffer is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_peek(
     rb: *const RingBufferEwCommand,
@@ -665,7 +693,7 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_peek(
         return ShawncoreRtosErr::NotInitialized;
     }
 
-    match rb_ref.peek() {
+    match unsafe { rb_ref.peek() } {
         Some(item) => {
             unsafe {
                 core::ptr::write(out_item, item);
@@ -743,7 +771,8 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_destroy(
 /// Pushes an item into the `SpscQueueFft`.
 ///
 /// # Safety
-/// `queue` and `item` must be valid, non-null pointers.
+/// `queue` and `item` must be valid, non-null pointers. The caller must remain
+/// the queue's sole producer until the queue is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_fft_push(
     queue: *const SpscQueueFft,
@@ -756,7 +785,7 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_push(
     let queue_ref = unsafe { &*queue };
     let item_val = unsafe { *item };
 
-    match queue_ref.push(item_val) {
+    match unsafe { queue_ref.push(item_val) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(error) => error.into(),
     }
@@ -765,7 +794,8 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_push(
 /// Pops an item from the `SpscQueueFft`.
 ///
 /// # Safety
-/// `queue` and `out_item` must be valid, non-null pointers.
+/// `queue` and `out_item` must be valid, non-null pointers. The caller must
+/// remain the queue's sole consumer until the queue is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_fft_pop(
     queue: *const SpscQueueFft,
@@ -781,7 +811,7 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_pop(
         return ShawncoreRtosErr::NotInitialized;
     }
 
-    match queue_ref.pop() {
+    match unsafe { queue_ref.pop() } {
         Some(item) => {
             unsafe {
                 core::ptr::write(out_item, item);

@@ -26,8 +26,8 @@ const CHACHA20_MAX_BYTES: u64 = (u32::MAX as u64 + 1) * 64;
 
 /// Verifies two AEAD tags in strict constant time.
 ///
-/// Delegates to the audited `subtle` crate, whose `ConstantTimeEq` implementation is
-/// verified not to be optimized into a branching, early-exit comparison by LLVM.
+/// Delegates to `subtle`'s constant-time comparison implementation. The complete
+/// timing behavior remains dependent on the selected compiler and target hardware.
 #[must_use]
 #[inline(never)]
 pub fn verify_tag_constant_time(a: &[u8; AEAD_TAG_SIZE], b: &[u8; AEAD_TAG_SIZE]) -> bool {
@@ -44,7 +44,7 @@ pub fn hmac_sha384(key: &[u8], data: &[u8]) -> Result<[u8; AEAD_TAG_SIZE], Crypt
 
     let mut output = [0u8; AEAD_TAG_SIZE];
     output.copy_from_slice(&result_bytes);
-    secure_cache_flush(output.as_ptr(), output.len());
+    secure_cache_flush(&output);
 
     Ok(output)
 }
@@ -61,7 +61,7 @@ pub fn hkdf_expand_sha384(prk: &[u8], info: &[u8], out: &mut [u8]) -> Result<(),
         return Err(CryptoError::HkdfError);
     }
 
-    secure_cache_flush(out.as_ptr(), out.len());
+    secure_cache_flush(out);
     Ok(())
 }
 
@@ -78,6 +78,8 @@ pub fn hkdf_expand_sha384(prk: &[u8], info: &[u8], out: &mut [u8]) -> Result<(),
 /// * `plaintext` - The data to encrypt.
 /// * `ciphertext` - The output buffer for the encrypted data (must match plaintext length).
 /// * `out_mac` - The output buffer for the 48-byte authentication tag.
+///
+/// The caller must never reuse a nonce with the same encryption or MAC key.
 pub fn aead_encrypt(
     enc_key: &[u8; AEAD_KEY_SIZE],
     mac_key: &[u8; AEAD_KEY_SIZE],
@@ -114,8 +116,8 @@ pub fn aead_encrypt(
     let result_bytes = mac_engine.finalize().into_bytes();
     out_mac.copy_from_slice(&result_bytes);
 
-    secure_cache_flush(ciphertext.as_ptr(), ciphertext.len());
-    secure_cache_flush(out_mac.as_ptr(), out_mac.len());
+    secure_cache_flush(ciphertext);
+    secure_cache_flush(out_mac);
 
     Ok(())
 }
@@ -176,7 +178,7 @@ pub fn aead_decrypt(
         return Err(CryptoError::InvalidLength);
     }
 
-    secure_cache_flush(plaintext.as_ptr(), plaintext.len());
+    secure_cache_flush(plaintext);
 
     Ok(())
 }
@@ -209,8 +211,8 @@ pub fn aead_encrypt_in_place(
     mac_engine.update(buffer);
     out_mac.copy_from_slice(&mac_engine.finalize().into_bytes());
 
-    secure_cache_flush(buffer.as_ptr(), buffer.len());
-    secure_cache_flush(out_mac.as_ptr(), out_mac.len());
+    secure_cache_flush(buffer);
+    secure_cache_flush(out_mac);
     Ok(())
 }
 
@@ -251,6 +253,6 @@ pub fn aead_decrypt_in_place(
         return Err(CryptoError::InvalidLength);
     }
 
-    secure_cache_flush(buffer.as_ptr(), buffer.len());
+    secure_cache_flush(buffer);
     Ok(())
 }

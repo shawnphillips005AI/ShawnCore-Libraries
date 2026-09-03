@@ -27,6 +27,7 @@ pub extern "C" fn rust_eh_personality() {}
 #[panic_handler]
 fn panic(_info: &PanicInfo<'_>) -> ! {
     shawncore_pq_crypto::ffi_error::invoke_panic_hook();
+    shawncore_rtos_sync::ffi_error::invoke_panic_hook();
     loop {
         core::hint::spin_loop();
     }

@@ -59,7 +59,7 @@ pub fn derive_hybrid_key(
 
     res.map_err(|_| CryptoError::HkdfError)?;
 
-    secure_cache_flush(derived_key.as_ptr(), derived_key.len());
+    secure_cache_flush(&derived_key);
 
     Ok(derived_key)
 }

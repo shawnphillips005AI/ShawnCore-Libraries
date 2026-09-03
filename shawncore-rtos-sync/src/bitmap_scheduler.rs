@@ -90,14 +90,24 @@ impl PerCoreScheduler {
     ///
     /// # Returns
     /// `Ok(())` if the task was registered successfully, or `SchedulerError::TaskFault` if the priority is out of bounds.
-    pub fn create_task(&mut self, mut tcb: Tcb, canary_value: u64) -> Result<(), SchedulerError> {
+    ///
+    /// # Safety
+    /// `tcb.stack_base..stack_base + stack_size` must be mapped writable memory
+    /// for the lifetime of the task, exclusively owned by the task, and contain
+    /// the initial stack pointer. The scheduler writes and later reads the first
+    /// aligned `u64` in that range as its canary.
+    pub unsafe fn create_task(
+        &mut self,
+        mut tcb: Tcb,
+        canary_value: u64,
+    ) -> Result<(), SchedulerError> {
         let stack_end = tcb.stack_base.checked_add(tcb.stack_size as u64);
-        let valid_stack = tcb.stack_base == 0
-            || (tcb.stack_base % core::mem::align_of::<u64>() as u64 == 0
-                && tcb.stack_size >= core::mem::size_of::<u64>()
-                && stack_end.is_some_and(|end| tcb.rsp >= tcb.stack_base && tcb.rsp <= end));
+        let valid_stack = tcb.stack_base != 0
+            && tcb.stack_base % core::mem::align_of::<u64>() as u64 == 0
+            && tcb.stack_size >= core::mem::size_of::<u64>()
+            && stack_end.is_some_and(|end| tcb.rsp >= tcb.stack_base && tcb.rsp <= end);
 
-        if tcb.priority >= 16 || !valid_stack {
+        if tcb.priority >= 16 || !valid_stack || self.ready_bitmap & (1 << tcb.priority) != 0 {
             return Err(SchedulerError::TaskFault);
         }
 
@@ -152,6 +162,12 @@ impl PerCoreScheduler {
         }
     }
 
+    /// Configures the tasks required to check in before the watchdog is petted.
+    pub fn set_critical_task_mask(&mut self, critical_task_mask: u16) {
+        self.critical_task_mask = critical_task_mask;
+        self.watchdog_matrix &= critical_task_mask;
+    }
+
     /// The core scheduling logic (Preemptive & Cooperative).
     ///
     /// Implements O(1) Lock-Free Partitioned Scheduling.
@@ -164,7 +180,11 @@ impl PerCoreScheduler {
     /// # Returns
     /// The stack pointer of the next task to execute. Returns `0` if a stack overflow (canary corruption) is detected.
     #[must_use]
-    pub fn schedule_tick(&mut self, current_rsp: u64) -> u64 {
+    ///
+    /// # Safety
+    /// Every registered task stack must continue to satisfy `create_task`'s
+    /// mapped-memory, lifetime, and ownership contract until it is removed.
+    pub unsafe fn schedule_tick(&mut self, current_rsp: u64) -> u64 {
         if self.critical_task_mask != 0
             && (self.watchdog_matrix & self.critical_task_mask) == self.critical_task_mask
         {
@@ -223,6 +243,7 @@ impl PerCoreScheduler {
 mod tests {
     use super::PerCoreScheduler;
     use crate::ffi_callbacks::shawncore_rtos_register_pet_watchdog;
+    use crate::tcb::Tcb;
     use core::sync::atomic::{AtomicUsize, Ordering};
 
     static WATCHDOG_PETS: AtomicUsize = AtomicUsize::new(0);
@@ -233,18 +254,46 @@ mod tests {
 
     #[test]
     fn watchdog_pets_only_after_all_critical_tasks_check_in() {
-        unsafe { shawncore_rtos_register_pet_watchdog(count_watchdog_pet) };
+        unsafe { shawncore_rtos_register_pet_watchdog(Some(count_watchdog_pet)) };
         WATCHDOG_PETS.store(0, Ordering::Relaxed);
         let mut scheduler = PerCoreScheduler::new();
         scheduler.critical_task_mask = (1 << 2) | (1 << 5);
 
         scheduler.task_check_in(2);
-        let _ = scheduler.schedule_tick(0);
+        let _ = unsafe { scheduler.schedule_tick(0) };
         assert_eq!(WATCHDOG_PETS.load(Ordering::Relaxed), 0);
 
         scheduler.task_check_in(5);
-        let _ = scheduler.schedule_tick(0);
+        let _ = unsafe { scheduler.schedule_tick(0) };
         assert_eq!(WATCHDOG_PETS.load(Ordering::Relaxed), 1);
         assert_eq!(scheduler.watchdog_matrix, 0);
+    }
+
+    #[test]
+    fn duplicate_priority_and_zero_stack_base_are_rejected() {
+        let mut scheduler = PerCoreScheduler::new();
+        let mut stack = [0u64; 2];
+        let stack_base = stack.as_mut_ptr() as u64;
+        let stack_size = core::mem::size_of_val(&stack);
+
+        assert!(unsafe {
+            scheduler.create_task(Tcb::new_task(1, 0, stack_size, stack_base, 1), 0xAA55)
+        }
+        .is_err());
+        unsafe {
+            scheduler
+                .create_task(
+                    Tcb::new_task(1, stack_base, stack_size, stack_base, 1),
+                    0xAA55,
+                )
+                .unwrap();
+        }
+        assert!(unsafe {
+            scheduler.create_task(
+                Tcb::new_task(2, stack_base, stack_size, stack_base, 1),
+                0x55AA,
+            )
+        }
+        .is_err());
     }
 }

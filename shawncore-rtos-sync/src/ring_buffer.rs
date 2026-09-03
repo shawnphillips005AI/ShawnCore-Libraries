@@ -4,23 +4,25 @@
 //! Lock-free Single-Producer Single-Consumer (SPSC) ring buffer.
 //!
 //! Hardware-agnostic implementation for MarTac USVs.
-//! Refactored to accept host-provided, page-aligned memory buffers via `init()`.
+//! It accepts host-provided, page-aligned memory buffers via `init()`. Page
+//! alignment is a storage requirement, not proof of DMA pinning or coherency.
 //! Supports Peek-Allocate-Pop semantics for zero-attrition EW command processing.
 //!
 //! # Concurrency Safety & Memory Ordering
 //! This queue relies on strict `Acquire` and `Release` memory ordering semantics
-//! to guarantee that data written by the producer is fully visible to the consumer
-//! before the index is updated, preventing data races and torn reads across cores.
+//! to publish prior writes under the Rust memory model. The host-provided cache
+//! callbacks perform any needed DMA visibility operations.
 
 use crate::error::IpcError;
+use crate::ffi_callbacks::{host_cache_flush, host_cache_invalidate};
 use crate::spsc_queue::{CacheAlignedIndex, CacheAlignedSlot};
 use core::cell::UnsafeCell;
 use core::sync::atomic::{compiler_fence, fence, AtomicBool, AtomicUsize, Ordering};
 
 /// A lock-free, single-producer, single-consumer ring buffer.
 ///
-/// Designed to be initialized by the C/C++ host OS with a pre-allocated,
-/// page-aligned memory region to ensure strict DMA pinning.
+/// The caller supplies page-aligned storage. The queue is SPSC only: one stable
+/// producer and one stable consumer own `push`, `pop`, and `peek` respectively.
 #[repr(C, align(64))]
 pub struct RingBuffer<T: Copy + Default, const N: usize> {
     /// Pointer to the host-provided buffer storing the elements.
@@ -80,8 +82,10 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
     /// consumers must be stopped before destruction or reuse.
     ///
     /// # Safety
-    /// `base_ptr` must point to writable storage for `N` initialized
-    /// `CacheAlignedSlot<T>` values and remain valid until destruction.
+    /// `base_ptr` must point to writable, correctly aligned storage for `N`
+    /// `CacheAlignedSlot<T>` values and remain valid until destruction. Payload
+    /// fields may be uninitialized because no consumer operation reads one before
+    /// a successful `push` publishes it.
     pub unsafe fn init(
         &self,
         base_ptr: *mut CacheAlignedSlot<T>,
@@ -98,8 +102,9 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
             return Err(IpcError::InvalidMemory);
         }
 
-        // Enforce 4096-byte (page) alignment for DMA
-        if (base_ptr as usize) % 4096 != 0 {
+        if (base_ptr as usize) % 4096 != 0
+            || (base_ptr as usize) % core::mem::align_of::<CacheAlignedSlot<T>>() != 0
+        {
             return Err(IpcError::InvalidMemory);
         }
 
@@ -153,8 +158,13 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
     /// # Memory Ordering
     /// * `head` is loaded with `Relaxed` because only the producer modifies it.
     /// * `tail` is loaded with `Acquire` to synchronize with the consumer's `Release` store.
-    /// * `head` is stored with `Release` to guarantee data visibility.
-    pub fn push(&self, item: T) -> Result<(), IpcError> {
+    /// * `head` is stored with `Release` to publish the preceding payload write.
+    ///
+    /// # Safety
+    /// The caller must be the queue's sole producer for its full initialized
+    /// lifetime. The host must complete any device ownership transition before
+    /// calling this method.
+    pub unsafe fn push(&self, item: T) -> Result<(), IpcError> {
         if !self.is_initialized.load(Ordering::Acquire) {
             return Err(IpcError::NotInitialized);
         }
@@ -183,11 +193,21 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
         // Alignment: The host OS guarantees page alignment via `init()`.
         unsafe {
             let slot_ptr = base_ptr.add(idx);
+            let sequence = (*slot_ptr).sequence_counter.load(Ordering::Relaxed);
+            (*slot_ptr)
+                .sequence_counter
+                .store(sequence.wrapping_add(1) | 1, Ordering::Release);
             *(*slot_ptr).data.get() = item;
+            host_cache_flush(
+                (*slot_ptr).data.get().cast::<u8>(),
+                core::mem::size_of::<T>(),
+            );
+            (*slot_ptr)
+                .sequence_counter
+                .store(sequence.wrapping_add(2) & !1, Ordering::Release);
         }
 
-        // Hardware Memory Barrier via Release semantics
-        // Prevents CPU from reordering the buffer write after the head update.
+        // Release ordering publishes preceding writes under the Rust memory model.
         fence(Ordering::Release);
         self.head.0.store(head.wrapping_add(1), Ordering::Release);
 
@@ -199,8 +219,13 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
     /// # Memory Ordering
     /// * `tail` is loaded with `Relaxed` because only the consumer modifies it.
     /// * `head` is loaded with `Acquire` to synchronize with the producer's `Release` store.
-    /// * `tail` is stored with `Release` to guarantee data read completion.
-    pub fn pop(&self) -> Option<T> {
+    /// * `tail` is stored with `Release` to publish completion of the read and reset.
+    ///
+    /// # Safety
+    /// The caller must be the queue's sole consumer for its full initialized
+    /// lifetime. The host must complete any device ownership transition before
+    /// calling this method.
+    pub unsafe fn pop(&self) -> Option<T> {
         if !self.is_initialized.load(Ordering::Acquire) {
             return None;
         }
@@ -233,7 +258,20 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
         // Alignment: The host OS guarantees page alignment via `init()`.
         let item = unsafe {
             let slot_ptr = base_ptr.add(idx);
-            *(*slot_ptr).data.get()
+            let first_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
+            if first_sequence & 1 != 0 {
+                return None;
+            }
+            host_cache_invalidate(
+                (*slot_ptr).data.get().cast::<u8>(),
+                core::mem::size_of::<T>(),
+            );
+            let item = *(*slot_ptr).data.get();
+            let second_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
+            if first_sequence != second_sequence || second_sequence & 1 != 0 {
+                return None;
+            }
+            item
         };
 
         // Restore a valid value before making the slot available to the producer.
@@ -245,7 +283,7 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
 
         compiler_fence(Ordering::SeqCst);
 
-        // Hardware Memory Barrier via Release semantics
+        // Release ordering publishes preceding writes under the Rust memory model.
         fence(Ordering::Release);
         self.tail.0.store(tail.wrapping_add(1), Ordering::Release);
 
@@ -258,7 +296,12 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
     /// # Memory Ordering
     /// Uses `Acquire` semantics to ensure the data is fully visible before reading,
     /// but does NOT update the `tail` index, leaving the item in the queue.
-    pub fn peek(&self) -> Option<T> {
+    ///
+    /// # Safety
+    /// The caller must be the queue's sole consumer for its full initialized
+    /// lifetime. The host must complete any device ownership transition before
+    /// calling this method.
+    pub unsafe fn peek(&self) -> Option<T> {
         if !self.is_initialized.load(Ordering::Acquire) {
             return None;
         }
@@ -290,7 +333,20 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
         // Alignment: The host OS guarantees page alignment via `init()`.
         let item = unsafe {
             let slot_ptr = base_ptr.add(idx);
-            *(*slot_ptr).data.get()
+            let first_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
+            if first_sequence & 1 != 0 {
+                return None;
+            }
+            host_cache_invalidate(
+                (*slot_ptr).data.get().cast::<u8>(),
+                core::mem::size_of::<T>(),
+            );
+            let item = *(*slot_ptr).data.get();
+            let second_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
+            if first_sequence != second_sequence || second_sequence & 1 != 0 {
+                return None;
+            }
+            item
         };
 
         Some(item)
@@ -302,6 +358,25 @@ mod tests {
     use super::{CacheAlignedSlot, RingBuffer};
     use crate::error::IpcError;
     use core::mem::MaybeUninit;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    static FLUSH_COUNT: AtomicUsize = AtomicUsize::new(0);
+    static INVALIDATE_COUNT: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn count_flush(_: *const u8, _: usize) {
+        FLUSH_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+
+    extern "C" fn count_invalidate(_: *const u8, _: usize) {
+        INVALIDATE_COUNT.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn install_test_callbacks() {
+        unsafe {
+            crate::ffi_callbacks::shawncore_rtos_register_cache_flush(Some(count_flush));
+            crate::ffi_callbacks::shawncore_rtos_register_cache_invalidate(Some(count_invalidate));
+        }
+    }
 
     #[repr(C, align(4096))]
     struct AlignedSlots<const N: usize>(MaybeUninit<[CacheAlignedSlot<u32>; N]>);
@@ -319,6 +394,9 @@ mod tests {
 
     #[test]
     fn init_is_one_shot_and_peek_does_not_remove_items() {
+        install_test_callbacks();
+        FLUSH_COUNT.store(0, Ordering::Relaxed);
+        INVALIDATE_COUNT.store(0, Ordering::Relaxed);
         let buffer = RingBuffer::<u32, 4>::new();
         let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
         let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
@@ -330,9 +408,11 @@ mod tests {
             Err(IpcError::AlreadyInitialized)
         );
 
-        buffer.push(7).unwrap();
-        assert_eq!(buffer.peek(), Some(7));
-        assert_eq!(buffer.pop(), Some(7));
-        assert_eq!(buffer.pop(), None);
+        unsafe { buffer.push(7) }.unwrap();
+        assert_eq!(unsafe { buffer.peek() }, Some(7));
+        assert_eq!(unsafe { buffer.pop() }, Some(7));
+        assert_eq!(unsafe { buffer.pop() }, None);
+        assert_eq!(FLUSH_COUNT.load(Ordering::Relaxed), 1);
+        assert_eq!(INVALIDATE_COUNT.load(Ordering::Relaxed), 2);
     }
 }

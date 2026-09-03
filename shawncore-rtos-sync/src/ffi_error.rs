@@ -87,8 +87,11 @@ static PANIC_CALLBACK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 /// # Safety
 /// `cb` must be a valid function pointer to a C-ABI compatible function.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_register_panic_hook(cb: PanicCallback) {
-    PANIC_CALLBACK.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_rtos_register_panic_hook(cb: Option<PanicCallback>) {
+    PANIC_CALLBACK.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// Invokes the registered panic callback.

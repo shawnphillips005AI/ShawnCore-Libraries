@@ -8,6 +8,13 @@
  * initialized exactly once, and destroyed only after concurrent users stop.
  * Host code owns pointer validity, storage lifetime, callback lifetime, and
  * platform cache/DMA maintenance.
+ *
+ * A pointer paired with a zero length may be NULL; all other data pointers
+ * must be non-NULL, correctly aligned, and valid for the complete call.
+ * Callback registration accepts NULL to clear a callback. Register or replace
+ * callbacks only while no operation can invoke them. Registered callbacks must
+ * remain valid until all possible invocations have stopped; they must not
+ * unwind, throw, longjmp, or otherwise escape through Rust.
  */
 
 #include <stddef.h>
@@ -74,6 +81,7 @@ void shawncore_crypto_register_disable_interrupts(shawncore_disable_interrupts_c
 void shawncore_crypto_register_restore_interrupts(shawncore_restore_interrupts_callback callback);
 void shawncore_crypto_register_cache_flush(shawncore_cache_callback callback);
 
+/* Session input buffers and mutable session/output objects must not overlap. */
 size_t shawncore_crypto_session_manager_sizeof(void);
 size_t shawncore_crypto_session_manager_alignof(void);
 shawncore_crypto_err shawncore_crypto_session_manager_init(shawncore_crypto_session_manager *manager);
@@ -196,6 +204,7 @@ shawncore_crypto_err shawncore_crypto_hkdf_expand_sha384(
     size_t info_len,
     uint8_t *out,
     size_t out_len);
+/* The nonce must be unique for every encryption under a given key pair. */
 shawncore_crypto_err shawncore_crypto_aead_encrypt(
     const uint8_t *enc_key,
     const uint8_t *mac_key,
@@ -219,6 +228,11 @@ shawncore_crypto_err shawncore_crypto_aead_decrypt(
 shawncore_crypto_err shawncore_crypto_entropy_push(const uint8_t *chunk);
 shawncore_crypto_err shawncore_crypto_entropy_mix(void);
 
+/*
+ * SPSC queues and the ring buffer require one stable producer and one stable
+ * consumer. Page alignment is a storage requirement only, not DMA pinning.
+ * Register and validate target-specific cache callbacks before DMA-visible use.
+ */
 typedef struct shawncore_rtos_scheduler shawncore_rtos_scheduler;
 typedef struct shawncore_rtos_dmapool2k shawncore_rtos_dmapool2k;
 typedef struct shawncore_rtos_spsc_telemetry shawncore_rtos_spsc_telemetry;
@@ -298,7 +312,11 @@ shawncore_rtos_err shawncore_rtos_scheduler_create_task(
     shawncore_rtos_scheduler *scheduler,
     const shawncore_rtos_tcb *tcb,
     uint64_t canary_value);
+/* Task stack memory must be mapped, writable, owned by the task, and live. */
 uint64_t shawncore_rtos_scheduler_tick(shawncore_rtos_scheduler *scheduler, uint64_t current_rsp);
+shawncore_rtos_err shawncore_rtos_scheduler_set_critical_task_mask(
+    shawncore_rtos_scheduler *scheduler,
+    uint16_t critical_task_mask);
 shawncore_rtos_err shawncore_rtos_scheduler_task_check_in(
     shawncore_rtos_scheduler *scheduler,
     uint8_t priority);
@@ -309,6 +327,7 @@ shawncore_rtos_err shawncore_rtos_dmapool2k_init(
     shawncore_rtos_dmapool2k *pool,
     void *memory_base,
     size_t size_in_bytes);
+/* Free only after any device has released the allocation to the CPU. */
 shawncore_rtos_err shawncore_rtos_dmapool2k_destroy(shawncore_rtos_dmapool2k *pool);
 shawncore_rtos_err shawncore_rtos_dmapool2k_allocate(
     const shawncore_rtos_dmapool2k *pool,

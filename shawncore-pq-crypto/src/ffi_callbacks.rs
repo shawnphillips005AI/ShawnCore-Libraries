@@ -30,28 +30,44 @@ static CACHE_FLUSH_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 /// Registers the host OS callback for disabling interrupts.
 ///
 /// # Safety
-/// `cb` must be a valid function pointer to a C-ABI compatible function.
+/// When present, `cb` must be a valid C-ABI function for every possible call.
+/// Registration and replacement must not race with callback invocation.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_crypto_register_disable_interrupts(cb: DisableInterruptsCb) {
-    DISABLE_INTERRUPTS_CB.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_crypto_register_disable_interrupts(
+    cb: Option<DisableInterruptsCb>,
+) {
+    DISABLE_INTERRUPTS_CB.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// Registers the host OS callback for restoring interrupts.
 ///
 /// # Safety
-/// `cb` must be a valid function pointer to a C-ABI compatible function.
+/// When present, `cb` must be a valid C-ABI function for every possible call.
+/// Registration and replacement must not race with callback invocation.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_crypto_register_restore_interrupts(cb: RestoreInterruptsCb) {
-    RESTORE_INTERRUPTS_CB.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_crypto_register_restore_interrupts(
+    cb: Option<RestoreInterruptsCb>,
+) {
+    RESTORE_INTERRUPTS_CB.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// Registers the host OS callback for cache flushing.
 ///
 /// # Safety
-/// `cb` must be a valid function pointer to a C-ABI compatible function.
+/// When present, `cb` must be a valid C-ABI function for every possible call.
+/// Registration and replacement must not race with callback invocation.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_crypto_register_cache_flush(cb: CacheFlushCb) {
-    CACHE_FLUSH_CB.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_crypto_register_cache_flush(cb: Option<CacheFlushCb>) {
+    CACHE_FLUSH_CB.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// A concrete implementation of `InterruptContext` that delegates to the registered host OS callbacks.
@@ -100,7 +116,7 @@ impl InterruptContext for HostInterruptContext {
 }
 
 /// Flushes the cache using the registered host OS callback.
-pub fn host_cache_flush(ptr: *const u8, len: usize) {
+pub(crate) fn host_cache_flush(ptr: *const u8, len: usize) {
     let cb_ptr = CACHE_FLUSH_CB.load(Ordering::Acquire);
 
     if cb_ptr.is_null() {

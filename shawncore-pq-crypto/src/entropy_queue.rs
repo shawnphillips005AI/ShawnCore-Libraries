@@ -3,10 +3,9 @@
 
 //! Lock-free Single-Producer Single-Consumer (SPSC) queue for entropy ingestion.
 //!
-//! This module provides a hardware-agnostic implementation designed for MarTac USVs.
-//! It allows the C/C++ host OS to safely and asynchronously feed hardware RNG data
-//! into the `EntropyPool` without stalling the cryptographic state machine or
-//! requiring complex locking mechanisms across the FFI boundary.
+//! This CPU-shared-memory queue lets one serialized C/C++ host producer feed
+//! hardware RNG bytes to one cryptographic consumer. It is not an MPSC queue and
+//! does not itself establish device cache coherency.
 
 use crate::error::CryptoError;
 use crate::zeroize::secure_zeroize;
@@ -89,7 +88,10 @@ impl EntropyQueue {
     ///
     /// # Returns
     /// `Ok(())` if the push was successful, or `CryptoError::InvalidState` if the queue is full.
-    pub fn push(&self, item: &[u8; ENTROPY_CHUNK_SIZE]) -> Result<(), CryptoError> {
+    ///
+    /// # Safety
+    /// The caller must be the queue's sole producer for its full lifetime.
+    pub unsafe fn push(&self, item: &[u8; ENTROPY_CHUNK_SIZE]) -> Result<(), CryptoError> {
         let head = self.head.0.load(Ordering::Relaxed);
         let tail = self.tail.0.load(Ordering::Acquire);
 
@@ -108,8 +110,7 @@ impl EntropyQueue {
             core::ptr::copy_nonoverlapping(item.as_ptr(), slot_ptr as *mut u8, ENTROPY_CHUNK_SIZE);
         }
 
-        // Hardware Memory Barrier via Release semantics
-        // Ensures the payload write is globally visible before the head index is updated.
+        // Release ordering publishes preceding writes under the Rust memory model.
         self.head.0.store(head.wrapping_add(1), Ordering::Release);
 
         Ok(())
@@ -125,7 +126,10 @@ impl EntropyQueue {
     ///
     /// # Returns
     /// `true` if an item was successfully popped, `false` if the queue was empty.
-    pub fn pop(&self, out: &mut [u8; ENTROPY_CHUNK_SIZE]) -> bool {
+    ///
+    /// # Safety
+    /// The caller must be the queue's sole consumer for its full lifetime.
+    pub unsafe fn pop(&self, out: &mut [u8; ENTROPY_CHUNK_SIZE]) -> bool {
         let tail = self.tail.0.load(Ordering::Relaxed);
         let head = self.head.0.load(Ordering::Acquire);
 
@@ -154,10 +158,39 @@ impl EntropyQueue {
             ));
         }
 
-        // Hardware Memory Barrier via Release semantics
-        // Ensures the zeroization is complete before the producer is allowed to overwrite the slot.
+        // Release ordering publishes preceding writes under the Rust memory model.
         self.tail.0.store(tail.wrapping_add(1), Ordering::Release);
 
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{EntropyQueue, ENTROPY_QUEUE_SIZE};
+    use crate::error::CryptoError;
+
+    #[test]
+    fn queue_preserves_fifo_order_reuses_slots_and_zeroizes_consumed_data() {
+        let queue = EntropyQueue::new();
+        for value in 0..ENTROPY_QUEUE_SIZE {
+            unsafe { queue.push(&[value as u8; 32]) }.unwrap();
+        }
+        assert_eq!(
+            unsafe { queue.push(&[0xFF; 32]) },
+            Err(CryptoError::InvalidState)
+        );
+
+        let mut output = [0u8; 32];
+        for value in 0..ENTROPY_QUEUE_SIZE {
+            assert!(unsafe { queue.pop(&mut output) });
+            assert_eq!(output, [value as u8; 32]);
+        }
+        assert!(!unsafe { queue.pop(&mut output) });
+        assert_eq!(unsafe { *queue.buffer[0].data.get() }, [0u8; 32]);
+
+        unsafe { queue.push(&[0xA5; 32]) }.unwrap();
+        assert!(unsafe { queue.pop(&mut output) });
+        assert_eq!(output, [0xA5; 32]);
     }
 }

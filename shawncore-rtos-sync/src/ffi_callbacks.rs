@@ -48,8 +48,13 @@ static PET_WATCHDOG_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 /// # Safety
 /// `cb` must be a valid function pointer to a C-ABI compatible function.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_register_disable_interrupts(cb: DisableInterruptsCb) {
-    DISABLE_INTERRUPTS_CB.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_rtos_register_disable_interrupts(
+    cb: Option<DisableInterruptsCb>,
+) {
+    DISABLE_INTERRUPTS_CB.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// Registers the host OS callback for restoring interrupts.
@@ -57,8 +62,13 @@ pub unsafe extern "C" fn shawncore_rtos_register_disable_interrupts(cb: DisableI
 /// # Safety
 /// `cb` must be a valid function pointer to a C-ABI compatible function.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_register_restore_interrupts(cb: RestoreInterruptsCb) {
-    RESTORE_INTERRUPTS_CB.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_rtos_register_restore_interrupts(
+    cb: Option<RestoreInterruptsCb>,
+) {
+    RESTORE_INTERRUPTS_CB.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// Registers the host OS callback for reading the monotonic clock.
@@ -66,8 +76,13 @@ pub unsafe extern "C" fn shawncore_rtos_register_restore_interrupts(cb: RestoreI
 /// # Safety
 /// `cb` must be a valid function pointer to a C-ABI compatible function.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_register_read_monotonic_clock(cb: ReadMonotonicClockCb) {
-    READ_MONOTONIC_CLOCK_CB.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_rtos_register_read_monotonic_clock(
+    cb: Option<ReadMonotonicClockCb>,
+) {
+    READ_MONOTONIC_CLOCK_CB.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// Registers the host OS callback for invalidating a cache range before a DMA read.
@@ -75,8 +90,11 @@ pub unsafe extern "C" fn shawncore_rtos_register_read_monotonic_clock(cb: ReadMo
 /// # Safety
 /// `cb` must be a valid function pointer to a C-ABI compatible function.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_register_cache_invalidate(cb: CacheInvalidateCb) {
-    CACHE_INVALIDATE_CB.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_rtos_register_cache_invalidate(cb: Option<CacheInvalidateCb>) {
+    CACHE_INVALIDATE_CB.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// Registers the host OS callback for flushing a cache range after a DMA write.
@@ -84,8 +102,11 @@ pub unsafe extern "C" fn shawncore_rtos_register_cache_invalidate(cb: CacheInval
 /// # Safety
 /// `cb` must be a valid function pointer to a C-ABI compatible function.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_register_cache_flush(cb: CacheFlushCb) {
-    CACHE_FLUSH_CB.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_rtos_register_cache_flush(cb: Option<CacheFlushCb>) {
+    CACHE_FLUSH_CB.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// Registers the host OS callback for petting the hardware watchdog.
@@ -93,8 +114,11 @@ pub unsafe extern "C" fn shawncore_rtos_register_cache_flush(cb: CacheFlushCb) {
 /// # Safety
 /// `cb` must be a valid function pointer to a C-ABI compatible function.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_register_pet_watchdog(cb: PetWatchdogCb) {
-    PET_WATCHDOG_CB.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_rtos_register_pet_watchdog(cb: Option<PetWatchdogCb>) {
+    PET_WATCHDOG_CB.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// A concrete implementation of `InterruptContext` that delegates to the registered
@@ -171,7 +195,7 @@ pub fn host_read_monotonic_clock() -> u64 {
 }
 
 /// Invalidates a host cache range before the consumer reads a DMA slot.
-pub fn host_cache_invalidate(ptr: *const u8, len: usize) {
+pub(crate) fn host_cache_invalidate(ptr: *const u8, len: usize) {
     let cb_ptr = CACHE_INVALIDATE_CB.load(Ordering::Acquire);
     if cb_ptr.is_null() {
         invoke_panic_hook();
@@ -186,7 +210,7 @@ pub fn host_cache_invalidate(ptr: *const u8, len: usize) {
 }
 
 /// Flushes a host cache range after the producer writes a DMA slot.
-pub fn host_cache_flush(ptr: *const u8, len: usize) {
+pub(crate) fn host_cache_flush(ptr: *const u8, len: usize) {
     let cb_ptr = CACHE_FLUSH_CB.load(Ordering::Acquire);
     if cb_ptr.is_null() {
         invoke_panic_hook();

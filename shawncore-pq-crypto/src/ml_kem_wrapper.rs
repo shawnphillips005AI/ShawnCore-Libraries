@@ -75,7 +75,7 @@ pub fn ml_kem_encapsulate(
     shared.0.copy_from_slice(ss.as_ref());
     ciphertext.0.copy_from_slice(ct.as_ref());
 
-    secure_cache_flush(shared.0.as_ptr(), shared.0.len());
+    secure_cache_flush(&shared.0);
 
     Ok((shared, ciphertext))
 }
@@ -99,7 +99,7 @@ pub fn ml_kem_decapsulate(
     let mut shared = SharedKey1024([0u8; 32]);
     shared.0.copy_from_slice(ss.as_ref());
 
-    secure_cache_flush(shared.0.as_ptr(), shared.0.len());
+    secure_cache_flush(&shared.0);
 
     Ok(shared)
 }

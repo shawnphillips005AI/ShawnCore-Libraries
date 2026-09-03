@@ -10,10 +10,8 @@ use zeroize::Zeroize;
 
 /// Securely zeroizes a memory buffer, defeating compiler Dead Store Elimination (DSE).
 ///
-/// Delegates to the audited `zeroize` crate, which clears the whole buffer with a
-/// single volatile write rather than a byte-by-byte loop, keeping this call cheap
-/// enough for RTOS deadline budgets while still preventing the compiler from
-/// optimizing away the clear.
+/// Delegates to the `zeroize` crate's volatile clearing implementation and uses a
+/// compiler fence to prevent reordering past subsequent operations.
 #[inline(never)]
 pub fn secure_zeroize(data: &mut [u8]) {
     data.zeroize();
@@ -24,9 +22,10 @@ pub fn secure_zeroize(data: &mut [u8]) {
 
 /// Flushes a memory region from the CPU caches to main memory.
 ///
-/// Delegates to the host OS to execute architecture-specific cache flush instructions
-/// (e.g., `dc civac` on ARM or `clflushopt` on x86_64) to ensure DMA coherency.
+/// Delegates to the host OS to execute architecture-specific cache maintenance.
+/// Rust ordering does not establish DMA visibility; platform integration and target
+/// validation determine the required flush, invalidate, and barrier sequence.
 #[inline(always)]
-pub fn secure_cache_flush(ptr: *const u8, len: usize) {
-    host_cache_flush(ptr, len);
+pub(crate) fn secure_cache_flush(data: &[u8]) {
+    host_cache_flush(data.as_ptr(), data.len());
 }

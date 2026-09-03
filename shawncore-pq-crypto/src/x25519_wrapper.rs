@@ -4,8 +4,8 @@
 //! X25519 Elliptic Curve Diffie-Hellman wrapper.
 //! Provides classical key exchange for hybrid post-quantum schemes.
 //! Hardware-agnostic implementation for MarTac USVs.
-//! Eliminated early-return timing oracle during contributory checks via mathematically
-//! verified constant-time masking.
+//! Rejects all-zero and non-contributory peer public keys before returning a
+//! shared secret.
 
 use crate::error::CryptoError;
 use crate::zeroize::secure_cache_flush;
@@ -92,7 +92,7 @@ pub fn x25519_diffie_hellman(
     let mut result = X25519SharedSecret([0u8; 32]);
     result.0.copy_from_slice(shared.as_bytes());
 
-    secure_cache_flush(result.0.as_ptr(), result.0.len());
+    secure_cache_flush(&result.0);
 
     Ok(result)
 }

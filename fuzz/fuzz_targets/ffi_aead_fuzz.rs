@@ -1,9 +1,7 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use shawncore_pq_crypto::ffi::{
-    shawncore_crypto_aead_decrypt, shawncore_crypto_aead_encrypt,
-};
+use shawncore_pq_crypto::ffi::{shawncore_crypto_aead_decrypt, shawncore_crypto_aead_encrypt};
 use shawncore_pq_crypto::ffi_callbacks::shawncore_crypto_register_cache_flush;
 use shawncore_pq_crypto::ffi_error::ShawncoreCryptoErr;
 
@@ -11,7 +9,7 @@ extern "C" fn fuzz_cache_flush(_: *const u8, _: usize) {}
 
 fn install_fuzz_callbacks() {
     unsafe {
-        shawncore_crypto_register_cache_flush(fuzz_cache_flush);
+        shawncore_crypto_register_cache_flush(Some(fuzz_cache_flush));
     }
 }
 

@@ -69,7 +69,7 @@ pub fn ml_dsa_sign(sk: &SigningKey87, msg: &[u8]) -> Result<Signature87, CryptoE
     let mut signature = Signature87([0u8; 4627]);
     signature.0.copy_from_slice(sig_slice.as_ref());
 
-    secure_cache_flush(signature.0.as_ptr(), signature.0.len());
+    secure_cache_flush(&signature.0);
 
     Ok(signature)
 }

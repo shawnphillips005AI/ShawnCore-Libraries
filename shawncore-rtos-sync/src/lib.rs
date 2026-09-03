@@ -51,42 +51,53 @@ mod tests {
     #[test]
     fn scheduler_selects_highest_priority_ready_task() {
         let mut scheduler = PerCoreScheduler::new();
-        scheduler
-            .create_task(Tcb::new_task(1, 0, 0, 0x1000, 5), 0xAA55)
-            .unwrap();
-        scheduler
-            .create_task(Tcb::new_task(2, 0, 0, 0x2000, 2), 0x55AA)
-            .unwrap();
+        let mut stacks = [[0u64; 2]; 2];
+        let first_stack_base = stacks[0].as_mut_ptr() as u64;
+        let second_stack_base = stacks[1].as_mut_ptr() as u64;
+        let stack_size = core::mem::size_of_val(&stacks[0]);
+        unsafe {
+            scheduler
+                .create_task(
+                    Tcb::new_task(1, first_stack_base, stack_size, first_stack_base, 5),
+                    0xAA55,
+                )
+                .unwrap();
+            scheduler
+                .create_task(
+                    Tcb::new_task(2, second_stack_base, stack_size, second_stack_base, 2),
+                    0x55AA,
+                )
+                .unwrap();
+        }
 
-        assert_eq!(scheduler.schedule_tick(0), 0x2000);
+        assert_eq!(unsafe { scheduler.schedule_tick(0) }, second_stack_base);
         scheduler.clear_ready(2);
-        assert_eq!(scheduler.schedule_tick(0), 0x1000);
+        assert_eq!(
+            unsafe { scheduler.schedule_tick(second_stack_base) },
+            first_stack_base
+        );
         scheduler.clear_ready(5);
-        assert_eq!(scheduler.schedule_tick(0), 0);
+        assert_eq!(unsafe { scheduler.schedule_tick(first_stack_base) }, 0);
     }
 
     #[test]
     fn scheduler_rejects_invalid_priority() {
         let mut scheduler = PerCoreScheduler::new();
-        assert!(scheduler
-            .create_task(Tcb::new_task(0, 0, 0, 0, 16), 0)
-            .is_err());
+        assert!(unsafe { scheduler.create_task(Tcb::new_task(0, 0, 0, 0, 16), 0) }.is_err());
     }
 
     #[test]
     fn scheduler_rejects_invalid_stack_descriptor() {
         let mut scheduler = PerCoreScheduler::new();
-        assert!(scheduler
-            .create_task(Tcb::new_task(0, 3, 8, 0, 1), 0)
-            .is_err());
-        assert!(scheduler
-            .create_task(Tcb::new_task(0, 8, 7, 0, 1), 0)
-            .is_err());
-        assert!(scheduler
-            .create_task(Tcb::new_task(0, 0x1000, 0x100, 0x2000, 1), 0)
-            .is_err());
-        assert!(scheduler
-            .create_task(Tcb::new_task(0, u64::MAX - 3, 8, u64::MAX - 3, 1), 0)
-            .is_err());
+        assert!(unsafe { scheduler.create_task(Tcb::new_task(0, 3, 8, 0, 1), 0) }.is_err());
+        assert!(unsafe { scheduler.create_task(Tcb::new_task(0, 8, 7, 0, 1), 0) }.is_err());
+        assert!(
+            unsafe { scheduler.create_task(Tcb::new_task(0, 0x1000, 0x100, 0x2000, 1), 0) }
+                .is_err()
+        );
+        assert!(unsafe {
+            scheduler.create_task(Tcb::new_task(0, u64::MAX - 3, 8, u64::MAX - 3, 1), 0)
+        }
+        .is_err());
     }
 }

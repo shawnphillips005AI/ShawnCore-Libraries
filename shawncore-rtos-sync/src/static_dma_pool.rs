@@ -5,13 +5,14 @@
 //! Statically allocated, cache-aligned DMA memory pool.
 //!
 //! The free list is an ABA-tagged Treiber stack. Push and pop are lock-free and
-//! have O(1) expected work; callers must still handle `LockContention` only if
-//! another operation wins the bounded hardware scheduling window.
+//! have O(1) expected work. The ABA tag is 32 bits and can wrap after $2^{32}$
+//! free-list mutations; target deployments must bound the pool's operational
+//! lifetime below that limit or provide external reinitialization.
 
 use crate::error::AllocatorError;
+use crate::ffi_callbacks::host_cache_flush;
 use core::ptr::NonNull;
 use core::sync::atomic::{compiler_fence, AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
-use zeroize::Zeroize;
 
 const FREE_LIST_EMPTY: u32 = u32::MAX;
 
@@ -38,18 +39,24 @@ pub struct StaticDmaPool<T, const N: usize, const BITMAP_WORDS: usize> {
 mod tests {
     use super::StaticDmaPool;
     use crate::error::AllocatorError;
+    use crate::ffi_callbacks::shawncore_rtos_register_cache_flush;
     use core::mem::MaybeUninit;
 
     #[repr(C, align(4096))]
     struct AlignedStorage<const N: usize>(MaybeUninit<[u32; N]>);
+
+    extern "C" fn test_cache_flush(_: *const u8, _: usize) {}
+
+    fn install_test_callback() {
+        unsafe { shawncore_rtos_register_cache_flush(Some(test_cache_flush)) };
+    }
 
     #[test]
     fn free_list_allocates_every_slot_once() {
         let pool = StaticDmaPool::<u32, 65, 2>::new();
         let mut storage = AlignedStorage::<65>(MaybeUninit::uninit());
         let pointer = storage.0.as_mut_ptr().cast::<u32>();
-        pool.init(pointer, core::mem::size_of::<[u32; 65]>())
-            .unwrap();
+        unsafe { pool.init(pointer, core::mem::size_of::<[u32; 65]>()) }.unwrap();
 
         for expected in 0..65 {
             let (index, _, _) = pool.allocate().unwrap();
@@ -60,10 +67,11 @@ mod tests {
 
     #[test]
     fn stale_generation_cannot_free_reused_slot() {
+        install_test_callback();
         let pool = StaticDmaPool::<u32, 1, 1>::new();
         let mut storage = AlignedStorage::<1>(MaybeUninit::uninit());
         let pointer = storage.0.as_mut_ptr().cast::<u32>();
-        pool.init(pointer, core::mem::size_of::<u32>()).unwrap();
+        unsafe { pool.init(pointer, core::mem::size_of::<u32>()) }.unwrap();
 
         let (index, first_generation, first_pointer) = pool.allocate().unwrap();
         unsafe { first_pointer.as_ptr().write(0xA5A5_A5A5) };
@@ -77,6 +85,29 @@ mod tests {
         );
         assert_eq!(unsafe { second_pointer.as_ptr().read() }, 0x5A5A_5A5A);
         pool.free(index, second_generation).unwrap();
+    }
+
+    #[test]
+    fn free_zeroizes_raw_storage_before_reuse() {
+        install_test_callback();
+        let pool = StaticDmaPool::<[u8; 8], 1, 1>::new();
+        let mut storage = AlignedStorage::<2>(MaybeUninit::uninit());
+        let pointer = storage.0.as_mut_ptr().cast::<[u8; 8]>();
+        unsafe { pool.init(pointer, core::mem::size_of::<[u8; 8]>()) }.unwrap();
+
+        let (index, generation, allocation) = pool.allocate().unwrap();
+        unsafe { allocation.as_ptr().write([0xA5; 8]) };
+        pool.free(index, generation).unwrap();
+        assert_eq!(unsafe { allocation.as_ptr().read() }, [0u8; 8]);
+    }
+
+    #[test]
+    fn init_rejects_zero_sized_storage_descriptors() {
+        let pool = StaticDmaPool::<(), 1, 1>::new();
+        assert_eq!(
+            unsafe { pool.init(core::ptr::NonNull::<()>::dangling().as_ptr(), 0) },
+            Err(AllocatorError::AddressOutOfBounds)
+        );
     }
 }
 
@@ -121,7 +152,23 @@ impl<T: Copy, const N: usize, const BITMAP_WORDS: usize> StaticDmaPool<T, N, BIT
     }
 
     /// Initializes the pool with a page-aligned host DMA region.
-    pub fn init(&self, base_ptr: *mut T, size_in_bytes: usize) -> Result<(), AllocatorError> {
+    ///
+    /// `T` is a storage layout and alignment descriptor, not initialized Rust data.
+    /// Allocations are uninitialized raw storage; callers must initialize a `T` value
+    /// before reading it and must not use the allocation after `free` succeeds.
+    ///
+    /// # Safety
+    /// `base_ptr` must identify writable storage for at least `N` consecutive `T`
+    /// layouts, be valid for the pool's entire initialized lifetime, and not be
+    /// concurrently accessed outside an allocation returned by this pool.
+    pub unsafe fn init(
+        &self,
+        base_ptr: *mut T,
+        size_in_bytes: usize,
+    ) -> Result<(), AllocatorError> {
+        if core::mem::size_of::<T>() == 0 {
+            return Err(AllocatorError::AddressOutOfBounds);
+        }
         if base_ptr.is_null() {
             return Err(AllocatorError::AddressOutOfBounds);
         }
@@ -135,6 +182,10 @@ impl<T: Copy, const N: usize, const BITMAP_WORDS: usize> StaticDmaPool<T, N, BIT
         if (base_ptr as usize) % 4096 != 0 || (base_ptr as usize) % core::mem::align_of::<T>() != 0
         {
             return Err(AllocatorError::InvalidAlignment);
+        }
+        let required_bitmap_words = N.div_ceil(usize::BITS as usize);
+        if BITMAP_WORDS != required_bitmap_words {
+            return Err(AllocatorError::AddressOutOfBounds);
         }
         if self.is_initialized.load(Ordering::Acquire)
             || self
@@ -216,14 +267,18 @@ impl<T: Copy, const N: usize, const BITMAP_WORDS: usize> StaticDmaPool<T, N, BIT
 
         let base_ptr = self.memory.load(Ordering::Acquire);
         // # Safety
-        // Spatial: `buffer_idx` is bounds-checked above.
-        // Temporal: `allocated[buffer_idx]` was just transitioned from true to false,
-        // so this task has exclusive ownership of the slot.
-        // Alignment: The host OS guarantees `T`-alignment via `init()`.
+        // Spatial: `buffer_idx` is bounds-checked and `T` has nonzero size after `init`.
+        // Temporal: `allocated[buffer_idx]` was just transitioned from true to false;
+        // allocation cannot republish this slot until zeroization completes and the
+        // free-list head is updated below.
+        // Alignment: byte writes require no alignment and do not assume initialized `T` data.
         unsafe {
             let pointer = base_ptr.add(buffer_idx).cast::<u8>();
             let length = core::mem::size_of::<T>();
-            core::slice::from_raw_parts_mut(pointer, length).zeroize();
+            for offset in 0..length {
+                core::ptr::write_volatile(pointer.add(offset), 0);
+            }
+            host_cache_flush(pointer, length);
         }
         compiler_fence(Ordering::Release);
 
