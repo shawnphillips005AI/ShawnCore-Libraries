@@ -24,12 +24,13 @@ hardware behavior, certification, production approval, or independent review.
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets` | PASS | Actually executed and passed: 42 unit tests across crypto and RTOS; the FFI facade has no unit tests. |
+| `cargo test --workspace --all-targets` | PASS | Actually executed and passed: 43 unit tests across crypto and RTOS; the FFI facade has no unit tests. |
 
 The executed tests cover AEAD and in-place round trips, authentication failure,
 FFI null/zero-length/overlap handling, session re-establishment, replay,
-reordering, entropy queue reuse, DMA-pool stale-generation rejection, queue
-behavior, scheduler boundaries, and state transitions.
+reordering, replay-window commit for sequences below the window, entropy queue
+reuse, DMA-pool stale-generation rejection, queue behavior, scheduler boundaries,
+and state transitions.
 
 ## FFI VALIDATION
 
