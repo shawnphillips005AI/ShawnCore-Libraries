@@ -205,6 +205,12 @@ pub(crate) fn host_cache_invalidate(ptr: *const u8, len: usize) {
             core::hint::spin_loop();
         }
     }
+    // # Safety
+    // Spatial: `ptr`/`len` describe the slot range chosen by the calling queue.
+    // Temporal: `cb_ptr` was checked non-null above, and registration requires the
+    // callback to stay valid until every possible invocation has returned.
+    // ABI: only a `CacheInvalidateCb` is ever stored in this slot, so the transmute
+    // restores the original `extern "C"` signature.
     unsafe {
         let cb: CacheInvalidateCb = core::mem::transmute(cb_ptr);
         cb(ptr, len);
@@ -220,6 +226,12 @@ pub(crate) fn host_cache_flush(ptr: *const u8, len: usize) {
             core::hint::spin_loop();
         }
     }
+    // # Safety
+    // Spatial: `ptr`/`len` describe the slot range chosen by the calling queue.
+    // Temporal: `cb_ptr` was checked non-null above, and registration requires the
+    // callback to stay valid until every possible invocation has returned.
+    // ABI: only a `CacheFlushCb` is ever stored in this slot, so the transmute
+    // restores the original `extern "C"` signature.
     unsafe {
         let cb: CacheFlushCb = core::mem::transmute(cb_ptr);
         cb(ptr, len);
@@ -235,6 +247,12 @@ pub fn host_pet_watchdog() {
             core::hint::spin_loop();
         }
     }
+    // # Safety
+    // Spatial: N/A, the callback takes no arguments.
+    // Temporal: `cb_ptr` was checked non-null above, and registration requires the
+    // callback to stay valid until every possible invocation has returned.
+    // ABI: only a `PetWatchdogCb` is ever stored in this slot, so the transmute
+    // restores the original `extern "C"` signature.
     unsafe {
         let cb: PetWatchdogCb = core::mem::transmute(cb_ptr);
         cb();
