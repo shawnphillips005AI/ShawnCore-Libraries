@@ -2,10 +2,11 @@
 #![deny(missing_docs)]
 
 //! ML-KEM-1024 (FIPS 203) Key Encapsulation Mechanism wrapper.
-//! Provides post-quantum key establishment with strict constant-time and zeroization guarantees.
+//! Provides post-quantum key establishment with wrapper-managed zeroization.
 //! Hardware-agnostic implementation for MarTac USVs.
 //! Uses the selected `ml-kem` dependency's ML-KEM-1024 implementation; independent
-//! conformance testing remains outside this crate's scope.
+//! conformance testing remains outside this crate's scope. Constant-time behavior
+//! is a property of that dependency and has not been independently measured here.
 
 use crate::error::CryptoError;
 use crate::zeroize::secure_cache_flush;
@@ -20,7 +21,8 @@ pub struct PublicKey1024(pub ml_kem::kem::EncapsulationKey<ml_kem::MlKem1024Para
 
 /// Secret decapsulation key for ML-KEM-1024.
 /// Used to decapsulate the shared secret from a received ciphertext.
-/// Automatically zeroized upon being dropped. `Clone` is explicitly omitted to prevent key material duplication.
+/// The inner `ml_kem` key is skipped by this derive because it already implements
+/// `ZeroizeOnDrop` itself; `Clone` is explicitly omitted to prevent key material duplication.
 #[repr(C, align(64))]
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct DecapsKey1024(
@@ -47,6 +49,7 @@ pub struct Ciphertext1024(pub [u8; 1568]);
 /// # Returns
 /// A tuple containing the `PublicKey1024` and `DecapsKey1024`.
 pub fn ml_kem_keygen(entropy: &[u8; 64]) -> Result<(PublicKey1024, DecapsKey1024), CryptoError> {
+    // Both conversions are infallible: `entropy` is a fixed 64-byte array split at 32.
     let d: [u8; 32] = entropy[..32].try_into().unwrap();
     let z: [u8; 32] = entropy[32..].try_into().unwrap();
     let (dk, ek) = <MlKem1024 as KemCore>::generate_deterministic(&d.into(), &z.into());

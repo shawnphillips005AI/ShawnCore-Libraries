@@ -48,9 +48,8 @@ uses the complementary assignment.
 
 ## Requirements
 
-- Rust 1.85.0 and the `aarch64-unknown-none` target selected by
-  `rust-toolchain.toml`.
-- `rustfmt` and `clippy` components.
+- Rust 1.85.0, the `rustfmt` and `clippy` components, and the
+  `aarch64-unknown-none` target, all selected by `rust-toolchain.toml`.
 - A C11 compiler for C integration checks.
 - Optional: Rust nightly plus `cargo-fuzz`, Clang/ASan, and Valgrind.
 
