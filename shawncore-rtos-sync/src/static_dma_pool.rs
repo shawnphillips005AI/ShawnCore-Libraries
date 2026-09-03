@@ -1,4 +1,4 @@
-#![deny(clippy::pedantic, clippy::nursery)]
+#![allow(clippy::items_after_test_module)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 

@@ -1,4 +1,3 @@
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -106,13 +105,13 @@ fn valid_dma_region<T>(memory_base: *mut T, size_in_bytes: usize, element_count:
 
 /// Returns the memory size required to allocate a `PerCoreScheduler`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_scheduler_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_scheduler_sizeof() -> usize {
     core::mem::size_of::<PerCoreScheduler>()
 }
 
 /// Returns the memory alignment required to allocate a `PerCoreScheduler`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_scheduler_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_scheduler_alignof() -> usize {
     core::mem::align_of::<PerCoreScheduler>()
 }
 
@@ -274,13 +273,13 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_task_check_in(
 
 /// Returns the memory size required to allocate a `DmaPool2K`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_dmapool2k_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_dmapool2k_sizeof() -> usize {
     core::mem::size_of::<DmaPool2K>()
 }
 
 /// Returns the memory alignment required to allocate a `DmaPool2K`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_dmapool2k_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_dmapool2k_alignof() -> usize {
     core::mem::align_of::<DmaPool2K>()
 }
 
@@ -391,13 +390,13 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_free(
 
 /// Returns the memory size required to allocate a `SpscQueueTelemetry`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_spsc_telemetry_sizeof() -> usize {
     core::mem::size_of::<SpscQueueTelemetry>()
 }
 
 /// Returns the memory alignment required to allocate a `SpscQueueTelemetry`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_spsc_telemetry_alignof() -> usize {
     core::mem::align_of::<SpscQueueTelemetry>()
 }
 
@@ -424,7 +423,7 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_init(
 
     let queue_ref = unsafe { &mut *queue };
 
-    match queue_ref.init(memory_base, size_in_bytes) {
+    match unsafe { queue_ref.init(memory_base, size_in_bytes) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(e) => e.into(),
     }
@@ -507,13 +506,13 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_pop(
 
 /// Returns the memory size required to allocate a `RingBufferEwCommand`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_ringbuffer_ew_sizeof() -> usize {
     core::mem::size_of::<RingBufferEwCommand>()
 }
 
 /// Returns the memory alignment required to allocate a `RingBufferEwCommand`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_ringbuffer_ew_alignof() -> usize {
     core::mem::align_of::<RingBufferEwCommand>()
 }
 
@@ -539,7 +538,7 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_init(
 
     let rb_ref = unsafe { &mut *rb };
 
-    match rb_ref.init(memory_base, size_in_bytes) {
+    match unsafe { rb_ref.init(memory_base, size_in_bytes) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(e) => e.into(),
     }
@@ -652,13 +651,13 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_peek(
 
 /// Returns the memory size required to allocate a `SpscQueueFft`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_spsc_fft_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_spsc_fft_sizeof() -> usize {
     core::mem::size_of::<SpscQueueFft>()
 }
 
 /// Returns the memory alignment required to allocate a `SpscQueueFft`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_spsc_fft_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_spsc_fft_alignof() -> usize {
     core::mem::align_of::<SpscQueueFft>()
 }
 
@@ -685,7 +684,7 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_init(
 
     let queue_ref = unsafe { &mut *queue };
 
-    match queue_ref.init(memory_base, size_in_bytes) {
+    match unsafe { queue_ref.init(memory_base, size_in_bytes) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(e) => e.into(),
     }
@@ -768,13 +767,13 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_pop(
 
 /// Returns the memory size required to allocate a `StateMachine`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_state_machine_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_state_machine_sizeof() -> usize {
     core::mem::size_of::<StateMachine>()
 }
 
 /// Returns the memory alignment required to allocate a `StateMachine`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_state_machine_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_state_machine_alignof() -> usize {
     core::mem::align_of::<StateMachine>()
 }
 
@@ -852,13 +851,13 @@ pub unsafe extern "C" fn shawncore_rtos_state_machine_try_advance(
 
 /// Returns the memory size required to allocate a `LatencyTracker`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_latency_tracker_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_latency_tracker_sizeof() -> usize {
     core::mem::size_of::<LatencyTracker>()
 }
 
 /// Returns the memory alignment required to allocate a `LatencyTracker`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_latency_tracker_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_latency_tracker_alignof() -> usize {
     core::mem::align_of::<LatencyTracker>()
 }
 

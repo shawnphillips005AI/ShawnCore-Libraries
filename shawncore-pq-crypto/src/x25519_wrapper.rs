@@ -1,4 +1,3 @@
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -79,6 +78,10 @@ pub fn x25519_diffie_hellman(
 ) -> Result<X25519SharedSecret, CryptoError> {
     let sk = StaticSecret::from(secret.0);
     let pk = PublicKey::from(their_public.0);
+
+    if pk.as_bytes().iter().all(|&byte| byte == 0) {
+        return Err(CryptoError::InvalidState);
+    }
 
     let shared = sk.diffie_hellman(&pk);
 

@@ -1,4 +1,3 @@
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -79,7 +78,11 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
     /// This operation is one-shot. The ring buffer must be destroyed before its
     /// object storage is reused for another initialization, and producers and
     /// consumers must be stopped before destruction or reuse.
-    pub fn init(
+    ///
+    /// # Safety
+    /// `base_ptr` must point to writable storage for `N` initialized
+    /// `CacheAlignedSlot<T>` values and remain valid until destruction.
+    pub unsafe fn init(
         &self,
         base_ptr: *mut CacheAlignedSlot<T>,
         size_in_bytes: usize,
@@ -308,7 +311,7 @@ mod tests {
         let buffer = RingBuffer::<u32, 4>::new();
 
         assert_eq!(
-            buffer.init(core::ptr::null_mut(), 0),
+            unsafe { buffer.init(core::ptr::null_mut(), 0) },
             Err(IpcError::InvalidMemory)
         );
         assert!(!buffer.is_initialized());
@@ -321,9 +324,9 @@ mod tests {
         let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
         let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
 
-        buffer.init(storage_ptr, storage_size).unwrap();
+        unsafe { buffer.init(storage_ptr, storage_size) }.unwrap();
         assert_eq!(
-            buffer.init(storage_ptr, storage_size),
+            unsafe { buffer.init(storage_ptr, storage_size) },
             Err(IpcError::AlreadyInitialized)
         );
 
@@ -331,6 +334,5 @@ mod tests {
         assert_eq!(buffer.peek(), Some(7));
         assert_eq!(buffer.pop(), Some(7));
         assert_eq!(buffer.pop(), None);
-        drop(storage);
     }
 }

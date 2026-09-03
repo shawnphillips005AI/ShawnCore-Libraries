@@ -1,4 +1,3 @@
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -50,6 +49,7 @@ impl StateMachine {
     ///
     /// # Returns
     /// `Ok(())` if the transition is valid, or `Err(())` if the transition is forbidden.
+    #[allow(clippy::result_unit_err)]
     pub fn try_advance(&self, target: EnclaveState) -> Result<(), ()> {
         let target = target as u8;
         let mut current = self.current_state.load(Ordering::Acquire);

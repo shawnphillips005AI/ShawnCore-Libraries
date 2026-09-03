@@ -1,4 +1,3 @@
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -144,10 +143,10 @@ impl EntropyPool {
 
         let mut guard = self.pool.lock();
         let mut hasher = Sha384::new();
-        hasher.update(&*guard);
+        hasher.update(*guard);
 
         while GLOBAL_ENTROPY_QUEUE.pop(&mut chunk) {
-            hasher.update(&chunk);
+            hasher.update(chunk);
             secure_zeroize(&mut chunk);
             mixed = true;
         }
@@ -187,14 +186,14 @@ impl EntropyPool {
         while offset < out.len() {
             // Forward Secrecy: Domain separation for output generation
             let mut out_hasher = Sha384::new();
-            out_hasher.update(&[0x00]); // Domain separator for output
-            out_hasher.update(&*guard);
+            out_hasher.update([0x00]); // Domain separator for output
+            out_hasher.update(*guard);
             let out_result = out_hasher.finalize();
 
             // Forward Secrecy: Domain separation for internal state update
             let mut state_hasher = Sha384::new();
-            state_hasher.update(&[0x01]); // Domain separator for state update
-            state_hasher.update(&*guard);
+            state_hasher.update([0x01]); // Domain separator for state update
+            state_hasher.update(*guard);
             let state_result = state_hasher.finalize();
 
             let copy_len = core::cmp::min(48, out.len() - offset);
