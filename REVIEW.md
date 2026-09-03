@@ -10,7 +10,8 @@ hardware-qualified software.
 
 The host validation record is in [VALIDATION.md](VALIDATION.md). It identifies
 what executed locally and the target-hardware, interoperability, and independent
-review gates that remain open.
+review gates that remain open. The trust boundaries, threat model, and host
+integration contract are in [SECURITY.md](SECURITY.md).
 
 ## Architecture
 
@@ -67,6 +68,10 @@ cargo check --target aarch64-unknown-none --workspace
 
 ## C FFI Checks
 
+[`integration/Makefile`](integration/Makefile) wraps the checks below:
+`make syntax`, `make run`, `make asan`, and `make valgrind`. The equivalent
+explicit commands are:
+
 ```text
 cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include -fsyntax-only integration/martac_hal_stubs.c
 cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include integration/c_api_smoke.c target/release/libshawncore_ffi.a -o /tmp/shawncore-c-api-smoke
@@ -88,11 +93,11 @@ valgrind --error-exitcode=1 --leak-check=full /tmp/shawncore-c-api-smoke
 ```text
 cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz
 cd fuzz
-cargo +nightly fuzz run ffi_aead_fuzz -- -runs=100 -max_len=512
+cargo +nightly fuzz run ffi_aead_fuzz -- -runs=1000 -max_len=512
 ```
 
 The retained corpus is intentional regression input. A bounded smoke run is not
-a security proof; CI configures a separate 10,000-execution nightly campaign.
+a security proof; CI configures a separate 10,000-execution fuzz job.
 
 ## Requested Technical Review
 

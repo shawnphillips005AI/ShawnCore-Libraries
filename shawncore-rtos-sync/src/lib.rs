@@ -12,7 +12,6 @@ pub mod error;
 pub mod ffi;
 pub mod ffi_callbacks;
 pub mod ffi_error;
-pub mod fft_queue;
 pub mod interrupt_spinlock;
 pub mod latency_tracker;
 pub mod ring_buffer;

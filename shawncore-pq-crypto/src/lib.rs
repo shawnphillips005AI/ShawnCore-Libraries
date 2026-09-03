@@ -10,7 +10,6 @@
 pub mod aead_wrapper;
 pub mod entropy_pool;
 pub mod entropy_queue;
-#[path = "Error.rs"]
 pub mod error;
 pub mod ffi;
 pub mod ffi_callbacks;
@@ -20,7 +19,6 @@ pub mod ml_dsa_wrapper;
 pub mod ml_kem_wrapper;
 pub mod session_manager;
 pub mod x25519_wrapper;
-#[path = "Zeroize.rs"]
 pub mod zeroize;
 
 #[cfg(test)]

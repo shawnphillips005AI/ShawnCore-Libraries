@@ -24,7 +24,7 @@ hardware behavior, certification, production approval, or independent review.
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets` | PASS | Actually executed and passed: 43 unit tests across crypto and RTOS; the FFI facade has no unit tests. |
+| `cargo test --workspace --all-targets` | PASS | Actually executed and passed: 43 unit tests (23 crypto, 20 RTOS); the FFI facade has no unit tests. |
 
 The executed tests cover AEAD and in-place round trips, authentication failure,
 FFI null/zero-length/overlap handling, session re-establishment, replay,
@@ -36,11 +36,11 @@ and state transitions.
 
 | Command or check | Result | Evidence |
 | --- | --- | --- |
-| C11 HAL syntax check | PASS | `cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include -fsyntax-only integration/martac_hal_stubs.c` executed and passed. |
-| C smoke executable | PASS | Built and executed `integration/c_api_smoke.c` against `target/release/libshawncore_ffi.a`. |
-| Public-symbol check | PASS | Header declarations and archive exports were compared and matched exactly. |
-| AddressSanitizer C smoke | PASS | The C smoke executable was built with `-fsanitize=address` and executed with `ASAN_OPTIONS=detect_leaks=1`. |
-| Valgrind C smoke | PASS | `valgrind --error-exitcode=1 --leak-check=full /tmp/shawncore-c-api-smoke` reported zero errors and no leaks. |
+| C11 HAL syntax check | PASS | `make -C integration syntax` executed and passed. |
+| C smoke executable | PASS | `make -C integration run` built and executed `integration/c_api_smoke.c` against `target/release/libshawncore_ffi.a`; exit status 0. |
+| Public-symbol check | PASS | Header declarations and archive exports were compared and matched exactly: 119 symbols, empty diff. |
+| AddressSanitizer C smoke | PASS | `make -C integration asan` built with `-fsanitize=address` and executed with `ASAN_OPTIONS=detect_leaks=1`; no findings. |
+| Valgrind C smoke | PASS | `make -C integration valgrind` reported `ERROR SUMMARY: 0 errors from 0 contexts` and no leaks (0 allocs, 0 frees). |
 | Rust-instrumented AddressSanitizer | BLOCKED | Attempted, but nightly failed to resolve `zeroize_derive` in sanitizer build mode (`E0463`). No Rust ASan result is claimed. |
 
 The C smoke test checks ABI size/alignment, selected null errors, zero-length
@@ -52,9 +52,9 @@ integration validation.
 | Command | Result | Evidence |
 | --- | --- | --- |
 | `cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz` | PASS | Actually executed and passed. |
-| `cd fuzz && cargo +nightly fuzz run ffi_aead_fuzz -- -runs=100 -max_len=512` | PASS | Actually executed: 100 executions over 87 retained corpus files completed with no observed failure. |
+| `cd fuzz && cargo +nightly fuzz run ffi_aead_fuzz -- -runs=1000 -max_len=512` | PASS | Actually executed: 1,000 executions seeded from 87 retained corpus files completed with no crash, no timeout, and no new artifact written. |
 
-CI configures a separate nightly campaign with 10,000 executions. It was not run
+CI configures a separate fuzz job with 10,000 executions. It was not run
 for this local record. The smoke campaign is evidence only for this harness and
 duration; it is not proof of security.
 
@@ -68,7 +68,7 @@ duration; it is not proof of security.
 | DMA/cache | REVIEWED | Cache callback transitions and the limits of page alignment/atomics were inspected; hardware coherency was not tested. |
 | Crypto | REVIEWED | AEAD lengths/authentication, X25519 checks, 128-byte hybrid KDF, directional key assignment, and cleanup paths were inspected. |
 | Session/replay | REVIEWED | Authentication precedes replay-state commitment; re-establishment resets state before replacement keys are installed. |
-| Package hygiene | PASS | `cargo package --list` for all three crates listed 46 source/metadata files with no generated artifact paths. |
+| Package hygiene | PASS | `cargo package --list` for all three crates listed 45 source/metadata files with no generated artifact paths. |
 
 ## TARGET/HARDWARE VALIDATION
 
@@ -98,6 +98,8 @@ metadata. Intentional fuzz corpus files and the fuzz lockfile are retained.
 errors.
 
 The tracked source tree contains no generated build output. `target/` and
-`fuzz/target/` exist only as local, ignored build directories and are not part of
-the distribution set. Before external distribution, commit the intended source
-set so the recipient can reproduce this evidence from the delivered revision.
+`fuzz/target/` are ignored local build directories and are not part of the
+distribution set; they were removed from the working tree during release
+cleanup, so reproducing this evidence requires rebuilding from source. Before
+external distribution, commit the intended source set so the recipient can
+reproduce this evidence from the delivered revision.

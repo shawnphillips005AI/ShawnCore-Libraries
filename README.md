@@ -18,6 +18,8 @@ The hybrid KDF returns exactly 128 bytes. For a responder, transmit material is 
 
 ## Security Boundaries
 
+[SECURITY.md](SECURITY.md) is the authoritative statement of the trust boundaries, the threats this repository does and does not mitigate, known limitations, and the host integration contract. Read it before integrating.
+
 Session decryption authenticates the packet before committing replay-window state. Duplicate and out-of-window nonces are rejected. Failed packet encryption does not advance the transmit sequence; exhaustion is rejected before a nonce is reused. Re-establishment zeroizes prior directional keys and resets transmit and replay state before installing replacement keys. Session and temporary derivation material are explicitly zeroized by the implementation where supported by the underlying types.
 
 The raw AEAD API requires a unique 96-bit nonce for every encryption under a given key pair. Session packet encryption assigns and tracks nonces internally; raw AEAD callers own nonce generation and uniqueness.
@@ -36,7 +38,7 @@ The SPSC queues and ring buffer invoke registered cache callbacks around CPU pro
 
 ## C FFI Model
 
-Build the C artifact with `cargo build -p shawncore-ffi --release`. Link the resulting `target/release/libshawncore_ffi.a` and include [`shawncore-ffi/include/shawncore.h`](shawncore-ffi/include/shawncore.h). The header exposes every ABI function, stable C payload layouts, and size/alignment queries for opaque Rust objects and queue slots.
+Build the C artifact with `cargo build -p shawncore-ffi --release`. Link the resulting `target/release/libshawncore_ffi.a` and include [`shawncore-ffi/include/shawncore.h`](shawncore-ffi/include/shawncore.h). [`integration/Makefile`](integration/Makefile) drives the C syntax check, smoke build, execution, and the optional sanitizer and Valgrind variants. The header exposes every ABI function, stable C payload layouts, and size/alignment queries for opaque Rust objects and queue slots.
 
 Opaque objects must use the crate-exported `sizeof` and `alignof` values, be initialized exactly once, and be destroyed exactly once after all concurrent users stop. Pointer arguments must be valid, aligned for their declared object types, and live for the entire call. Buffers must satisfy their documented lengths and non-overlap requirements. A non-null pointer is not sufficient evidence that it is mapped, writable, owned by the caller, or valid for the required lifetime; those are host obligations.
 
@@ -52,7 +54,7 @@ Rust unit tests cover cryptographic round trips and tampering, FFI null/zero-len
 
 ## Fuzzing
 
-The `ffi_aead_fuzz` cargo-fuzz target supplies valid backing storage while varying bounded lengths and data, including malformed ciphertext, overlap, and null-with-length cases. Its regression corpus and lockfile are retained in the source tree. A successful compile check is not a fuzz campaign; the configured nightly CI campaign runs 10,000 executions.
+The `ffi_aead_fuzz` cargo-fuzz target supplies valid backing storage while varying bounded lengths and data, including malformed ciphertext, overlap, and null-with-length cases. Its regression corpus and lockfile are retained in the source tree. A successful compile check is not a fuzz campaign; the configured CI fuzz job runs 10,000 executions on the Rust nightly toolchain.
 
 ## Validation Status
 
@@ -60,7 +62,7 @@ The `ffi_aead_fuzz` cargo-fuzz target supplies valid backing storage while varyi
 
 **TESTED:** local Rust unit tests cover crypto round trips and tampering, FFI null/zero-length/overlap handling, session re-establishment and replay paths, queue reuse/corruption paths, DMA-pool exhaustion and stale-generation rejection, scheduler boundaries, state transitions, and the FFT one-cache-line ABI. A C11 smoke program compiles, links, and executes against the release static library.
 
-**FUZZED:** a fuzz target, regression corpus, and a nightly 10,000-execution CI campaign are configured. Compile checks are not reported as fuzz executions.
+**FUZZED:** a fuzz target, regression corpus, and a 10,000-execution CI fuzz job are configured. Compile checks are not reported as fuzz executions.
 
 **STATICALLY REVIEWED:** strict Clippy, formatting, workspace checks, documentation build, C syntax compilation, and a bare-metal AArch64 type check are configured in CI.
 
@@ -99,3 +101,12 @@ Independent security review, ML-KEM/ML-DSA known-answer and interoperability tes
 ## Distribution
 
 This repository is proprietary and all rights are reserved. The crates are intentionally excluded from registry publication; distribution, evaluation, and integration require a separate written agreement with the copyright holder.
+
+## Repository Map
+
+| Document | Contents |
+| --- | --- |
+| [SECURITY.md](SECURITY.md) | Trust boundaries, threat model, known limitations, host integration contract |
+| [REVIEW.md](REVIEW.md) | External reviewer quickstart and requested review scope |
+| [VALIDATION.md](VALIDATION.md) | Host-side validation record and open external gates |
+| [CHANGELOG.md](CHANGELOG.md) | Release notes |
