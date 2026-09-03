@@ -329,6 +329,9 @@ impl SessionManager {
     }
 
     /// Records a successfully authenticated inbound nonce in the replay window.
+    ///
+    /// Sequences older than the trailing 64-packet window are ignored; `check_rx_nonce`
+    /// already rejects them, so there is no window bit left to record.
     pub fn commit_rx_nonce(&mut self, host_nonce: &[u8; 12]) {
         let mut sequence_bytes = [0u8; 8];
         sequence_bytes.copy_from_slice(&host_nonce[..8]);
@@ -342,7 +345,11 @@ impl SessionManager {
             };
             self.rx_counter = sequence;
         } else {
-            self.rx_window |= 1u64 << (self.rx_counter - sequence);
+            let offset = self.rx_counter - sequence;
+            if offset >= 64 {
+                return;
+            }
+            self.rx_window |= 1u64 << offset;
         }
     }
 
@@ -551,5 +558,33 @@ mod tests {
             Err(CryptoError::InvalidState)
         );
         assert_eq!(nonce, [0xA5; 12]);
+    }
+
+    #[test]
+    fn commit_leaves_replay_state_intact_for_sequences_below_the_window() {
+        let mut manager = SessionManager::new();
+        manager.rx_counter = 100;
+        manager.rx_window = 1;
+
+        let mut stale_nonce = [0u8; 12];
+        stale_nonce[..8].copy_from_slice(&1u64.to_le_bytes());
+        assert_eq!(
+            manager.check_rx_nonce(&stale_nonce),
+            Err(CryptoError::InvalidState)
+        );
+
+        manager.commit_rx_nonce(&stale_nonce);
+        assert_eq!(manager.rx_counter, 100);
+        assert_eq!(manager.rx_window, 1);
+
+        let mut in_window_nonce = [0u8; 12];
+        in_window_nonce[..8].copy_from_slice(&99u64.to_le_bytes());
+        assert_eq!(manager.check_rx_nonce(&in_window_nonce), Ok(()));
+        manager.commit_rx_nonce(&in_window_nonce);
+        assert_eq!(manager.rx_window, 0b11);
+        assert_eq!(
+            manager.check_rx_nonce(&in_window_nonce),
+            Err(CryptoError::InvalidState)
+        );
     }
 }

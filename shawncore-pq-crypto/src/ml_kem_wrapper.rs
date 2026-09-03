@@ -95,7 +95,8 @@ pub fn ml_kem_decapsulate(
     dk: &DecapsKey1024,
     ct: &Ciphertext1024,
 ) -> Result<SharedKey1024, CryptoError> {
-    // The underlying ml_kem crate guarantees constant-time decapsulation.
+    // Decapsulation timing behavior is a property of the selected `ml-kem`
+    // dependency and has not been independently measured here.
     let ss = ml_kem::kem::Decapsulate::decapsulate(&dk.0, &ct.0.into())
         .map_err(|_| CryptoError::InvalidState)?;
 
