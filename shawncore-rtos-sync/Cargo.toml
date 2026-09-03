@@ -1,0 +1,13 @@
+[package]
+name = "shawncore-rtos-sync"
+version = "12.2.0"
+edition = "2021"
+rust-version = "1.85"
+description = "No-std deterministic synchronization and DMA primitives for embedded RTOS systems"
+repository = "https://github.com/shawnphillips005AI/ShawnCore-Libraries"
+documentation = "https://docs.rs/shawncore-rtos-sync"
+keywords = ["no-std", "rtos", "dma", "spsc", "embedded"]
+categories = ["embedded", "no-std"]
+
+[dependencies]
+zeroize = { version = "1.7", default-features = false, features = ["zeroize_derive"] }

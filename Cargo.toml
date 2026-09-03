@@ -3,4 +3,8 @@ members = [
     "shawncore-pq-crypto",
     "shawncore-rtos-sync"
 ]
+exclude = ["fuzz"]
 resolver = "2"
+
+[profile.release]
+panic = "abort"
