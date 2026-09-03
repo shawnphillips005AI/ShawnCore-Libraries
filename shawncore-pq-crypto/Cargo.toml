@@ -15,7 +15,6 @@ ml-kem = { version = "0.2.3", default-features = false, features = ["determinist
 ml-dsa = { version = "0.1.1", default-features = false, features = ["zeroize"] }
 x25519-dalek = { version = "2.0", default-features = false, features = ["static_secrets", "zeroize"] }
 sha2 = { version = "0.10", default-features = false }
-sha3 = { version = "0.10", default-features = false }
 hmac = "0.12"
 hkdf = "0.12"
 zeroize = { version = "1.7", default-features = false, features = ["zeroize_derive"] }

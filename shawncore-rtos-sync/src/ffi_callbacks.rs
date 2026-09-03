@@ -85,7 +85,8 @@ pub unsafe extern "C" fn shawncore_rtos_register_read_monotonic_clock(
     );
 }
 
-/// Registers the host OS callback for invalidating a cache range before a DMA read.
+/// Registers the host OS callback for invalidating a cache range.
+/// It is invoked before the CPU-side consumer reads a slot that a device may have written.
 ///
 /// # Safety
 /// `cb` must be a valid function pointer to a C-ABI compatible function.
@@ -97,7 +98,8 @@ pub unsafe extern "C" fn shawncore_rtos_register_cache_invalidate(cb: Option<Cac
     );
 }
 
-/// Registers the host OS callback for flushing a cache range after a DMA write.
+/// Registers the host OS callback for flushing a cache range.
+/// It is invoked after the CPU-side producer writes a slot that a device may read.
 ///
 /// # Safety
 /// `cb` must be a valid function pointer to a C-ABI compatible function.
@@ -209,7 +211,7 @@ pub(crate) fn host_cache_invalidate(ptr: *const u8, len: usize) {
     }
 }
 
-/// Flushes a host cache range after the producer writes a DMA slot.
+/// Flushes a host cache range after the CPU-side producer writes a slot.
 pub(crate) fn host_cache_flush(ptr: *const u8, len: usize) {
     let cb_ptr = CACHE_FLUSH_CB.load(Ordering::Acquire);
     if cb_ptr.is_null() {

@@ -172,7 +172,7 @@ impl SessionManager {
         let hybrid_key_res =
             derive_hybrid_key(&mut pq_secret, &mut classical_secret, salt, &transcript);
         transcript.zeroize();
-        let mut hybrid_key_64 = match hybrid_key_res {
+        let mut hybrid_key_128 = match hybrid_key_res {
             Ok(k) => k,
             Err(e) => {
                 return Err(e);
@@ -181,10 +181,10 @@ impl SessionManager {
 
         let mut tx_key = [0u8; 64];
         let mut rx_key = [0u8; 64];
-        tx_key[..32].copy_from_slice(&hybrid_key_64[..32]);
-        tx_key[32..].copy_from_slice(&hybrid_key_64[96..]);
-        rx_key.copy_from_slice(&hybrid_key_64[32..96]);
-        hybrid_key_64.zeroize();
+        tx_key[..32].copy_from_slice(&hybrid_key_128[..32]);
+        tx_key[32..].copy_from_slice(&hybrid_key_128[96..]);
+        rx_key.copy_from_slice(&hybrid_key_128[32..96]);
+        hybrid_key_128.zeroize();
 
         self.zeroize_session();
         self.tx_key = Some(tx_key);
@@ -261,7 +261,7 @@ impl SessionManager {
         );
         transcript.zeroize();
 
-        let mut hybrid_key_64 = match hybrid_res {
+        let mut hybrid_key_128 = match hybrid_res {
             Ok(k) => k,
             Err(e) => {
                 ml_kem_entropy.zeroize();
@@ -272,10 +272,10 @@ impl SessionManager {
 
         let mut tx_key = [0u8; 64];
         let mut rx_key = [0u8; 64];
-        tx_key.copy_from_slice(&hybrid_key_64[32..96]);
-        rx_key[..32].copy_from_slice(&hybrid_key_64[..32]);
-        rx_key[32..].copy_from_slice(&hybrid_key_64[96..]);
-        hybrid_key_64.zeroize();
+        tx_key.copy_from_slice(&hybrid_key_128[32..96]);
+        rx_key[..32].copy_from_slice(&hybrid_key_128[..32]);
+        rx_key[32..].copy_from_slice(&hybrid_key_128[96..]);
+        hybrid_key_128.zeroize();
 
         self.zeroize_session();
         self.tx_key = Some(tx_key);
