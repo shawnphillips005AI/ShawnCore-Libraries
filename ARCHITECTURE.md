@@ -83,6 +83,11 @@ of hardware assumptions in the system.** There are seven of them:
 `panic` · `disable_interrupts` · `restore_interrupts` · `cache_flush` ·
 `cache_invalidate` · `monotonic_clock` · `pet_watchdog`
 
+Callbacks are one-way platform services: registration or replacement must not
+race invocation; callbacks remain valid until all invocations stop; and they do
+not re-enter ShawnCore. This keeps platform work distinct from the library's
+serialized state and callback registry contracts.
+
 ### Why three crates
 
 - **`shawncore-pq-crypto`** and **`shawncore-rtos-sync`** are independent. Neither
@@ -461,6 +466,10 @@ Every entry point follows the same rules, which makes the surface auditable:
   be non-null, aligned, and valid for the whole call.
 - Output objects are validated for overlap against inputs **before** any write,
   so a rejected call never partially clobbers caller memory.
+- Opaque control objects, mutable outputs, and queue/DMA backing storage must
+    be distinct ranges unless an API explicitly documents in-place use. An
+    initializer therefore rejects control storage inside its backing region, and
+    a result API rejects an output that points into its live control object.
 - `#[forbid(unsafe_op_in_unsafe_fn)]` is set crate-wide: every raw-pointer
   dereference sits in an explicit, individually justified `unsafe` block.
 
@@ -549,7 +558,7 @@ fail-safe response; the handler does not return.
 | State machine | Lock-free CAS retry | Transition table |
 | Scheduler | Single owner per core instance | `&mut self` |
 | Crypto spinlock | IRQ-disable then spin | Host IRQ callbacks |
-| Callback registries | `AtomicPtr`, `SeqCst` | Registration must not race invocation |
+| Callback registries | `AtomicPtr`, `SeqCst` | Registration must not race invocation; callbacks are non-reentrant |
 
 ---
 

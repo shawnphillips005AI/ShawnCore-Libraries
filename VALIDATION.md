@@ -1,7 +1,7 @@
 # Validation Record
 
-This record applies to the ShawnCore-Libraries working tree evaluated on
-2026-09-03 in an Ubuntu 24.04.4 development container. The repository pins
+This record applies to ShawnCore-Libraries 12.3.1 evaluated on 2026-09-03 in an
+Ubuntu 24.04.4 development container. The repository pins
 Rust 1.85.0, the `rustfmt`/`clippy` components, and the `aarch64-unknown-none`
 target in `rust-toolchain.toml`.
 
@@ -14,6 +14,7 @@ hardware behavior, certification, production approval, or independent review.
 | --- | --- | --- |
 | `cargo fmt --all -- --check` | PASS | Actually executed and passed. |
 | `cargo fmt --manifest-path fuzz/Cargo.toml -- --check` | PASS | Actually executed and passed. |
+| `cargo fmt --manifest-path fuzz/Cargo.toml -- --check` | PASS | Actually executed and passed. |
 | `cargo check --workspace --all-targets` | PASS | Actually executed and passed. |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | PASS | Actually executed and passed. |
 | `cargo build --workspace --release` | PASS | Actually executed and passed. |
@@ -24,7 +25,7 @@ hardware behavior, certification, production approval, or independent review.
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets` | PASS | Actually executed and passed: 49 unit tests (29 crypto, 20 RTOS); the FFI facade has no unit tests. |
+| `cargo test --workspace --all-targets` | PASS | Actually executed and passed: 56 unit tests (31 crypto, 25 RTOS); the FFI facade has no unit tests. |
 
 The executed tests cover AEAD and in-place round trips, authentication failure,
 FFI null/zero-length/overlap handling, session re-establishment, replay,
@@ -37,6 +38,12 @@ decoded ML-KEM key is used to encapsulate and the original decapsulation key
 recovers the same secret; a decoded X25519 key produces the same Diffie-Hellman
 output as the peer; a decoded ML-DSA key verifies a signature decoded from its
 own wire form and rejects a single-bit mutation of it.
+
+The 12.3.1 regressions reject RTOS control-object/backing-storage aliasing,
+RTOS result/control-object aliasing without consuming the queued item, DMA
+allocation result aliasing, and ML-KEM output/public-key aliasing. A bounded
+reentrant cache-callback test confirms the entropy pool releases its spinlock
+before dispatching cache maintenance.
 
 ## FFI VALIDATION
 
@@ -73,7 +80,7 @@ duration; it is not proof of security.
 | Area | Result | Scope |
 | --- | --- | --- |
 | Unsafe code | REVIEWED | Raw pointers, FFI storage, callback conversion, stack canaries, queue payload access, and DMA byte zeroization were inspected. |
-| FFI | REVIEWED | Null and zero-length conventions, overlap checks, opaque lifecycle, alignment, callback ABI, and session-manager aliasing were inspected. |
+| FFI | REVIEWED | Null and zero-length conventions, input/output/control/backing overlap checks, opaque lifecycle, alignment, callback ABI, and session-manager aliasing were inspected. |
 | Concurrency | MODEL PASS | SPSC ownership and Acquire/Release publication were reasoned about under the Rust memory model. No formal model checker was run. |
 | DMA/cache | REVIEWED | Cache callback transitions and the limits of page alignment/atomics were inspected; hardware coherency was not tested. |
 | Crypto | REVIEWED | AEAD lengths/authentication, X25519 checks, 128-byte hybrid KDF, directional key assignment, and cleanup paths were inspected. |

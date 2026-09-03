@@ -27,5 +27,15 @@ pub fn secure_zeroize(data: &mut [u8]) {
 /// validation determine the required flush, invalidate, and barrier sequence.
 #[inline(always)]
 pub(crate) fn secure_cache_flush(data: &[u8]) {
-    host_cache_flush(data.as_ptr(), data.len());
+    // SAFETY: A slice always denotes a valid live memory range.
+    unsafe { secure_cache_flush_raw(data.as_ptr(), data.len()) };
+}
+
+/// Flushes a valid live raw memory range from the CPU caches to main memory.
+///
+/// # Safety
+/// `ptr` must be valid for reads of `len` bytes throughout the callback invocation.
+#[inline(always)]
+pub(crate) unsafe fn secure_cache_flush_raw(ptr: *const u8, len: usize) {
+    host_cache_flush(ptr, len);
 }

@@ -7,6 +7,35 @@ qualification, or production readiness.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [12.3.1] — 2026-09-03
+
+Security hardening release for the C ABI and entropy accumulator.
+
+### Fixed
+
+- RTOS queue and DMA initializers now reject backing storage that overlaps their
+  host-owned control object. DMA allocation result pointers are mutually
+  distinct and cannot overwrite the pool; queue result pointers cannot
+  overwrite a live queue control object.
+- ML-KEM encapsulation now rejects shared-secret or ciphertext output storage
+  that overlaps its public-key input, preserving the caller's public key on a
+  rejected call.
+- Entropy pool cache-maintenance callbacks now run after the entropy spinlock
+  is released, preventing callback re-entry from permanently deadlocking the
+  pool. Reseed publication still occurs only after state update and cache
+  maintenance.
+
+### Added
+
+- Seven regressions covering C-ABI control/backing and result/control aliasing,
+  ML-KEM output/input aliasing, and bounded entropy callback re-entry.
+
+### Changed
+
+- The public header and security guide now require non-overlapping control,
+  backing, input, and output storage where applicable, and explicitly prohibit
+  callbacks from re-entering ShawnCore.
+
 ## [12.3.0] — 2026-09-03
 
 Closes a functional gap that blocked C integration, and documents the

@@ -45,12 +45,15 @@ uses the complementary assignment.
   task-stack mapping, writability, lifetime, ownership, and context switching.
 - Opaque C objects require the exported size/alignment functions, one
   initialization, no concurrent destruction/use, and caller-owned valid storage.
+  Control objects, input/output buffers, and queue/DMA backing storage must not
+  overlap unless an API explicitly documents an in-place operation.
 - Values that cross a link use fixed-length wire codecs. In-memory forms are
   expanded and larger than their encodings. Decoding validates length and
   structure only and does not authenticate a peer. Secret key material has no
   serialization entry point.
 - Callback registration can be cleared with `NULL`; replacement must not race
   invocation, and a registered callback must remain valid until all calls stop.
+  Callbacks must not unwind, escape through Rust, or re-enter ShawnCore.
 
 ## Requirements
 

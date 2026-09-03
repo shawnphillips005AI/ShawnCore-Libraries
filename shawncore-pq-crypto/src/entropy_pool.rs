@@ -13,7 +13,7 @@
 use crate::entropy_queue::{EntropyQueue, ENTROPY_CHUNK_SIZE};
 use crate::error::CryptoError;
 use crate::ffi_callbacks::{HostInterruptContext, InterruptContext};
-use crate::zeroize::{secure_cache_flush, secure_zeroize};
+use crate::zeroize::{secure_cache_flush_raw, secure_zeroize};
 use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -140,22 +140,32 @@ impl EntropyPool {
     /// is continuously seeded during idle periods.
     pub fn mix_entropy(&self) {
         let mut chunk = [0u8; ENTROPY_CHUNK_SIZE];
-        let mut mixed = false;
+        let mixed = {
+            let mut guard = self.pool.lock();
+            let mut hasher = Sha384::new();
+            hasher.update(*guard);
 
-        let mut guard = self.pool.lock();
-        let mut hasher = Sha384::new();
-        hasher.update(*guard);
+            let mut mixed = false;
+            while unsafe { GLOBAL_ENTROPY_QUEUE.pop(&mut chunk) } {
+                hasher.update(chunk);
+                secure_zeroize(&mut chunk);
+                mixed = true;
+            }
 
-        while unsafe { GLOBAL_ENTROPY_QUEUE.pop(&mut chunk) } {
-            hasher.update(chunk);
-            secure_zeroize(&mut chunk);
-            mixed = true;
-        }
+            if mixed {
+                let result = hasher.finalize();
+                guard.copy_from_slice(&result);
+            }
+            mixed
+        };
 
         if mixed {
-            let result = hasher.finalize();
-            guard.copy_from_slice(&result);
-            secure_cache_flush(&guard[..]);
+            unsafe {
+                secure_cache_flush_raw(
+                    self.pool.data.get().cast(),
+                    core::mem::size_of::<[u8; 48]>(),
+                )
+            };
             self.reseed_count.fetch_add(1, Ordering::Release);
         }
     }
@@ -180,33 +190,97 @@ impl EntropyPool {
             return Err(CryptoError::EntropyStarvation);
         }
 
-        let mut guard = self.pool.lock();
-        let mut offset = 0;
+        {
+            let mut guard = self.pool.lock();
+            let mut offset = 0;
 
-        while offset < out.len() {
-            // Forward Secrecy: Domain separation for output generation
-            let mut out_hasher = Sha384::new();
-            out_hasher.update([0x00]); // Domain separator for output
-            out_hasher.update(*guard);
-            let out_result = out_hasher.finalize();
+            while offset < out.len() {
+                // Forward Secrecy: Domain separation for output generation
+                let mut out_hasher = Sha384::new();
+                out_hasher.update([0x00]); // Domain separator for output
+                out_hasher.update(*guard);
+                let out_result = out_hasher.finalize();
 
-            // Forward Secrecy: Domain separation for internal state update
-            let mut state_hasher = Sha384::new();
-            state_hasher.update([0x01]); // Domain separator for state update
-            state_hasher.update(*guard);
-            let state_result = state_hasher.finalize();
+                // Forward Secrecy: Domain separation for internal state update
+                let mut state_hasher = Sha384::new();
+                state_hasher.update([0x01]); // Domain separator for state update
+                state_hasher.update(*guard);
+                let state_result = state_hasher.finalize();
 
-            let copy_len = core::cmp::min(48, out.len() - offset);
-            out[offset..offset + copy_len].copy_from_slice(&out_result[..copy_len]);
+                let copy_len = core::cmp::min(48, out.len() - offset);
+                out[offset..offset + copy_len].copy_from_slice(&out_result[..copy_len]);
 
-            // Update pool state to the new forward-secret hash
-            guard.copy_from_slice(&state_result);
+                // Update pool state to the new forward-secret hash
+                guard.copy_from_slice(&state_result);
 
-            offset += copy_len;
+                offset += copy_len;
+            }
         }
 
-        secure_cache_flush(&guard[..]);
+        unsafe {
+            secure_cache_flush_raw(
+                self.pool.data.get().cast(),
+                core::mem::size_of::<[u8; 48]>(),
+            )
+        };
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ffi_callbacks::{
+        shawncore_crypto_register_cache_flush, shawncore_crypto_register_disable_interrupts,
+        shawncore_crypto_register_restore_interrupts,
+    };
+    use core::ptr;
+    use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    static REENTRY_TEST_POOL: EntropyPool = EntropyPool::new();
+    static REENTRY_CACHE_RANGE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
+    static REENTERED: AtomicBool = AtomicBool::new(false);
+
+    extern "C" fn disable_interrupts() -> usize {
+        0
+    }
+
+    extern "C" fn restore_interrupts(_: usize) {}
+
+    extern "C" fn reentrant_cache_flush(ptr: *const u8, _: usize) {
+        if ptr != REENTRY_CACHE_RANGE.load(Ordering::Acquire)
+            || REENTERED.swap(true, Ordering::AcqRel)
+        {
+            return;
+        }
+        REENTRY_TEST_POOL.mix_entropy();
+    }
+
+    #[test]
+    fn cache_callback_can_reenter_entropy_mixing_without_deadlocking() {
+        unsafe {
+            shawncore_crypto_register_disable_interrupts(Some(disable_interrupts));
+            shawncore_crypto_register_restore_interrupts(Some(restore_interrupts));
+            shawncore_crypto_register_cache_flush(Some(reentrant_cache_flush));
+        }
+        REENTERED.store(false, Ordering::Release);
+        REENTRY_CACHE_RANGE.store(REENTRY_TEST_POOL.pool.data.get().cast(), Ordering::Release);
+
+        let (sender, receiver) = mpsc::channel();
+        let handle = std::thread::spawn(move || {
+            unsafe { GLOBAL_ENTROPY_QUEUE.push(&[0x42; ENTROPY_CHUNK_SIZE]) }.unwrap();
+            REENTRY_TEST_POOL.mix_entropy();
+            sender
+                .send(REENTRY_TEST_POOL.reseed_count.load(Ordering::Acquire))
+                .unwrap();
+        });
+
+        assert_eq!(receiver.recv_timeout(Duration::from_secs(1)).unwrap(), 1);
+        handle.join().unwrap();
+        assert!(REENTERED.load(Ordering::Acquire));
+        REENTRY_CACHE_RANGE.store(ptr::null_mut(), Ordering::Release);
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "shawncore-ffi"
-version = "12.3.0"
+version = "12.3.1"
 edition = "2021"
 rust-version = "1.85"
 description = "C-linkable static library facade for ShawnCore embedded prototypes"
@@ -12,5 +12,5 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-shawncore-pq-crypto = { version = "12.3.0", path = "../shawncore-pq-crypto" }
-shawncore-rtos-sync = { version = "12.3.0", path = "../shawncore-rtos-sync" }
+shawncore-pq-crypto = { version = "12.3.1", path = "../shawncore-pq-crypto" }
+shawncore-rtos-sync = { version = "12.3.1", path = "../shawncore-rtos-sync" }

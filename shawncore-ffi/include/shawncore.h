@@ -11,10 +11,14 @@
  *
  * A pointer paired with a zero length may be NULL; all other data pointers
  * must be non-NULL, correctly aligned, and valid for the complete call.
+ * Unless a function explicitly states otherwise, input, output, opaque-control,
+ * and backing-storage ranges must be mutually non-overlapping. Queue and DMA
+ * initializers require separate control-object and backing-storage allocations.
  * Callback registration accepts NULL to clear a callback. Register or replace
  * callbacks only while no operation can invoke them. Registered callbacks must
  * remain valid until all possible invocations have stopped; they must not
- * unwind, throw, longjmp, or otherwise escape through Rust.
+ * unwind, throw, longjmp, re-enter a ShawnCore function, or otherwise escape
+ * through Rust.
  */
 
 #include <stddef.h>
@@ -143,6 +147,7 @@ shawncore_crypto_err shawncore_crypto_ml_kem_keygen(
     shawncore_crypto_ml_kem_publickey *out_pk,
     shawncore_crypto_ml_kem_decapskey *out_dk);
 shawncore_crypto_err shawncore_crypto_ml_kem_decapskey_destroy(shawncore_crypto_ml_kem_decapskey *dk);
+/* Outputs must not overlap pk, entropy, or each other. */
 shawncore_crypto_err shawncore_crypto_ml_kem_encapsulate(
     const shawncore_crypto_ml_kem_publickey *pk,
     const uint8_t *entropy,
@@ -391,6 +396,7 @@ shawncore_rtos_err shawncore_rtos_dmapool2k_init(
     size_t size_in_bytes);
 /* Free only after any device has released the allocation to the CPU. */
 shawncore_rtos_err shawncore_rtos_dmapool2k_destroy(shawncore_rtos_dmapool2k *pool);
+/* Result pointers must not overlap the pool or each other. */
 shawncore_rtos_err shawncore_rtos_dmapool2k_allocate(
     const shawncore_rtos_dmapool2k *pool,
     size_t *out_idx,
@@ -411,6 +417,7 @@ shawncore_rtos_err shawncore_rtos_spsc_telemetry_destroy(shawncore_rtos_spsc_tel
 shawncore_rtos_err shawncore_rtos_spsc_telemetry_push(
     const shawncore_rtos_spsc_telemetry *queue,
     const shawncore_rtos_telemetry_event *event);
+/* out_event must not overlap queue. */
 shawncore_rtos_err shawncore_rtos_spsc_telemetry_pop(
     const shawncore_rtos_spsc_telemetry *queue,
     shawncore_rtos_telemetry_event *out_event);
@@ -425,6 +432,7 @@ shawncore_rtos_err shawncore_rtos_ringbuffer_ew_destroy(shawncore_rtos_ringbuffe
 shawncore_rtos_err shawncore_rtos_ringbuffer_ew_push(
     const shawncore_rtos_ringbuffer_ew *ring_buffer,
     const shawncore_rtos_ew_command *item);
+/* out_item must not overlap ring_buffer. */
 shawncore_rtos_err shawncore_rtos_ringbuffer_ew_pop(
     const shawncore_rtos_ringbuffer_ew *ring_buffer,
     shawncore_rtos_ew_command *out_item);
@@ -442,6 +450,7 @@ shawncore_rtos_err shawncore_rtos_spsc_fft_destroy(shawncore_rtos_spsc_fft *queu
 shawncore_rtos_err shawncore_rtos_spsc_fft_push(
     const shawncore_rtos_spsc_fft *queue,
     const shawncore_rtos_fft_result *item);
+/* out_item must not overlap queue. */
 shawncore_rtos_err shawncore_rtos_spsc_fft_pop(
     const shawncore_rtos_spsc_fft *queue,
     shawncore_rtos_fft_result *out_item);

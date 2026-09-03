@@ -44,7 +44,7 @@ Every claim below is reproducible from a clean checkout with the commands in
 | **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
 | **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
 | **134 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
-| **49 tests** | Crypto round trips, tampering, replay, reordering, wire round trips, queue reuse, DMA stale generations, scheduler bounds. |
+| **56 tests** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. |
 | **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
 | **Fuzzed** | `ffi_aead_fuzz` with an 87-input regression corpus; CI runs 10,000 executions. |
 | **Bare-metal clean** | `cargo check --target aarch64-unknown-none` with `clippy -D warnings`. |

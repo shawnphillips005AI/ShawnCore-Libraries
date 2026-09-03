@@ -1,6 +1,6 @@
 [package]
 name = "shawncore-pq-crypto"
-version = "12.3.0"
+version = "12.3.1"
 edition = "2021"
 rust-version = "1.85"
 description = "No-std hybrid post-quantum cryptography and C FFI for embedded systems"

@@ -139,6 +139,11 @@ Callback rules:
   call. Registration may be cleared with `NULL`, but replacement or clearing
   **must not race** an in-flight invocation.
 - A callback must not unwind, throw a C++ exception, or `longjmp` through Rust.
+- A callback must not re-enter any ShawnCore function. Callback dispatch is not
+  a recursive API and re-entry can violate serialized queue roles, object
+  lifecycle, and callback-registration assumptions. Entropy cache maintenance
+  runs after its internal lock is released as a defensive deadlock prevention;
+  this does not relax the non-reentrancy contract.
 - The panic hook must implement a platform fail-safe response. Panic aborts; it
   does not return.
 - `shawncore-ffi/../integration/martac_hal_stubs.c` is compile-only scaffolding.
@@ -154,6 +159,11 @@ size_t align = shawncore_crypto_session_manager_alignof();
 ```
 
 - Storage must satisfy both the reported size and the reported alignment.
+- Opaque objects, input buffers, output buffers, and queue/DMA backing storage
+  must occupy separate non-overlapping ranges unless a function explicitly
+  documents an in-place operation. In particular, a queue or DMA pool's control
+  object must not be placed within its backing region, and result pointers must
+  not point into a live control object.
 - Initialize exactly once. Destroy exactly once, only after every concurrent
   user has stopped.
 - Do not copy, move, or memcpy an initialized object.

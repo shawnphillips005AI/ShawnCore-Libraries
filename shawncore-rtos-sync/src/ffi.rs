@@ -1,3 +1,4 @@
+#![allow(clippy::items_after_test_module)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -128,6 +129,26 @@ fn valid_dma_region<T>(memory_base: *mut T, size_in_bytes: usize, element_count:
         .and_then(|required_size| (size_in_bytes >= required_size).then_some(required_size))
         .and_then(|required_size| (memory_base as usize).checked_add(required_size))
         .is_some()
+}
+
+fn ranges_overlap<T, U>(
+    first: *const T,
+    first_len: usize,
+    second: *const U,
+    second_len: usize,
+) -> bool {
+    let Some(first_end) = (first as usize).checked_add(first_len) else {
+        return true;
+    };
+    let Some(second_end) = (second as usize).checked_add(second_len) else {
+        return true;
+    };
+
+    (first as usize) < second_end && (second as usize) < first_end
+}
+
+fn object_overlaps_backing<T, U>(object: *const T, backing: *const U, backing_len: usize) -> bool {
+    ranges_overlap(object, core::mem::size_of::<T>(), backing, backing_len)
 }
 
 // ============================================================================
@@ -348,7 +369,10 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_init(
     memory_base: *mut u8,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if pool.is_null() || !valid_dma_region(memory_base, size_in_bytes, 256) {
+    if pool.is_null()
+        || !valid_dma_region(memory_base, size_in_bytes, 256)
+        || object_overlaps_backing(pool, memory_base, size_in_bytes)
+    {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -362,6 +386,245 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_init(
     match unsafe { pool_ref.init(typed_base, size_in_bytes) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(e) => e.into(),
+    }
+}
+
+#[cfg(test)]
+mod ffi_security_tests {
+    use super::*;
+    use crate::ffi_callbacks::{
+        shawncore_rtos_register_cache_flush, shawncore_rtos_register_cache_invalidate,
+    };
+    use core::mem::MaybeUninit;
+    use std::boxed::Box;
+
+    #[repr(align(4096))]
+    struct DmaBacking([u8; 256 * 2048]);
+
+    #[repr(align(4096))]
+    struct DmaBackingWithControl([u8; 256 * 2048 + core::mem::size_of::<DmaPool2K>()]);
+
+    #[repr(align(4096))]
+    struct PageAligned<const N: usize>([u8; N]);
+
+    fn page_aligned_backing<const N: usize>() -> Box<MaybeUninit<PageAligned<N>>> {
+        Box::new_uninit()
+    }
+
+    extern "C" fn test_cache_operation(_: *const u8, _: usize) {}
+
+    fn install_cache_callbacks() {
+        unsafe {
+            shawncore_rtos_register_cache_flush(Some(test_cache_operation));
+            shawncore_rtos_register_cache_invalidate(Some(test_cache_operation));
+        }
+    }
+
+    #[test]
+    fn dmapool_init_rejects_control_object_inside_backing_storage() {
+        let mut backing = Box::new(DmaBacking([0xA5; 256 * 2048]));
+        let base = backing.0.as_mut_ptr();
+
+        assert_eq!(
+            unsafe { shawncore_rtos_dmapool2k_init(base.cast(), base, backing.0.len()) },
+            ShawncoreRtosErr::InvalidMemory
+        );
+        assert_eq!(unsafe { base.read() }, 0xA5);
+    }
+
+    #[test]
+    fn dmapool_init_rejects_control_object_in_excess_backing_capacity() {
+        let mut backing = Box::new(DmaBackingWithControl(
+            [0xA5; 256 * 2048 + core::mem::size_of::<DmaPool2K>()],
+        ));
+        let base = backing.0.as_mut_ptr();
+        let pool = unsafe { base.add(256 * 2048).cast::<DmaPool2K>() };
+
+        assert_eq!(
+            unsafe { shawncore_rtos_dmapool2k_init(pool, base, backing.0.len()) },
+            ShawncoreRtosErr::InvalidMemory
+        );
+        assert_eq!(unsafe { base.add(256 * 2048).read() }, 0xA5);
+    }
+
+    #[test]
+    fn queue_initializers_reject_control_object_inside_backing_storage() {
+        const TELEMETRY_BYTES: usize = 64 * core::mem::size_of::<SpscQueueTelemetrySlot>();
+        const RING_BYTES: usize = 1024 * core::mem::size_of::<CacheAlignedSlot<EwCommand>>();
+        const FFT_BYTES: usize = 256 * core::mem::size_of::<SpscQueueFftSlot>();
+
+        let mut telemetry_backing = page_aligned_backing::<TELEMETRY_BYTES>();
+        let telemetry_base = telemetry_backing
+            .as_mut_ptr()
+            .cast::<SpscQueueTelemetrySlot>();
+        assert_eq!(
+            unsafe {
+                shawncore_rtos_spsc_telemetry_init(
+                    telemetry_base.cast(),
+                    telemetry_base,
+                    TELEMETRY_BYTES,
+                )
+            },
+            ShawncoreRtosErr::InvalidMemory
+        );
+
+        let mut ring_backing = page_aligned_backing::<RING_BYTES>();
+        let ring_base = ring_backing
+            .as_mut_ptr()
+            .cast::<CacheAlignedSlot<EwCommand>>();
+        assert_eq!(
+            unsafe { shawncore_rtos_ringbuffer_ew_init(ring_base.cast(), ring_base, RING_BYTES) },
+            ShawncoreRtosErr::InvalidMemory
+        );
+
+        let mut fft_backing = page_aligned_backing::<FFT_BYTES>();
+        let fft_base = fft_backing.as_mut_ptr().cast::<SpscQueueFftSlot>();
+        assert_eq!(
+            unsafe { shawncore_rtos_spsc_fft_init(fft_base.cast(), fft_base, FFT_BYTES) },
+            ShawncoreRtosErr::InvalidMemory
+        );
+    }
+
+    #[test]
+    fn dmapool_allocate_rejects_result_pointer_overlapping_pool() {
+        install_cache_callbacks();
+        let mut pool_storage = Box::<DmaPool2K>::new_uninit();
+        let pool = pool_storage.as_mut_ptr();
+        let mut backing = Box::new(DmaBacking([0; 256 * 2048]));
+
+        assert_eq!(
+            unsafe { shawncore_rtos_dmapool2k_init(pool, backing.0.as_mut_ptr(), backing.0.len()) },
+            ShawncoreRtosErr::Success
+        );
+
+        let mut generation = 0;
+        let mut buffer = core::ptr::null_mut();
+        assert_eq!(
+            unsafe {
+                shawncore_rtos_dmapool2k_allocate(pool, pool.cast(), &mut generation, &mut buffer)
+            },
+            ShawncoreRtosErr::InvalidMemory
+        );
+
+        let mut index = 0;
+        assert_eq!(
+            unsafe {
+                shawncore_rtos_dmapool2k_allocate(pool, &mut index, &mut generation, &mut buffer)
+            },
+            ShawncoreRtosErr::Success
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_dmapool2k_free(pool, index, generation) },
+            ShawncoreRtosErr::Success
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_dmapool2k_destroy(pool) },
+            ShawncoreRtosErr::Success
+        );
+    }
+
+    #[test]
+    fn queue_results_reject_control_object_overlap_without_consuming_items() {
+        install_cache_callbacks();
+        const TELEMETRY_BYTES: usize = 64 * core::mem::size_of::<SpscQueueTelemetrySlot>();
+        const RING_BYTES: usize = 1024 * core::mem::size_of::<CacheAlignedSlot<EwCommand>>();
+        const FFT_BYTES: usize = 256 * core::mem::size_of::<SpscQueueFftSlot>();
+
+        let mut telemetry_storage = Box::<SpscQueueTelemetry>::new_uninit();
+        let telemetry = telemetry_storage.as_mut_ptr();
+        let mut telemetry_backing = page_aligned_backing::<TELEMETRY_BYTES>();
+        assert_eq!(
+            unsafe {
+                shawncore_rtos_spsc_telemetry_init(
+                    telemetry,
+                    telemetry_backing.as_mut_ptr().cast(),
+                    TELEMETRY_BYTES,
+                )
+            },
+            ShawncoreRtosErr::Success
+        );
+        let telemetry_event = TelemetryEvent::default();
+        assert_eq!(
+            unsafe { shawncore_rtos_spsc_telemetry_push(telemetry, &telemetry_event) },
+            ShawncoreRtosErr::Success
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_spsc_telemetry_pop(telemetry, telemetry.cast()) },
+            ShawncoreRtosErr::InvalidMemory
+        );
+        let mut popped_telemetry = MaybeUninit::uninit();
+        assert_eq!(
+            unsafe { shawncore_rtos_spsc_telemetry_pop(telemetry, popped_telemetry.as_mut_ptr()) },
+            ShawncoreRtosErr::Success
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_spsc_telemetry_destroy(telemetry) },
+            ShawncoreRtosErr::Success
+        );
+
+        let mut ring_storage = Box::<RingBufferEwCommand>::new_uninit();
+        let ring = ring_storage.as_mut_ptr();
+        let mut ring_backing = page_aligned_backing::<RING_BYTES>();
+        assert_eq!(
+            unsafe {
+                shawncore_rtos_ringbuffer_ew_init(
+                    ring,
+                    ring_backing.as_mut_ptr().cast(),
+                    RING_BYTES,
+                )
+            },
+            ShawncoreRtosErr::Success
+        );
+        let command = EwCommand::default();
+        assert_eq!(
+            unsafe { shawncore_rtos_ringbuffer_ew_push(ring, &command) },
+            ShawncoreRtosErr::Success
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_ringbuffer_ew_peek(ring, ring.cast()) },
+            ShawncoreRtosErr::InvalidMemory
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_ringbuffer_ew_pop(ring, ring.cast()) },
+            ShawncoreRtosErr::InvalidMemory
+        );
+        let mut popped_command = MaybeUninit::uninit();
+        assert_eq!(
+            unsafe { shawncore_rtos_ringbuffer_ew_pop(ring, popped_command.as_mut_ptr()) },
+            ShawncoreRtosErr::Success
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_ringbuffer_ew_destroy(ring) },
+            ShawncoreRtosErr::Success
+        );
+
+        let mut fft_storage = Box::<SpscQueueFft>::new_uninit();
+        let fft = fft_storage.as_mut_ptr();
+        let mut fft_backing = page_aligned_backing::<FFT_BYTES>();
+        assert_eq!(
+            unsafe {
+                shawncore_rtos_spsc_fft_init(fft, fft_backing.as_mut_ptr().cast(), FFT_BYTES)
+            },
+            ShawncoreRtosErr::Success
+        );
+        let result = FftResult::default();
+        assert_eq!(
+            unsafe { shawncore_rtos_spsc_fft_push(fft, &result) },
+            ShawncoreRtosErr::Success
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_spsc_fft_pop(fft, fft.cast()) },
+            ShawncoreRtosErr::InvalidMemory
+        );
+        let mut popped_result = MaybeUninit::uninit();
+        assert_eq!(
+            unsafe { shawncore_rtos_spsc_fft_pop(fft, popped_result.as_mut_ptr()) },
+            ShawncoreRtosErr::Success
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_spsc_fft_destroy(fft) },
+            ShawncoreRtosErr::Success
+        );
     }
 }
 
@@ -397,6 +660,39 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_allocate(
     out_ptr: *mut *mut u8,
 ) -> ShawncoreRtosErr {
     if pool.is_null() || out_idx.is_null() || out_generation.is_null() || out_ptr.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if ranges_overlap(
+        pool,
+        core::mem::size_of::<DmaPool2K>(),
+        out_idx,
+        core::mem::size_of::<usize>(),
+    ) || ranges_overlap(
+        pool,
+        core::mem::size_of::<DmaPool2K>(),
+        out_generation,
+        core::mem::size_of::<u64>(),
+    ) || ranges_overlap(
+        pool,
+        core::mem::size_of::<DmaPool2K>(),
+        out_ptr,
+        core::mem::size_of::<*mut u8>(),
+    ) || ranges_overlap(
+        out_idx,
+        core::mem::size_of::<usize>(),
+        out_generation,
+        core::mem::size_of::<u64>(),
+    ) || ranges_overlap(
+        out_idx,
+        core::mem::size_of::<usize>(),
+        out_ptr,
+        core::mem::size_of::<*mut u8>(),
+    ) || ranges_overlap(
+        out_generation,
+        core::mem::size_of::<u64>(),
+        out_ptr,
+        core::mem::size_of::<*mut u8>(),
+    ) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -467,7 +763,10 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_init(
     memory_base: *mut SpscQueueTelemetrySlot,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if queue.is_null() || !valid_dma_region(memory_base, size_in_bytes, 64) {
+    if queue.is_null()
+        || !valid_dma_region(memory_base, size_in_bytes, 64)
+        || object_overlaps_backing(queue, memory_base, size_in_bytes)
+    {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -538,6 +837,14 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_pop(
     if queue.is_null() || out_event.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if ranges_overlap(
+        queue,
+        core::mem::size_of::<SpscQueueTelemetry>(),
+        out_event,
+        core::mem::size_of::<TelemetryEvent>(),
+    ) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     let queue_ref = unsafe { &*queue };
 
@@ -584,7 +891,10 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_init(
     memory_base: *mut CacheAlignedSlot<EwCommand>,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if rb.is_null() || !valid_dma_region(memory_base, size_in_bytes, 1024) {
+    if rb.is_null()
+        || !valid_dma_region(memory_base, size_in_bytes, 1024)
+        || object_overlaps_backing(rb, memory_base, size_in_bytes)
+    {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -655,6 +965,14 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_pop(
     if rb.is_null() || out_item.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if ranges_overlap(
+        rb,
+        core::mem::size_of::<RingBufferEwCommand>(),
+        out_item,
+        core::mem::size_of::<EwCommand>(),
+    ) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     let rb_ref = unsafe { &*rb };
 
@@ -684,6 +1002,14 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_peek(
     out_item: *mut EwCommand,
 ) -> ShawncoreRtosErr {
     if rb.is_null() || out_item.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if ranges_overlap(
+        rb,
+        core::mem::size_of::<RingBufferEwCommand>(),
+        out_item,
+        core::mem::size_of::<EwCommand>(),
+    ) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -733,7 +1059,10 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_init(
     memory_base: *mut SpscQueueFftSlot,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if queue.is_null() || !valid_dma_region(memory_base, size_in_bytes, 256) {
+    if queue.is_null()
+        || !valid_dma_region(memory_base, size_in_bytes, 256)
+        || object_overlaps_backing(queue, memory_base, size_in_bytes)
+    {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -802,6 +1131,14 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_pop(
     out_item: *mut FftResult,
 ) -> ShawncoreRtosErr {
     if queue.is_null() || out_item.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if ranges_overlap(
+        queue,
+        core::mem::size_of::<SpscQueueFft>(),
+        out_item,
+        core::mem::size_of::<FftResult>(),
+    ) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 

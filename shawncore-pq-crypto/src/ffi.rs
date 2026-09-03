@@ -635,6 +635,7 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_decapskey_destroy(
 ///
 /// # Safety
 /// All pointers must be valid and non-null. `entropy` must point to exactly 32 bytes.
+/// Output regions must be distinct and must not overlap `pk` or `entropy`.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_ml_kem_encapsulate(
     pk: *const PublicKey1024,
@@ -650,6 +651,16 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_encapsulate(
         core::mem::size_of::<SharedKey1024>(),
         out_ct,
         core::mem::size_of::<Ciphertext1024>(),
+    ) || ranges_overlap(
+        out_shared,
+        core::mem::size_of::<SharedKey1024>(),
+        pk,
+        core::mem::size_of::<PublicKey1024>(),
+    ) || ranges_overlap(
+        out_ct,
+        core::mem::size_of::<Ciphertext1024>(),
+        pk,
+        core::mem::size_of::<PublicKey1024>(),
     ) || ranges_overlap(
         out_shared,
         core::mem::size_of::<SharedKey1024>(),
@@ -1786,5 +1797,42 @@ mod wire_codec_tests {
             },
             ShawncoreCryptoErr::InvalidLength
         );
+    }
+
+    #[test]
+    fn ml_kem_encapsulation_rejects_output_overlapping_public_key() {
+        install_callbacks();
+        let (mut pk, _dk) = crate::ml_kem_wrapper::ml_kem_keygen(&[0x6A; 64]).unwrap();
+        let expected_pk = pk.to_bytes();
+        let pk_ptr = core::ptr::addr_of_mut!(pk);
+        let entropy = [0x3D; 32];
+        let mut ciphertext = MaybeUninit::<Ciphertext1024>::uninit();
+        let mut shared = MaybeUninit::<SharedKey1024>::uninit();
+
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_encapsulate(
+                    pk_ptr.cast_const(),
+                    entropy.as_ptr(),
+                    pk_ptr.cast(),
+                    ciphertext.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::InvalidLength
+        );
+        assert_eq!(pk.to_bytes(), expected_pk);
+
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_encapsulate(
+                    pk_ptr.cast_const(),
+                    entropy.as_ptr(),
+                    shared.as_mut_ptr(),
+                    pk_ptr.cast(),
+                )
+            },
+            ShawncoreCryptoErr::InvalidLength
+        );
+        assert_eq!(pk.to_bytes(), expected_pk);
     }
 }

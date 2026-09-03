@@ -22,6 +22,9 @@ pub mod tcb;
 pub mod telemetry_queue;
 
 #[cfg(test)]
+extern crate std;
+
+#[cfg(test)]
 mod tests {
     use super::bitmap_scheduler::PerCoreScheduler;
     use super::ffi::FftResult;
