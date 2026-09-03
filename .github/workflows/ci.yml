@@ -27,7 +27,7 @@ jobs:
       - run: cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz
       - run: cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include -fsyntax-only integration/martac_hal_stubs.c
       - run: cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include integration/c_api_smoke.c target/release/libshawncore_ffi.a -o /tmp/shawncore-c-api-smoke && /tmp/shawncore-c-api-smoke
-        - run: |
+      - run: |
           grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_[:space:]*]*[[:space:]]+shawncore_(crypto|rtos)_[A-Za-z0-9_]+[[:space:]]*\(' shawncore-ffi/include/shawncore.h | sed -E 's/.*[[:space:]](shawncore_(crypto|rtos)_[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/' | sort -u > /tmp/shawncore-header-function-symbols
           nm -g --defined-only target/release/libshawncore_ffi.a | awk '{print $3}' | grep -E '^shawncore_(crypto|rtos)_' | sort -u > /tmp/shawncore-archive-symbols
           diff -u /tmp/shawncore-header-function-symbols /tmp/shawncore-archive-symbols
