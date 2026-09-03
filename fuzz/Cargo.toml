@@ -10,10 +10,25 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 shawncore-pq-crypto = { path = "../shawncore-pq-crypto" }
+shawncore-rtos-sync = { path = "../shawncore-rtos-sync" }
 
 [[bin]]
 name = "ffi_aead_fuzz"
 path = "fuzz_targets/ffi_aead_fuzz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "session_replay_fuzz"
+path = "fuzz_targets/session_replay_fuzz.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rtos_stateful_fuzz"
+path = "fuzz_targets/rtos_stateful_fuzz.rs"
 test = false
 doc = false
 bench = false

@@ -14,7 +14,6 @@ hardware behavior, certification, production approval, or independent review.
 | --- | --- | --- |
 | `cargo fmt --all -- --check` | PASS | Actually executed and passed. |
 | `cargo fmt --manifest-path fuzz/Cargo.toml -- --check` | PASS | Actually executed and passed. |
-| `cargo fmt --manifest-path fuzz/Cargo.toml -- --check` | PASS | Actually executed and passed. |
 | `cargo check --workspace --all-targets` | PASS | Actually executed and passed. |
 | `cargo clippy --workspace --all-targets --all-features -- -D warnings` | PASS | Actually executed and passed. |
 | `cargo build --workspace --release` | PASS | Actually executed and passed. |
