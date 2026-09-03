@@ -9,8 +9,8 @@
 #   make valgrind   - run the smoke executable under Valgrind
 #   make clean      - remove the executables produced here
 #
-# The Rust static library must be built first:
-#   cargo build -p shawncore-ffi --release
+# `make`, `make smoke`, `make run`, and `make asan` build the Rust static
+# library automatically. `make syntax` checks the HAL template only.
 #
 # Note: the sanitizer/Valgrind targets instrument only the C caller and the
 # linked archive. They do not instrument Rust dependencies unless the archive is
@@ -18,6 +18,7 @@
 
 ROOT      := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 CC        ?= cc
+CARGO     ?= cargo
 CSTD      ?= -std=c11
 CWARN     ?= -Wall -Wextra -Werror
 INCLUDE   := -I $(ROOT)/shawncore-ffi/include
@@ -25,35 +26,41 @@ PROFILE   ?= release
 STATICLIB := $(ROOT)/target/$(PROFILE)/libshawncore_ffi.a
 BUILDDIR  ?= $(ROOT)/target/c-integration
 
+ifeq ($(PROFILE),release)
+CARGO_PROFILE_FLAG := --release
+else ifeq ($(PROFILE),debug)
+CARGO_PROFILE_FLAG :=
+else
+$(error PROFILE must be "release" or "debug")
+endif
+
 SMOKE_SRC := $(ROOT)/integration/c_api_smoke.c
 HAL_SRC   := $(ROOT)/integration/martac_hal_stubs.c
 SMOKE_BIN := $(BUILDDIR)/shawncore-c-api-smoke
 ASAN_BIN  := $(BUILDDIR)/shawncore-c-api-smoke-asan
 
-.PHONY: all syntax smoke run asan valgrind clean
+.PHONY: all syntax rustlib smoke run asan valgrind clean
 
 all: run
 
 $(BUILDDIR):
 	mkdir -p $(BUILDDIR)
 
-$(STATICLIB):
-	@echo "error: $(STATICLIB) not found." >&2
-	@echo "Run: cargo build -p shawncore-ffi --release" >&2
-	@false
+rustlib:
+	$(CARGO) build --manifest-path $(ROOT)/Cargo.toml --package shawncore-ffi $(CARGO_PROFILE_FLAG)
 
 syntax: $(HAL_SRC)
 	$(CC) $(CSTD) $(CWARN) $(INCLUDE) -fsyntax-only $(HAL_SRC)
 
 smoke: $(SMOKE_BIN)
 
-$(SMOKE_BIN): $(SMOKE_SRC) $(STATICLIB) | $(BUILDDIR)
+$(SMOKE_BIN): rustlib $(SMOKE_SRC) | $(BUILDDIR)
 	$(CC) $(CSTD) $(CWARN) $(INCLUDE) $(SMOKE_SRC) $(STATICLIB) -o $@
 
 run: $(SMOKE_BIN)
 	$(SMOKE_BIN)
 
-$(ASAN_BIN): $(SMOKE_SRC) $(STATICLIB) | $(BUILDDIR)
+$(ASAN_BIN): rustlib $(SMOKE_SRC) | $(BUILDDIR)
 	$(CC) $(CSTD) $(CWARN) -fsanitize=address -fno-omit-frame-pointer \
 		$(INCLUDE) $(SMOKE_SRC) $(STATICLIB) -o $@
 

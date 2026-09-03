@@ -84,8 +84,7 @@ sequence, replay-window ordering, DMA/cache boundary, and measured footprint.
 ## Quickstart
 
 ```bash
-cargo build -p shawncore-ffi --release   # produces target/release/libshawncore_ffi.a
-make -C integration run                  # builds and runs the C integration binary
+make -C integration run  # builds the release archive and runs the C integration binary
 ```
 
 Link the archive and include [`shawncore-ffi/include/shawncore.h`](shawncore-ffi/include/shawncore.h).
@@ -187,6 +186,7 @@ cargo build --workspace --release
 cargo doc --workspace --no-deps
 cargo check --target aarch64-unknown-none --workspace
 cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz
+cargo check --manifest-path fuzz/Cargo.toml --bin rtos_stateful_fuzz
 make -C integration syntax
 make -C integration run
 make -C integration asan

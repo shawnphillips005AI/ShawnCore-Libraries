@@ -49,7 +49,7 @@ before dispatching cache maintenance.
 | Command or check | Result | Evidence |
 | --- | --- | --- |
 | C11 HAL syntax check | PASS | `make -C integration syntax` executed and passed. |
-| C smoke executable | PASS | `make -C integration run` built and executed `integration/c_api_smoke.c` against `target/release/libshawncore_ffi.a`; exit status 0. |
+| C smoke executable | PASS | `make -C integration run` automatically built the release archive, then built and executed `integration/c_api_smoke.c`; exit status 0. |
 | C wire handshake | PASS | The smoke binary drives two session managers through a complete hybrid handshake with every public value passed through its wire codec, then an authenticated packet exchange and a replay rejection. |
 | Public-symbol check | PASS | Header declarations and archive exports were compared and matched exactly: 134 symbols, empty diff. |
 | Self-contained archive check | PASS | For `aarch64-unknown-none`, the set of undefined symbols minus the set of archive-defined symbols is empty; `nm` shows no `malloc`, `free`, `__rust_alloc`, libc I/O, or pthread references. |
@@ -69,10 +69,12 @@ is not target C ABI or hardware integration validation.
 | --- | --- | --- |
 | `cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz` | PASS | Actually executed and passed. |
 | `cd fuzz && cargo +nightly fuzz run ffi_aead_fuzz -- -runs=1000 -max_len=512` | PASS | Actually executed: 1,000 executions seeded from 87 retained corpus files completed with no crash, no timeout, and no new artifact written. |
+| `cargo check --manifest-path fuzz/Cargo.toml --bin rtos_stateful_fuzz` | PASS | Actually executed and passed. |
 
-CI configures a separate fuzz job with 10,000 executions. It was not run
-for this local record. The smoke campaign is evidence only for this harness and
-duration; it is not proof of security.
+CI configures separate 10,000-execution campaigns for the AEAD and RTOS
+stateful harnesses. The CI campaigns were not run for this local record. The
+smoke campaign is evidence only for its harness and duration; it is not proof
+of security.
 
 ## STATIC REVIEW
 

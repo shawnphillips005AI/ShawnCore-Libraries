@@ -69,11 +69,19 @@ impl LatencyTracker {
             }
         }
 
-        let _ = self
-            .total_latency
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |total| {
-                Some(total.saturating_add(delta))
-            });
+        let mut current_total = self.total_latency.load(Ordering::Relaxed);
+        loop {
+            let updated_total = current_total.saturating_add(delta);
+            match self.total_latency.compare_exchange_weak(
+                current_total,
+                updated_total,
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => break,
+                Err(updated_total) => current_total = updated_total,
+            }
+        }
         self.samples.fetch_add(1, Ordering::Release);
     }
 }

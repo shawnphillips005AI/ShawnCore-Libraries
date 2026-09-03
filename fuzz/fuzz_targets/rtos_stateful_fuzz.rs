@@ -229,7 +229,8 @@ fuzz_target!(|input: &[u8]| {
             6 => queue_pop(&queue, &mut queue_model),
             7 => {
                 while queue_model.len() < CAPACITY {
-                    queue_push(&queue, &mut queue_model, value.wrapping_add(queue_model.len() as u32));
+                    let offset = queue_model.len() as u32;
+                    queue_push(&queue, &mut queue_model, value.wrapping_add(offset));
                 }
                 queue_push(&queue, &mut queue_model, value);
             }
@@ -238,7 +239,8 @@ fuzz_target!(|input: &[u8]| {
             10 => assert_eq!(unsafe { ring.peek() }, ring_model.front().copied()),
             11 => {
                 while ring_model.len() < CAPACITY {
-                    ring_push(&ring, &mut ring_model, value.wrapping_add(ring_model.len() as u32));
+                    let offset = ring_model.len() as u32;
+                    ring_push(&ring, &mut ring_model, value.wrapping_add(offset));
                 }
                 ring_push(&ring, &mut ring_model, value);
             }
