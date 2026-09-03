@@ -1,25 +1,24 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
 //! NIST SP 800-56C Rev. 2 Hybrid Key Derivation Function.
 //! Combines classical and post-quantum shared secrets into a single key.
 //! Hardware-agnostic implementation for MarTac USVs.
-//! Guarantees CNSA 2.0 compliance by securely mixing entropy from multiple
-//! cryptographic algorithms to prevent single-algorithm collapse.
+//! Designed as a building block for hybrid security architectures. Platform
+//! approval and independent review remain outside this crate's scope.
 
 use crate::error::CryptoError;
 use crate::zeroize::{secure_cache_flush, secure_zeroize};
 use hkdf::Hkdf;
 use sha2::Sha384;
+use zeroize::Zeroize;
 
 /// Size of the post-quantum shared secret in bytes.
 pub const PQ_SHARED_SECRET_SIZE: usize = 32;
 /// Size of the classical shared secret in bytes.
 pub const CLASSICAL_SHARED_SECRET_SIZE: usize = 32;
 /// Size of the derived hybrid key in bytes.
-pub const HYBRID_OUTPUT_SIZE: usize = 64;
+pub const HYBRID_OUTPUT_SIZE: usize = 128;
 
 /// Derives a hybrid key from post-quantum and classical shared secrets.
 ///
@@ -33,7 +32,7 @@ pub const HYBRID_OUTPUT_SIZE: usize = 64;
 /// * `info` - Context and application specific information for the HKDF expansion phase.
 ///
 /// # Returns
-/// A 64-byte derived hybrid key, or a `CryptoError` if derivation fails.
+/// A 128-byte derived hybrid key, or a `CryptoError` if derivation fails.
 ///
 /// # Security
 /// The input secrets (`pq_secret` and `classical_secret`) are securely zeroized
@@ -50,17 +49,17 @@ pub fn derive_hybrid_key(
     combined_entropy[..PQ_SHARED_SECRET_SIZE].copy_from_slice(pq_secret);
     combined_entropy[PQ_SHARED_SECRET_SIZE..].copy_from_slice(classical_secret);
 
-    let (_, hkdf) = Hkdf::<Sha384>::new(Some(salt), &combined_entropy);
+    let hkdf = Hkdf::<Sha384>::new(Some(salt), &combined_entropy);
     let res = hkdf.expand(info, &mut derived_key);
 
     // Zeroize inputs immediately after expand and before cache flush, regardless of error
     secure_zeroize(pq_secret);
     secure_zeroize(classical_secret);
-    secure_zeroize(&mut combined_entropy);
+    combined_entropy.zeroize();
 
     res.map_err(|_| CryptoError::HkdfError)?;
 
-    secure_cache_flush(derived_key.as_ptr(), derived_key.len());
+    secure_cache_flush(&derived_key);
 
     Ok(derived_key)
 }

@@ -5,7 +5,8 @@ edition = "2021"
 rust-version = "1.85"
 description = "No-std hybrid post-quantum cryptography and C FFI for embedded systems"
 repository = "https://github.com/shawnphillips005AI/ShawnCore-Libraries"
-documentation = "https://docs.rs/shawncore-pq-crypto"
+license-file.workspace = true
+publish = false
 keywords = ["no-std", "post-quantum", "ml-kem", "ml-dsa", "embedded"]
 categories = ["cryptography", "no-std", "embedded"]
 
