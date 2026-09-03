@@ -1,5 +1,3 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -63,7 +61,7 @@ pub unsafe extern "C" fn shawncore_crypto_register_panic_hook(cb: PanicCallback)
 /// or during unrecoverable internal state corruption.
 pub fn invoke_panic_hook() {
     let cb_ptr = PANIC_CALLBACK.load(Ordering::Acquire);
-    
+
     if !cb_ptr.is_null() {
         // # Safety
         // Spatial: N/A.

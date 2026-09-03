@@ -1,0 +1,16 @@
+[package]
+name = "shawncore-ffi"
+version = "12.2.0"
+edition = "2021"
+rust-version = "1.85"
+description = "C-linkable static library facade for ShawnCore embedded prototypes"
+repository = "https://github.com/shawnphillips005AI/ShawnCore-Libraries"
+license-file.workspace = true
+publish = false
+
+[lib]
+crate-type = ["staticlib"]
+
+[dependencies]
+shawncore-pq-crypto = { version = "12.2.0", path = "../shawncore-pq-crypto" }
+shawncore-rtos-sync = { version = "12.2.0", path = "../shawncore-rtos-sync" }
