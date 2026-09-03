@@ -1,17 +1,16 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
 //! X25519 Elliptic Curve Diffie-Hellman wrapper.
 //! Provides classical key exchange for hybrid post-quantum schemes.
 //! Hardware-agnostic implementation for MarTac USVs.
-//! Eliminated early-return timing oracle during contributory checks via mathematically
-//! verified constant-time masking.
+//! Rejects all-zero and non-contributory peer public keys before returning a
+//! shared secret.
 
 use crate::error::CryptoError;
-use crate::zeroize::{secure_cache_flush, secure_zeroize};
+use crate::zeroize::secure_cache_flush;
 use x25519_dalek::{PublicKey, StaticSecret};
+use zeroize::Zeroize;
 
 /// Public key for X25519.
 /// Used by the peer to perform the Diffie-Hellman key exchange.
@@ -23,11 +22,12 @@ pub struct X25519Public(pub [u8; 32]);
 /// Used to compute the shared secret. Automatically zeroized upon being dropped.
 /// `Clone` is explicitly omitted to prevent key material duplication.
 #[repr(C, align(64))]
+#[derive(Zeroize)]
 pub struct X25519Secret(pub [u8; 32]);
 
 impl Drop for X25519Secret {
     fn drop(&mut self) {
-        secure_zeroize(&mut self.0);
+        self.zeroize();
     }
 }
 
@@ -35,11 +35,12 @@ impl Drop for X25519Secret {
 /// Automatically zeroized upon being dropped to prevent key material leakage.
 /// `Clone` is explicitly omitted to prevent key material duplication.
 #[repr(C, align(64))]
+#[derive(Zeroize)]
 pub struct X25519SharedSecret(pub [u8; 32]);
 
 impl Drop for X25519SharedSecret {
     fn drop(&mut self) {
-        secure_zeroize(&mut self.0);
+        self.zeroize();
     }
 }
 
@@ -78,6 +79,10 @@ pub fn x25519_diffie_hellman(
     let sk = StaticSecret::from(secret.0);
     let pk = PublicKey::from(their_public.0);
 
+    if pk.as_bytes().iter().all(|&byte| byte == 0) {
+        return Err(CryptoError::InvalidState);
+    }
+
     let shared = sk.diffie_hellman(&pk);
 
     if !shared.was_contributory() {
@@ -87,7 +92,7 @@ pub fn x25519_diffie_hellman(
     let mut result = X25519SharedSecret([0u8; 32]);
     result.0.copy_from_slice(shared.as_bytes());
 
-    secure_cache_flush(result.0.as_ptr(), result.0.len());
+    secure_cache_flush(&result.0);
 
     Ok(result)
 }

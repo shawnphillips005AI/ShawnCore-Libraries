@@ -1,5 +1,3 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -8,12 +6,14 @@
 //! a robust Encrypt-then-MAC AEAD construction.
 //! Hardware-agnostic implementation for MarTac USVs.
 
-use crate::chacha20::ChaCha20;
 use crate::error::CryptoError;
 use crate::zeroize::{secure_cache_flush, secure_zeroize};
+use chacha20::cipher::{KeyIvInit, StreamCipher};
+use chacha20::ChaCha20;
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use sha2::Sha384;
+use subtle::ConstantTimeEq;
 
 /// Size of the AEAD key in bytes.
 pub const AEAD_KEY_SIZE: usize = 32;
@@ -21,24 +21,17 @@ pub const AEAD_KEY_SIZE: usize = 32;
 pub const AEAD_NONCE_SIZE: usize = 12;
 /// Size of the AEAD tag in bytes.
 pub const AEAD_TAG_SIZE: usize = 48;
+/// Maximum bytes processable under one ChaCha20 key and nonce.
+const CHACHA20_MAX_BYTES: u64 = (u32::MAX as u64 + 1) * 64;
 
-/// Verifies two AEAD tags in strict constant time using bitwise operations to prevent branch
-/// prediction leaks.
+/// Verifies two AEAD tags in strict constant time.
 ///
-/// This function guarantees that the execution time depends only on the length of the tags,
-/// not on their contents, preventing timing side-channel attacks.
+/// Delegates to `subtle`'s constant-time comparison implementation. The complete
+/// timing behavior remains dependent on the selected compiler and target hardware.
 #[must_use]
 #[inline(never)]
 pub fn verify_tag_constant_time(a: &[u8; AEAD_TAG_SIZE], b: &[u8; AEAD_TAG_SIZE]) -> bool {
-    let mut result = 0u8;
-
-    for i in 0..AEAD_TAG_SIZE {
-        // Bitwise OR accumulates any differences without branching
-        result |= a[i] ^ b[i];
-    }
-
-    // Ensure the compiler does not optimize the loop into an early-return memcmp
-    core::hint::black_box(result) == 0
+    a.as_slice().ct_eq(b.as_slice()).into()
 }
 
 /// Computes an HMAC-SHA384 tag over the provided data.
@@ -51,7 +44,7 @@ pub fn hmac_sha384(key: &[u8], data: &[u8]) -> Result<[u8; AEAD_TAG_SIZE], Crypt
 
     let mut output = [0u8; AEAD_TAG_SIZE];
     output.copy_from_slice(&result_bytes);
-    secure_cache_flush(output.as_ptr(), output.len());
+    secure_cache_flush(&output);
 
     Ok(output)
 }
@@ -59,11 +52,7 @@ pub fn hmac_sha384(key: &[u8], data: &[u8]) -> Result<[u8; AEAD_TAG_SIZE], Crypt
 /// Expands a pseudorandom key using HKDF-SHA384 to an arbitrary length.
 ///
 /// Populates the `out` buffer with the expanded key material.
-pub fn hkdf_expand_sha384(
-    prk: &[u8],
-    info: &[u8],
-    out: &mut [u8],
-) -> Result<(), CryptoError> {
+pub fn hkdf_expand_sha384(prk: &[u8], info: &[u8], out: &mut [u8]) -> Result<(), CryptoError> {
     let hkdf = Hkdf::<Sha384>::from_prk(prk).map_err(|_| CryptoError::InvalidLength)?;
     let res = hkdf.expand(info, out);
 
@@ -72,7 +61,7 @@ pub fn hkdf_expand_sha384(
         return Err(CryptoError::HkdfError);
     }
 
-    secure_cache_flush(out.as_ptr(), out.len());
+    secure_cache_flush(out);
     Ok(())
 }
 
@@ -89,6 +78,8 @@ pub fn hkdf_expand_sha384(
 /// * `plaintext` - The data to encrypt.
 /// * `ciphertext` - The output buffer for the encrypted data (must match plaintext length).
 /// * `out_mac` - The output buffer for the 48-byte authentication tag.
+///
+/// The caller must never reuse a nonce with the same encryption or MAC key.
 pub fn aead_encrypt(
     enc_key: &[u8; AEAD_KEY_SIZE],
     mac_key: &[u8; AEAD_KEY_SIZE],
@@ -98,24 +89,26 @@ pub fn aead_encrypt(
     ciphertext: &mut [u8],
     out_mac: &mut [u8; AEAD_TAG_SIZE],
 ) -> Result<(), CryptoError> {
-    if plaintext.len() != ciphertext.len() {
+    if plaintext.len() != ciphertext.len() || plaintext.len() as u64 > CHACHA20_MAX_BYTES {
         return Err(CryptoError::InvalidLength);
     }
 
     // 1. Encrypt the plaintext into the ciphertext buffer
-    // # Safety: Lengths are verified equal above.
-    unsafe {
-        core::ptr::copy_nonoverlapping(plaintext.as_ptr(), ciphertext.as_mut_ptr(), plaintext.len());
-    }
-    let mut cipher = ChaCha20::new(enc_key, nonce);
-    cipher.apply_keystream(ciphertext);
+    ciphertext.copy_from_slice(plaintext);
+    let mut cipher =
+        ChaCha20::new_from_slices(enc_key, nonce).map_err(|_| CryptoError::InvalidState)?;
+    let apply_result = cipher.try_apply_keystream(ciphertext);
+    // The RustCrypto ChaCha20 wrapper does not implement `Zeroize`; it is dropped
+    // immediately after use and no cipher state crosses this API boundary.
+    apply_result.map_err(|_| CryptoError::InvalidLength)?;
 
     // 2. Compute the MAC over the unambiguous encoding:
     // MAC(mac_key, AAD_len || Ciphertext_len || Nonce || AAD || Ciphertext)
-    let mut mac_engine = Hmac::<Sha384>::new_from_slice(mac_key).map_err(|_| CryptoError::InvalidState)?;
-    
-    mac_engine.update(&(aad.len() as u64).to_le_bytes());
-    mac_engine.update(&(ciphertext.len() as u64).to_le_bytes());
+    let mut mac_engine =
+        Hmac::<Sha384>::new_from_slice(mac_key).map_err(|_| CryptoError::InvalidState)?;
+
+    mac_engine.update(&(aad.len() as u64).to_be_bytes());
+    mac_engine.update(&(ciphertext.len() as u64).to_be_bytes());
     mac_engine.update(nonce);
     mac_engine.update(aad);
     mac_engine.update(ciphertext);
@@ -123,8 +116,8 @@ pub fn aead_encrypt(
     let result_bytes = mac_engine.finalize().into_bytes();
     out_mac.copy_from_slice(&result_bytes);
 
-    secure_cache_flush(ciphertext.as_ptr(), ciphertext.len());
-    secure_cache_flush(out_mac.as_ptr(), out_mac.len());
+    secure_cache_flush(ciphertext);
+    secure_cache_flush(out_mac);
 
     Ok(())
 }
@@ -150,15 +143,16 @@ pub fn aead_decrypt(
     mac: &[u8; AEAD_TAG_SIZE],
     plaintext: &mut [u8],
 ) -> Result<(), CryptoError> {
-    if plaintext.len() != ciphertext.len() {
+    if plaintext.len() != ciphertext.len() || ciphertext.len() as u64 > CHACHA20_MAX_BYTES {
         return Err(CryptoError::InvalidLength);
     }
 
     // 1. Compute the expected MAC over the unambiguous encoding
-    let mut mac_engine = Hmac::<Sha384>::new_from_slice(mac_key).map_err(|_| CryptoError::InvalidState)?;
-    
-    mac_engine.update(&(aad.len() as u64).to_le_bytes());
-    mac_engine.update(&(ciphertext.len() as u64).to_le_bytes());
+    let mut mac_engine =
+        Hmac::<Sha384>::new_from_slice(mac_key).map_err(|_| CryptoError::InvalidState)?;
+
+    mac_engine.update(&(aad.len() as u64).to_be_bytes());
+    mac_engine.update(&(ciphertext.len() as u64).to_be_bytes());
     mac_engine.update(nonce);
     mac_engine.update(aad);
     mac_engine.update(ciphertext);
@@ -174,14 +168,91 @@ pub fn aead_decrypt(
     }
 
     // 3. Decrypt the ciphertext into the plaintext buffer
-    // # Safety: Lengths are verified equal above.
-    unsafe {
-        core::ptr::copy_nonoverlapping(ciphertext.as_ptr(), plaintext.as_mut_ptr(), ciphertext.len());
+    plaintext.copy_from_slice(ciphertext);
+    let mut cipher =
+        ChaCha20::new_from_slices(enc_key, nonce).map_err(|_| CryptoError::InvalidState)?;
+    let apply_result = cipher.try_apply_keystream(plaintext);
+    // The RustCrypto ChaCha20 wrapper does not implement `Zeroize`.
+    if apply_result.is_err() {
+        secure_zeroize(plaintext);
+        return Err(CryptoError::InvalidLength);
     }
-    let mut cipher = ChaCha20::new(enc_key, nonce);
-    cipher.apply_keystream(plaintext);
 
-    secure_cache_flush(plaintext.as_ptr(), plaintext.len());
+    secure_cache_flush(plaintext);
 
+    Ok(())
+}
+
+/// Encrypts `buffer` in place and authenticates the resulting ciphertext.
+pub fn aead_encrypt_in_place(
+    enc_key: &[u8; AEAD_KEY_SIZE],
+    mac_key: &[u8; AEAD_KEY_SIZE],
+    nonce: &[u8; AEAD_NONCE_SIZE],
+    aad: &[u8],
+    buffer: &mut [u8],
+    out_mac: &mut [u8; AEAD_TAG_SIZE],
+) -> Result<(), CryptoError> {
+    if buffer.len() as u64 > CHACHA20_MAX_BYTES {
+        return Err(CryptoError::InvalidLength);
+    }
+
+    let mut cipher =
+        ChaCha20::new_from_slices(enc_key, nonce).map_err(|_| CryptoError::InvalidState)?;
+    let apply_result = cipher.try_apply_keystream(buffer);
+    // The RustCrypto ChaCha20 wrapper does not implement `Zeroize`.
+    apply_result.map_err(|_| CryptoError::InvalidLength)?;
+
+    let mut mac_engine =
+        Hmac::<Sha384>::new_from_slice(mac_key).map_err(|_| CryptoError::InvalidState)?;
+    mac_engine.update(&(aad.len() as u64).to_be_bytes());
+    mac_engine.update(&(buffer.len() as u64).to_be_bytes());
+    mac_engine.update(nonce);
+    mac_engine.update(aad);
+    mac_engine.update(buffer);
+    out_mac.copy_from_slice(&mac_engine.finalize().into_bytes());
+
+    secure_cache_flush(buffer);
+    secure_cache_flush(out_mac);
+    Ok(())
+}
+
+/// Authenticates and decrypts `buffer` in place.
+pub fn aead_decrypt_in_place(
+    enc_key: &[u8; AEAD_KEY_SIZE],
+    mac_key: &[u8; AEAD_KEY_SIZE],
+    nonce: &[u8; AEAD_NONCE_SIZE],
+    aad: &[u8],
+    buffer: &mut [u8],
+    mac: &[u8; AEAD_TAG_SIZE],
+) -> Result<(), CryptoError> {
+    if buffer.len() as u64 > CHACHA20_MAX_BYTES {
+        return Err(CryptoError::InvalidLength);
+    }
+
+    let mut mac_engine =
+        Hmac::<Sha384>::new_from_slice(mac_key).map_err(|_| CryptoError::InvalidState)?;
+    mac_engine.update(&(aad.len() as u64).to_be_bytes());
+    mac_engine.update(&(buffer.len() as u64).to_be_bytes());
+    mac_engine.update(nonce);
+    mac_engine.update(aad);
+    mac_engine.update(buffer);
+    let mut expected_mac = [0u8; AEAD_TAG_SIZE];
+    expected_mac.copy_from_slice(&mac_engine.finalize().into_bytes());
+
+    if !verify_tag_constant_time(mac, &expected_mac) {
+        secure_zeroize(buffer);
+        return Err(CryptoError::VerificationFailed);
+    }
+
+    let mut cipher =
+        ChaCha20::new_from_slices(enc_key, nonce).map_err(|_| CryptoError::InvalidState)?;
+    let apply_result = cipher.try_apply_keystream(buffer);
+    // The RustCrypto ChaCha20 wrapper does not implement `Zeroize`.
+    if apply_result.is_err() {
+        secure_zeroize(buffer);
+        return Err(CryptoError::InvalidLength);
+    }
+
+    secure_cache_flush(buffer);
     Ok(())
 }

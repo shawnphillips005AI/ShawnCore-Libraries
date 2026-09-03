@@ -1,5 +1,3 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -9,7 +7,8 @@
 //! Mitigates RNG exhaustion DoS vectors by providing a continuously
 //! seeded background accumulator fed by the host OS via the `EntropyQueue`.
 //! Integrates with the host OS interrupt context to prevent ISR deadlocks.
-//! Implements strict forward secrecy via domain-separated PRNG extraction.
+//! Uses domain-separated output and state evolution after the host has supplied
+//! entropy. Input entropy quality remains a host and hardware responsibility.
 
 use crate::entropy_queue::{EntropyQueue, ENTROPY_CHUNK_SIZE};
 use crate::error::CryptoError;
@@ -52,18 +51,20 @@ impl<T, C: InterruptContext> CryptoSpinlock<T, C> {
     pub fn lock(&self) -> CryptoSpinlockGuard<'_, T, C> {
         let saved_flags = C::disable_and_save();
 
-        while self.locked.compare_exchange_weak(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_err() {
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             while self.locked.load(Ordering::Relaxed) {
                 core::hint::spin_loop();
             }
         }
 
-        CryptoSpinlockGuard { lock: self, saved_flags }
+        CryptoSpinlockGuard {
+            lock: self,
+            saved_flags,
+        }
     }
 }
 
@@ -143,10 +144,10 @@ impl EntropyPool {
 
         let mut guard = self.pool.lock();
         let mut hasher = Sha384::new();
-        hasher.update(&*guard);
+        hasher.update(*guard);
 
-        while GLOBAL_ENTROPY_QUEUE.pop(&mut chunk) {
-            hasher.update(&chunk);
+        while unsafe { GLOBAL_ENTROPY_QUEUE.pop(&mut chunk) } {
+            hasher.update(chunk);
             secure_zeroize(&mut chunk);
             mixed = true;
         }
@@ -154,7 +155,7 @@ impl EntropyPool {
         if mixed {
             let result = hasher.finalize();
             guard.copy_from_slice(&result);
-            secure_cache_flush(guard.as_ptr(), 48);
+            secure_cache_flush(&guard[..]);
             self.reseed_count.fetch_add(1, Ordering::Release);
         }
     }
@@ -162,10 +163,9 @@ impl EntropyPool {
     /// Extracts entropy from the accumulator.
     ///
     /// Automatically mixes any pending entropy from the queue before extraction.
-    /// Implements strict forward secrecy by using domain separators: the output
-    /// is derived using a `0x00` prefix, while the new internal state is derived
-    /// using a `0x01` prefix. This guarantees that compromising a block of output
-    /// does not allow an attacker to compute the future state of the pool.
+    /// Uses distinct `0x00` and `0x01` prefixes for output and state evolution.
+    /// This is not a statement about entropy-source quality, which must be
+    /// established by the host and target hardware.
     ///
     /// # Arguments
     /// * `out` - A mutable byte slice to be filled with pseudorandom data.
@@ -186,14 +186,14 @@ impl EntropyPool {
         while offset < out.len() {
             // Forward Secrecy: Domain separation for output generation
             let mut out_hasher = Sha384::new();
-            out_hasher.update(&[0x00]); // Domain separator for output
-            out_hasher.update(&*guard);
+            out_hasher.update([0x00]); // Domain separator for output
+            out_hasher.update(*guard);
             let out_result = out_hasher.finalize();
 
             // Forward Secrecy: Domain separation for internal state update
             let mut state_hasher = Sha384::new();
-            state_hasher.update(&[0x01]); // Domain separator for state update
-            state_hasher.update(&*guard);
+            state_hasher.update([0x01]); // Domain separator for state update
+            state_hasher.update(*guard);
             let state_result = state_hasher.finalize();
 
             let copy_len = core::cmp::min(48, out.len() - offset);
@@ -202,10 +202,10 @@ impl EntropyPool {
             // Update pool state to the new forward-secret hash
             guard.copy_from_slice(&state_result);
 
-            offset = offset.checked_add(copy_len).unwrap();
+            offset += copy_len;
         }
 
-        secure_cache_flush(guard.as_ptr(), 48);
+        secure_cache_flush(&guard[..]);
 
         Ok(())
     }

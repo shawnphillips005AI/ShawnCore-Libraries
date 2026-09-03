@@ -1,5 +1,3 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -49,18 +47,20 @@ impl<T, C: InterruptContext> InterruptSafeSpinlock<T, C> {
     pub fn lock(&self) -> SpinlockGuard<'_, T, C> {
         let saved_flags = C::disable_and_save();
 
-        while self.locked.compare_exchange_weak(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_err() {
+        while self
+            .locked
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             while self.locked.load(Ordering::Relaxed) {
                 core::hint::spin_loop();
             }
         }
 
-        SpinlockGuard { lock: self, saved_flags }
+        SpinlockGuard {
+            lock: self,
+            saved_flags,
+        }
     }
 }
 

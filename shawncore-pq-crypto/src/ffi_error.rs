@@ -1,5 +1,3 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -52,10 +50,14 @@ static PANIC_CALLBACK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 /// This prevents unwinding across the FFI boundary.
 ///
 /// # Safety
-/// `cb` must be a valid function pointer to a C-ABI compatible function.
+/// When present, `cb` must be a valid C-ABI function for every possible call.
+/// Registration and replacement must not race with callback invocation.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_crypto_register_panic_hook(cb: PanicCallback) {
-    PANIC_CALLBACK.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_crypto_register_panic_hook(cb: Option<PanicCallback>) {
+    PANIC_CALLBACK.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// Invokes the registered panic callback.
@@ -63,7 +65,7 @@ pub unsafe extern "C" fn shawncore_crypto_register_panic_hook(cb: PanicCallback)
 /// or during unrecoverable internal state corruption.
 pub fn invoke_panic_hook() {
     let cb_ptr = PANIC_CALLBACK.load(Ordering::Acquire);
-    
+
     if !cb_ptr.is_null() {
         // # Safety
         // Spatial: N/A.

@@ -1,13 +1,11 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
 //! Foreign Function Interface (FFI) for the RTOS Sync Stack.
 //!
-//! Provides safe, opaque C-callable boundaries for the MarTac host OS.
-//! Prevents cross-boundary Undefined Behavior (UB) by encapsulating all
-//! complex Rust types and returning C-compatible error codes.
+//! Defines opaque C-callable boundaries for the MarTac host OS. The host must
+//! uphold each exported function's documented pointer, lifetime, alignment,
+//! ownership, and concurrency preconditions.
 
 use crate::bitmap_scheduler::PerCoreScheduler;
 use crate::ffi_error::ShawncoreRtosErr;
@@ -61,7 +59,7 @@ pub struct FftResult {
     /// Timestamp of the detection.
     pub timestamp: u64,
     /// Padding to ensure 64-byte alignment.
-    pub _padding: [u8; 36],
+    pub _padding: [u8; 32],
 }
 
 /// Concrete Ring Buffer for EW Commands: 1024 elements.
@@ -73,19 +71,78 @@ pub type SpscQueueFft = SpscQueue<FftResult, 256>;
 /// Concrete Cache Aligned Slot for FFT Results.
 pub type SpscQueueFftSlot = CacheAlignedSlot<FftResult>;
 
+macro_rules! ffi_type_layout {
+    ($type:ty, $sizeof:ident, $alignof:ident) => {
+        #[doc = concat!("Returns the memory size required to allocate a `", stringify!($type), "`.")]
+        #[no_mangle]
+        pub extern "C" fn $sizeof() -> usize {
+            core::mem::size_of::<$type>()
+        }
+
+        #[doc = concat!("Returns the memory alignment required to allocate a `", stringify!($type), "`.")]
+        #[no_mangle]
+        pub extern "C" fn $alignof() -> usize {
+            core::mem::align_of::<$type>()
+        }
+    };
+}
+
+ffi_type_layout!(Tcb, shawncore_rtos_tcb_sizeof, shawncore_rtos_tcb_alignof);
+ffi_type_layout!(
+    TelemetryEvent,
+    shawncore_rtos_telemetry_event_sizeof,
+    shawncore_rtos_telemetry_event_alignof
+);
+ffi_type_layout!(
+    FftResult,
+    shawncore_rtos_fft_result_sizeof,
+    shawncore_rtos_fft_result_alignof
+);
+ffi_type_layout!(
+    SpscQueueTelemetrySlot,
+    shawncore_rtos_spsc_telemetry_slot_sizeof,
+    shawncore_rtos_spsc_telemetry_slot_alignof
+);
+ffi_type_layout!(
+    CacheAlignedSlot<EwCommand>,
+    shawncore_rtos_ringbuffer_ew_slot_sizeof,
+    shawncore_rtos_ringbuffer_ew_slot_alignof
+);
+ffi_type_layout!(
+    SpscQueueFftSlot,
+    shawncore_rtos_spsc_fft_slot_sizeof,
+    shawncore_rtos_spsc_fft_slot_alignof
+);
+
+fn valid_dma_region<T>(memory_base: *mut T, size_in_bytes: usize, element_count: usize) -> bool {
+    let required_alignment = core::mem::align_of::<T>();
+    if memory_base.is_null()
+        || (memory_base as usize) % 4096 != 0
+        || (memory_base as usize) % required_alignment != 0
+    {
+        return false;
+    }
+
+    element_count
+        .checked_mul(core::mem::size_of::<T>())
+        .and_then(|required_size| (size_in_bytes >= required_size).then_some(required_size))
+        .and_then(|required_size| (memory_base as usize).checked_add(required_size))
+        .is_some()
+}
+
 // ============================================================================
 // Scheduler & TCB FFI
 // ============================================================================
 
 /// Returns the memory size required to allocate a `PerCoreScheduler`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_scheduler_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_scheduler_sizeof() -> usize {
     core::mem::size_of::<PerCoreScheduler>()
 }
 
 /// Returns the memory alignment required to allocate a `PerCoreScheduler`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_scheduler_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_scheduler_alignof() -> usize {
     core::mem::align_of::<PerCoreScheduler>()
 }
 
@@ -102,7 +159,6 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_init(
     }
 
     unsafe {
-        core::ptr::drop_in_place(scheduler);
         core::ptr::write(scheduler, PerCoreScheduler::new());
     }
 
@@ -174,10 +230,7 @@ pub unsafe extern "C" fn shawncore_rtos_tcb_get_rsp(tcb: *const Tcb) -> u64 {
 /// # Safety
 /// `tcb` must be a valid, non-null pointer.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_tcb_set_rsp(
-    tcb: *mut Tcb,
-    rsp: u64,
-) -> ShawncoreRtosErr {
+pub unsafe extern "C" fn shawncore_rtos_tcb_set_rsp(tcb: *mut Tcb, rsp: u64) -> ShawncoreRtosErr {
     if tcb.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
@@ -192,7 +245,11 @@ pub unsafe extern "C" fn shawncore_rtos_tcb_set_rsp(
 /// Registers a task with the scheduler.
 ///
 /// # Safety
-/// `scheduler` and `tcb` must be valid, non-null pointers.
+/// `scheduler` and `tcb` must be valid, non-null pointers. The TCB stack range
+/// must be mapped writable memory, remain valid for the task lifetime, be owned
+/// by that task, and contain `rsp`. Rust checks alignment, range arithmetic,
+/// stack size, and priority; the host establishes mapping, writability,
+/// ownership, and lifetime.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_scheduler_create_task(
     scheduler: *mut PerCoreScheduler,
@@ -206,7 +263,7 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_create_task(
     let scheduler_ref = unsafe { &mut *scheduler };
     let tcb_val = unsafe { *tcb };
 
-    match scheduler_ref.create_task(tcb_val, canary_value) {
+    match unsafe { scheduler_ref.create_task(tcb_val, canary_value) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(_) => ShawncoreRtosErr::TaskFault,
     }
@@ -215,7 +272,9 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_create_task(
 /// Executes a scheduling tick, returning the stack pointer of the next task to run.
 ///
 /// # Safety
-/// `scheduler` must be a valid, non-null pointer.
+/// `scheduler` must be a valid, non-null pointer. Every registered stack must
+/// continue to satisfy `shawncore_rtos_scheduler_create_task`'s host-memory
+/// contract for the duration of this call.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_scheduler_tick(
     scheduler: *mut PerCoreScheduler,
@@ -226,7 +285,40 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_tick(
     }
 
     let scheduler_ref = unsafe { &mut *scheduler };
-    scheduler_ref.schedule_tick(current_rsp)
+    unsafe { scheduler_ref.schedule_tick(current_rsp) }
+}
+
+/// Configures the critical-task mask for the watchdog window.
+///
+/// # Safety
+/// `scheduler` must be a valid, non-null pointer to an initialized scheduler.
+#[no_mangle]
+pub unsafe extern "C" fn shawncore_rtos_scheduler_set_critical_task_mask(
+    scheduler: *mut PerCoreScheduler,
+    critical_task_mask: u16,
+) -> ShawncoreRtosErr {
+    if scheduler.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+
+    unsafe { (*scheduler).set_critical_task_mask(critical_task_mask) };
+    ShawncoreRtosErr::Success
+}
+
+/// Records a critical task check-in for the current watchdog window.
+///
+/// # Safety
+/// `scheduler` must be a valid, non-null pointer to an initialized scheduler.
+#[no_mangle]
+pub unsafe extern "C" fn shawncore_rtos_scheduler_task_check_in(
+    scheduler: *mut PerCoreScheduler,
+    priority: u8,
+) -> ShawncoreRtosErr {
+    if scheduler.is_null() || priority >= 16 {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    unsafe { (*scheduler).task_check_in(priority) };
+    ShawncoreRtosErr::Success
 }
 
 // ============================================================================
@@ -235,20 +327,20 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_tick(
 
 /// Returns the memory size required to allocate a `DmaPool2K`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_dmapool2k_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_dmapool2k_sizeof() -> usize {
     core::mem::size_of::<DmaPool2K>()
 }
 
 /// Returns the memory alignment required to allocate a `DmaPool2K`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_dmapool2k_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_dmapool2k_alignof() -> usize {
     core::mem::align_of::<DmaPool2K>()
 }
 
 /// Initializes a host-allocated `DmaPool2K` and binds it to a host-provided DMA memory region.
 ///
 /// # Safety
-/// `pool` must point to a valid `DmaPool2K`. `memory_base` must point to a page-aligned
+/// `pool` must point to a valid, uninitialized `DmaPool2K`. `memory_base` must point to a page-aligned
 /// region of at least `256 * 2048` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_dmapool2k_init(
@@ -256,19 +348,18 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_init(
     memory_base: *mut u8,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if pool.is_null() || memory_base.is_null() {
+    if pool.is_null() || !valid_dma_region(memory_base, size_in_bytes, 256) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
     unsafe {
-        core::ptr::drop_in_place(pool);
         core::ptr::write(pool, DmaPool2K::new());
     }
 
     let pool_ref = unsafe { &mut *pool };
     let typed_base = memory_base as *mut [u8; 2048];
 
-    match pool_ref.init(typed_base, size_in_bytes) {
+    match unsafe { pool_ref.init(typed_base, size_in_bytes) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(e) => e.into(),
     }
@@ -296,24 +387,27 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_destroy(
 /// Allocates a buffer from the DMA pool.
 ///
 /// # Safety
-/// `pool`, `out_idx`, and `out_ptr` must be valid, non-null pointers.
+/// `pool`, `out_idx`, `out_generation`, and `out_ptr` must be valid, non-null pointers.
+/// The returned generation must be supplied unchanged when freeing the returned index.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_dmapool2k_allocate(
     pool: *const DmaPool2K,
     out_idx: *mut usize,
+    out_generation: *mut u64,
     out_ptr: *mut *mut u8,
 ) -> ShawncoreRtosErr {
-    if pool.is_null() || out_idx.is_null() || out_ptr.is_null() {
+    if pool.is_null() || out_idx.is_null() || out_generation.is_null() || out_ptr.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
     let pool_ref = unsafe { &*pool };
 
     match pool_ref.allocate() {
-        Ok((idx, buf_ref)) => {
+        Ok((idx, generation, buf_ptr)) => {
             unsafe {
                 core::ptr::write(out_idx, idx);
-                core::ptr::write(out_ptr, buf_ref.as_mut_ptr());
+                core::ptr::write(out_generation, generation);
+                core::ptr::write(out_ptr, buf_ptr.as_ptr().cast::<u8>());
             }
             ShawncoreRtosErr::Success
         }
@@ -324,11 +418,13 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_allocate(
 /// Frees a buffer back to the DMA pool.
 ///
 /// # Safety
-/// `pool` must be a valid, non-null pointer.
+/// `pool` must be a valid, non-null pointer. `generation` must be the token returned
+/// by the matching allocation and must not be reused after a successful free.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_dmapool2k_free(
     pool: *const DmaPool2K,
     buffer_idx: usize,
+    generation: u64,
 ) -> ShawncoreRtosErr {
     if pool.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
@@ -336,7 +432,7 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_free(
 
     let pool_ref = unsafe { &*pool };
 
-    match pool_ref.free(buffer_idx) {
+    match pool_ref.free(buffer_idx, generation) {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(e) => e.into(),
     }
@@ -348,39 +444,40 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_free(
 
 /// Returns the memory size required to allocate a `SpscQueueTelemetry`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_spsc_telemetry_sizeof() -> usize {
     core::mem::size_of::<SpscQueueTelemetry>()
 }
 
 /// Returns the memory alignment required to allocate a `SpscQueueTelemetry`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_spsc_telemetry_alignof() -> usize {
     core::mem::align_of::<SpscQueueTelemetry>()
 }
 
 /// Initializes a host-allocated `SpscQueueTelemetry` and binds it to a host-provided memory region.
 ///
 /// # Safety
-/// `queue` must point to a valid `SpscQueueTelemetry`. `memory_base` must point to a page-aligned
-/// region of at least `64 * sizeof(SpscQueueTelemetrySlot)` bytes.
+/// `queue` must point to valid, properly aligned storage that has not previously
+/// been initialized. `memory_base` must point to a page-aligned region of at
+/// least `64 * sizeof(SpscQueueTelemetrySlot)` bytes. Initialization is one-shot;
+/// stop all producers and consumers before destroying the queue and reusing its storage.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_init(
     queue: *mut SpscQueueTelemetry,
     memory_base: *mut SpscQueueTelemetrySlot,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if queue.is_null() || memory_base.is_null() {
+    if queue.is_null() || !valid_dma_region(memory_base, size_in_bytes, 64) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
     unsafe {
-        core::ptr::drop_in_place(queue);
         core::ptr::write(queue, SpscQueueTelemetry::new());
     }
 
     let queue_ref = unsafe { &mut *queue };
 
-    match queue_ref.init(memory_base, size_in_bytes) {
+    match unsafe { queue_ref.init(memory_base, size_in_bytes) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(e) => e.into(),
     }
@@ -408,7 +505,8 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_destroy(
 /// Enqueues a telemetry event.
 ///
 /// # Safety
-/// `queue` and `event` must be valid, non-null pointers.
+/// `queue` and `event` must be valid, non-null pointers. The caller must remain
+/// the queue's sole producer until the queue is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_push(
     queue: *const SpscQueueTelemetry,
@@ -421,16 +519,17 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_push(
     let queue_ref = unsafe { &*queue };
     let event_val = unsafe { *event };
 
-    match queue_ref.push(event_val) {
+    match unsafe { queue_ref.push(event_val) } {
         Ok(_) => ShawncoreRtosErr::Success,
-        Err(_) => ShawncoreRtosErr::QueueFull,
+        Err(error) => error.into(),
     }
 }
 
 /// Dequeues a telemetry event.
 ///
 /// # Safety
-/// `queue` and `out_event` must be valid, non-null pointers.
+/// `queue` and `out_event` must be valid, non-null pointers. The caller must
+/// remain the queue's sole consumer until the queue is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_pop(
     queue: *const SpscQueueTelemetry,
@@ -442,14 +541,18 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_pop(
 
     let queue_ref = unsafe { &*queue };
 
-    match queue_ref.pop() {
+    if !queue_ref.is_initialized() {
+        return ShawncoreRtosErr::NotInitialized;
+    }
+
+    match unsafe { queue_ref.pop() } {
         Some(event) => {
             unsafe {
                 core::ptr::write(out_event, event);
             }
             ShawncoreRtosErr::Success
         }
-        None => ShawncoreRtosErr::NotInitialized, // Used here to indicate empty
+        None => ShawncoreRtosErr::QueueEmpty,
     }
 }
 
@@ -459,38 +562,39 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_pop(
 
 /// Returns the memory size required to allocate a `RingBufferEwCommand`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_ringbuffer_ew_sizeof() -> usize {
     core::mem::size_of::<RingBufferEwCommand>()
 }
 
 /// Returns the memory alignment required to allocate a `RingBufferEwCommand`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_ringbuffer_ew_alignof() -> usize {
     core::mem::align_of::<RingBufferEwCommand>()
 }
 
 /// Initializes a host-allocated `RingBufferEwCommand`.
 ///
 /// # Safety
-/// `rb` must point to a valid, properly aligned, UNINITIALIZED memory region.
+/// `rb` must point to valid, properly aligned storage that has not previously
+/// been initialized. Initialization is one-shot; stop all producers and
+/// consumers before destroying the ring buffer and reusing its storage.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_init(
     rb: *mut RingBufferEwCommand,
     memory_base: *mut CacheAlignedSlot<EwCommand>,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if rb.is_null() || memory_base.is_null() {
+    if rb.is_null() || !valid_dma_region(memory_base, size_in_bytes, 1024) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
     unsafe {
-        core::ptr::drop_in_place(rb);
         core::ptr::write(rb, RingBufferEwCommand::new());
     }
 
     let rb_ref = unsafe { &mut *rb };
 
-    match rb_ref.init(memory_base, size_in_bytes) {
+    match unsafe { rb_ref.init(memory_base, size_in_bytes) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(e) => e.into(),
     }
@@ -518,7 +622,8 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_destroy(
 /// Pushes an item into the `RingBufferEwCommand`.
 ///
 /// # Safety
-/// `rb` and `item` must be valid, non-null pointers.
+/// `rb` and `item` must be valid, non-null pointers. The caller must remain the
+/// ring buffer's sole producer until the ring buffer is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_push(
     rb: *const RingBufferEwCommand,
@@ -531,16 +636,17 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_push(
     let rb_ref = unsafe { &*rb };
     let item_val = unsafe { *item };
 
-    match rb_ref.push(item_val) {
+    match unsafe { rb_ref.push(item_val) } {
         Ok(_) => ShawncoreRtosErr::Success,
-        Err(_) => ShawncoreRtosErr::QueueFull,
+        Err(error) => error.into(),
     }
 }
 
 /// Pops an item from the `RingBufferEwCommand`.
 ///
 /// # Safety
-/// `rb` and `out_item` must be valid, non-null pointers.
+/// `rb` and `out_item` must be valid, non-null pointers. The caller must remain
+/// the ring buffer's sole consumer until the ring buffer is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_pop(
     rb: *const RingBufferEwCommand,
@@ -552,21 +658,26 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_pop(
 
     let rb_ref = unsafe { &*rb };
 
-    match rb_ref.pop() {
+    if !rb_ref.is_initialized() {
+        return ShawncoreRtosErr::NotInitialized;
+    }
+
+    match unsafe { rb_ref.pop() } {
         Some(item) => {
             unsafe {
                 core::ptr::write(out_item, item);
             }
             ShawncoreRtosErr::Success
         }
-        None => ShawncoreRtosErr::NotInitialized, // Used here to indicate empty
+        None => ShawncoreRtosErr::QueueEmpty,
     }
 }
 
 /// Peeks an item from the `RingBufferEwCommand`.
 ///
 /// # Safety
-/// `rb` and `out_item` must be valid, non-null pointers.
+/// `rb` and `out_item` must be valid, non-null pointers. The caller must remain
+/// the ring buffer's sole consumer until the ring buffer is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_peek(
     rb: *const RingBufferEwCommand,
@@ -578,14 +689,18 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_peek(
 
     let rb_ref = unsafe { &*rb };
 
-    match rb_ref.peek() {
+    if !rb_ref.is_initialized() {
+        return ShawncoreRtosErr::NotInitialized;
+    }
+
+    match unsafe { rb_ref.peek() } {
         Some(item) => {
             unsafe {
                 core::ptr::write(out_item, item);
             }
             ShawncoreRtosErr::Success
         }
-        None => ShawncoreRtosErr::NotInitialized, // Used here to indicate empty
+        None => ShawncoreRtosErr::QueueEmpty,
     }
 }
 
@@ -595,39 +710,40 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_peek(
 
 /// Returns the memory size required to allocate a `SpscQueueFft`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_spsc_fft_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_spsc_fft_sizeof() -> usize {
     core::mem::size_of::<SpscQueueFft>()
 }
 
 /// Returns the memory alignment required to allocate a `SpscQueueFft`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_spsc_fft_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_spsc_fft_alignof() -> usize {
     core::mem::align_of::<SpscQueueFft>()
 }
 
 /// Initializes a host-allocated `SpscQueueFft` and binds it to a host-provided memory region.
 ///
 /// # Safety
-/// `queue` must point to a valid `SpscQueueFft`. `memory_base` must point to a page-aligned
-/// region of at least `256 * sizeof(SpscQueueFftSlot)` bytes.
+/// `queue` must point to valid, properly aligned storage that has not previously
+/// been initialized. `memory_base` must point to a page-aligned region of at
+/// least `256 * sizeof(SpscQueueFftSlot)` bytes. Initialization is one-shot;
+/// stop all producers and consumers before destroying the queue and reusing its storage.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_fft_init(
     queue: *mut SpscQueueFft,
     memory_base: *mut SpscQueueFftSlot,
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
-    if queue.is_null() || memory_base.is_null() {
+    if queue.is_null() || !valid_dma_region(memory_base, size_in_bytes, 256) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
     unsafe {
-        core::ptr::drop_in_place(queue);
         core::ptr::write(queue, SpscQueueFft::new());
     }
 
     let queue_ref = unsafe { &mut *queue };
 
-    match queue_ref.init(memory_base, size_in_bytes) {
+    match unsafe { queue_ref.init(memory_base, size_in_bytes) } {
         Ok(_) => ShawncoreRtosErr::Success,
         Err(e) => e.into(),
     }
@@ -655,7 +771,8 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_destroy(
 /// Pushes an item into the `SpscQueueFft`.
 ///
 /// # Safety
-/// `queue` and `item` must be valid, non-null pointers.
+/// `queue` and `item` must be valid, non-null pointers. The caller must remain
+/// the queue's sole producer until the queue is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_fft_push(
     queue: *const SpscQueueFft,
@@ -668,16 +785,17 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_push(
     let queue_ref = unsafe { &*queue };
     let item_val = unsafe { *item };
 
-    match queue_ref.push(item_val) {
+    match unsafe { queue_ref.push(item_val) } {
         Ok(_) => ShawncoreRtosErr::Success,
-        Err(_) => ShawncoreRtosErr::QueueFull,
+        Err(error) => error.into(),
     }
 }
 
 /// Pops an item from the `SpscQueueFft`.
 ///
 /// # Safety
-/// `queue` and `out_item` must be valid, non-null pointers.
+/// `queue` and `out_item` must be valid, non-null pointers. The caller must
+/// remain the queue's sole consumer until the queue is destroyed.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_spsc_fft_pop(
     queue: *const SpscQueueFft,
@@ -689,14 +807,18 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_pop(
 
     let queue_ref = unsafe { &*queue };
 
-    match queue_ref.pop() {
+    if !queue_ref.is_initialized() {
+        return ShawncoreRtosErr::NotInitialized;
+    }
+
+    match unsafe { queue_ref.pop() } {
         Some(item) => {
             unsafe {
                 core::ptr::write(out_item, item);
             }
             ShawncoreRtosErr::Success
         }
-        None => ShawncoreRtosErr::NotInitialized, // Used here to indicate empty
+        None => ShawncoreRtosErr::QueueEmpty,
     }
 }
 
@@ -706,20 +828,20 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_pop(
 
 /// Returns the memory size required to allocate a `StateMachine`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_state_machine_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_state_machine_sizeof() -> usize {
     core::mem::size_of::<StateMachine>()
 }
 
 /// Returns the memory alignment required to allocate a `StateMachine`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_state_machine_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_state_machine_alignof() -> usize {
     core::mem::align_of::<StateMachine>()
 }
 
 /// Initializes a host-allocated `StateMachine`.
 ///
 /// # Safety
-/// `machine` must point to a valid `StateMachine`.
+/// `machine` must point to a valid, uninitialized `StateMachine`.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_state_machine_init(
     machine: *mut StateMachine,
@@ -729,7 +851,6 @@ pub unsafe extern "C" fn shawncore_rtos_state_machine_init(
     }
 
     unsafe {
-        core::ptr::drop_in_place(machine);
         core::ptr::write(machine, StateMachine::new());
     }
 
@@ -791,20 +912,20 @@ pub unsafe extern "C" fn shawncore_rtos_state_machine_try_advance(
 
 /// Returns the memory size required to allocate a `LatencyTracker`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_latency_tracker_sizeof() -> usize {
+pub extern "C" fn shawncore_rtos_latency_tracker_sizeof() -> usize {
     core::mem::size_of::<LatencyTracker>()
 }
 
 /// Returns the memory alignment required to allocate a `LatencyTracker`.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_latency_tracker_alignof() -> usize {
+pub extern "C" fn shawncore_rtos_latency_tracker_alignof() -> usize {
     core::mem::align_of::<LatencyTracker>()
 }
 
 /// Initializes a host-allocated `LatencyTracker`.
 ///
 /// # Safety
-/// `tracker` must point to a valid `LatencyTracker`.
+/// `tracker` must point to a valid, uninitialized `LatencyTracker`.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_latency_tracker_init(
     tracker: *mut LatencyTracker,
@@ -814,7 +935,6 @@ pub unsafe extern "C" fn shawncore_rtos_latency_tracker_init(
     }
 
     unsafe {
-        core::ptr::drop_in_place(tracker);
         core::ptr::write(tracker, LatencyTracker::new());
     }
 

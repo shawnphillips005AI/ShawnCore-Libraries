@@ -1,5 +1,3 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -34,33 +32,37 @@ pub enum ShawncoreRtosErr {
     QueueFull = 8,
     /// Invalid memory provided to queue.
     InvalidMemory = 9,
+    /// Queue is initialized but currently empty.
+    QueueEmpty = 12,
     /// Task fault in scheduler.
     TaskFault = 10,
+    /// Invalid runtime or state transition.
+    InvalidState = 11,
     /// A panic occurred within the Rust boundary.
     Panic = 99,
 }
 
-impl From<crate::static_dma_pool::AllocatorError> for ShawncoreRtosErr {
-    fn from(err: crate::static_dma_pool::AllocatorError) -> Self {
+impl From<crate::error::AllocatorError> for ShawncoreRtosErr {
+    fn from(err: crate::error::AllocatorError) -> Self {
         match err {
-            crate::static_dma_pool::AllocatorError::OutOfMemory => Self::OutOfMemory,
-            crate::static_dma_pool::AllocatorError::AddressOutOfBounds => Self::AddressOutOfBounds,
-            crate::static_dma_pool::AllocatorError::InvalidAlignment => Self::InvalidAlignment,
-            crate::static_dma_pool::AllocatorError::LockContention => Self::LockContention,
-            crate::static_dma_pool::AllocatorError::DoubleFree => Self::DoubleFree,
-            crate::static_dma_pool::AllocatorError::NotInitialized => Self::NotInitialized,
-            crate::static_dma_pool::AllocatorError::AlreadyInitialized => Self::AlreadyInitialized,
+            crate::error::AllocatorError::OutOfMemory => Self::OutOfMemory,
+            crate::error::AllocatorError::AddressOutOfBounds => Self::AddressOutOfBounds,
+            crate::error::AllocatorError::InvalidAlignment => Self::InvalidAlignment,
+            crate::error::AllocatorError::LockContention => Self::LockContention,
+            crate::error::AllocatorError::DoubleFree => Self::DoubleFree,
+            crate::error::AllocatorError::NotInitialized => Self::NotInitialized,
+            crate::error::AllocatorError::AlreadyInitialized => Self::AlreadyInitialized,
         }
     }
 }
 
-impl From<crate::spsc_queue::IpcError> for ShawncoreRtosErr {
-    fn from(err: crate::spsc_queue::IpcError) -> Self {
+impl From<crate::error::IpcError> for ShawncoreRtosErr {
+    fn from(err: crate::error::IpcError) -> Self {
         match err {
-            crate::spsc_queue::IpcError::QueueFull => Self::QueueFull,
-            crate::spsc_queue::IpcError::NotInitialized => Self::NotInitialized,
-            crate::spsc_queue::IpcError::AlreadyInitialized => Self::AlreadyInitialized,
-            crate::spsc_queue::IpcError::InvalidMemory => Self::InvalidMemory,
+            crate::error::IpcError::QueueFull => Self::QueueFull,
+            crate::error::IpcError::NotInitialized => Self::NotInitialized,
+            crate::error::IpcError::AlreadyInitialized => Self::AlreadyInitialized,
+            crate::error::IpcError::InvalidMemory => Self::InvalidMemory,
         }
     }
 }
@@ -85,8 +87,11 @@ static PANIC_CALLBACK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 /// # Safety
 /// `cb` must be a valid function pointer to a C-ABI compatible function.
 #[no_mangle]
-pub unsafe extern "C" fn shawncore_rtos_register_panic_hook(cb: PanicCallback) {
-    PANIC_CALLBACK.store(cb as *mut (), Ordering::SeqCst);
+pub unsafe extern "C" fn shawncore_rtos_register_panic_hook(cb: Option<PanicCallback>) {
+    PANIC_CALLBACK.store(
+        cb.map_or(core::ptr::null_mut(), |callback| callback as *mut ()),
+        Ordering::SeqCst,
+    );
 }
 
 /// Invokes the registered panic callback.
@@ -95,7 +100,7 @@ pub unsafe extern "C" fn shawncore_rtos_register_panic_hook(cb: PanicCallback) {
 pub fn invoke_panic_hook() {
     compiler_fence(Ordering::SeqCst);
     let cb_ptr = PANIC_CALLBACK.load(Ordering::Acquire);
-    
+
     if !cb_ptr.is_null() {
         // # Safety
         // Spatial: N/A.

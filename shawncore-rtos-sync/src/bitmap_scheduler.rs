@@ -1,5 +1,3 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -17,6 +15,7 @@
 //! * **Stack Overflow Protection:** Integrates stack canary verification on every context switch.
 
 use crate::error::SchedulerError;
+use crate::ffi_callbacks::host_pet_watchdog;
 use crate::tcb::Tcb;
 use core::sync::atomic::{compiler_fence, Ordering};
 
@@ -36,6 +35,10 @@ pub struct PerCoreScheduler {
     pub ready_bitmap: u16,
     /// Index of the currently executing task.
     pub current_task: usize,
+    /// Bits for critical tasks that checked in during the current watchdog window.
+    pub watchdog_matrix: u16,
+    /// Tasks required to check in before the watchdog may be petted.
+    pub critical_task_mask: u16,
 }
 
 impl Default for PerCoreScheduler {
@@ -52,13 +55,27 @@ impl PerCoreScheduler {
     pub const fn new() -> Self {
         Self {
             tasks: [
-                Tcb::new(), Tcb::new(), Tcb::new(), Tcb::new(),
-                Tcb::new(), Tcb::new(), Tcb::new(), Tcb::new(),
-                Tcb::new(), Tcb::new(), Tcb::new(), Tcb::new(),
-                Tcb::new(), Tcb::new(), Tcb::new(), Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
+                Tcb::new(),
             ],
             ready_bitmap: 0,
             current_task: 15, // Default to idle task
+            watchdog_matrix: 0,
+            critical_task_mask: 0,
         }
     }
 
@@ -73,8 +90,24 @@ impl PerCoreScheduler {
     ///
     /// # Returns
     /// `Ok(())` if the task was registered successfully, or `SchedulerError::TaskFault` if the priority is out of bounds.
-    pub fn create_task(&mut self, mut tcb: Tcb, canary_value: u64) -> Result<(), SchedulerError> {
-        if tcb.priority >= 16 {
+    ///
+    /// # Safety
+    /// `tcb.stack_base..stack_base + stack_size` must be mapped writable memory
+    /// for the lifetime of the task, exclusively owned by the task, and contain
+    /// the initial stack pointer. The scheduler writes and later reads the first
+    /// aligned `u64` in that range as its canary.
+    pub unsafe fn create_task(
+        &mut self,
+        mut tcb: Tcb,
+        canary_value: u64,
+    ) -> Result<(), SchedulerError> {
+        let stack_end = tcb.stack_base.checked_add(tcb.stack_size as u64);
+        let valid_stack = tcb.stack_base != 0
+            && tcb.stack_base % core::mem::align_of::<u64>() as u64 == 0
+            && tcb.stack_size >= core::mem::size_of::<u64>()
+            && stack_end.is_some_and(|end| tcb.rsp >= tcb.stack_base && tcb.rsp <= end);
+
+        if tcb.priority >= 16 || !valid_stack || self.ready_bitmap & (1 << tcb.priority) != 0 {
             return Err(SchedulerError::TaskFault);
         }
 
@@ -122,6 +155,19 @@ impl PerCoreScheduler {
         }
     }
 
+    /// Records a critical task check-in for the current watchdog window.
+    pub fn task_check_in(&mut self, priority: u8) {
+        if priority < 16 {
+            self.watchdog_matrix |= 1 << priority;
+        }
+    }
+
+    /// Configures the tasks required to check in before the watchdog is petted.
+    pub fn set_critical_task_mask(&mut self, critical_task_mask: u16) {
+        self.critical_task_mask = critical_task_mask;
+        self.watchdog_matrix &= critical_task_mask;
+    }
+
     /// The core scheduling logic (Preemptive & Cooperative).
     ///
     /// Implements O(1) Lock-Free Partitioned Scheduling.
@@ -134,15 +180,31 @@ impl PerCoreScheduler {
     /// # Returns
     /// The stack pointer of the next task to execute. Returns `0` if a stack overflow (canary corruption) is detected.
     #[must_use]
-    pub fn schedule_tick(&mut self, current_rsp: u64) -> u64 {
+    ///
+    /// # Safety
+    /// Every registered task stack must continue to satisfy `create_task`'s
+    /// mapped-memory, lifetime, and ownership contract until it is removed.
+    pub unsafe fn schedule_tick(&mut self, current_rsp: u64) -> u64 {
+        if self.critical_task_mask != 0
+            && (self.watchdog_matrix & self.critical_task_mask) == self.critical_task_mask
+        {
+            host_pet_watchdog();
+            self.watchdog_matrix = 0;
+        }
         let current_idx = self.current_task;
 
         // Save the current task's stack pointer and verify its canary
         if current_idx < MAX_TASKS {
             self.tasks[current_idx].rsp = current_rsp;
-            
+
             let tcb = &self.tasks[current_idx];
             if tcb.stack_base != 0 {
+                if tcb.stack_base % core::mem::align_of::<u64>() as u64 != 0
+                    || tcb.stack_size < core::mem::size_of::<u64>()
+                {
+                    return 0;
+                }
+
                 // # Safety
                 // Spatial: `stack_base` is provided by the host OS and assumed to be valid.
                 // Temporal: The stack memory is valid for the lifetime of the task.
@@ -174,5 +236,64 @@ impl PerCoreScheduler {
         compiler_fence(Ordering::SeqCst);
 
         self.tasks[next_idx].rsp
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PerCoreScheduler;
+    use crate::ffi_callbacks::shawncore_rtos_register_pet_watchdog;
+    use crate::tcb::Tcb;
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    static WATCHDOG_PETS: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn count_watchdog_pet() {
+        WATCHDOG_PETS.fetch_add(1, Ordering::Relaxed);
+    }
+
+    #[test]
+    fn watchdog_pets_only_after_all_critical_tasks_check_in() {
+        unsafe { shawncore_rtos_register_pet_watchdog(Some(count_watchdog_pet)) };
+        WATCHDOG_PETS.store(0, Ordering::Relaxed);
+        let mut scheduler = PerCoreScheduler::new();
+        scheduler.critical_task_mask = (1 << 2) | (1 << 5);
+
+        scheduler.task_check_in(2);
+        let _ = unsafe { scheduler.schedule_tick(0) };
+        assert_eq!(WATCHDOG_PETS.load(Ordering::Relaxed), 0);
+
+        scheduler.task_check_in(5);
+        let _ = unsafe { scheduler.schedule_tick(0) };
+        assert_eq!(WATCHDOG_PETS.load(Ordering::Relaxed), 1);
+        assert_eq!(scheduler.watchdog_matrix, 0);
+    }
+
+    #[test]
+    fn duplicate_priority_and_zero_stack_base_are_rejected() {
+        let mut scheduler = PerCoreScheduler::new();
+        let mut stack = [0u64; 2];
+        let stack_base = stack.as_mut_ptr() as u64;
+        let stack_size = core::mem::size_of_val(&stack);
+
+        assert!(unsafe {
+            scheduler.create_task(Tcb::new_task(1, 0, stack_size, stack_base, 1), 0xAA55)
+        }
+        .is_err());
+        unsafe {
+            scheduler
+                .create_task(
+                    Tcb::new_task(1, stack_base, stack_size, stack_base, 1),
+                    0xAA55,
+                )
+                .unwrap();
+        }
+        assert!(unsafe {
+            scheduler.create_task(
+                Tcb::new_task(2, stack_base, stack_size, stack_base, 1),
+                0x55AA,
+            )
+        }
+        .is_err());
     }
 }
