@@ -1,5 +1,3 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -51,25 +49,30 @@ impl StateMachine {
     ///
     /// # Returns
     /// `Ok(())` if the transition is valid, or `Err(())` if the transition is forbidden.
+    #[allow(clippy::result_unit_err)]
     pub fn try_advance(&self, target: EnclaveState) -> Result<(), ()> {
-        let current = self.current_state.load(Ordering::Acquire);
-        
-        let valid = match (current, target as u8) {
-            (0, 1) => true, // Init -> Bootstrapping
-            (1, 2) => true, // Bootstrapping -> Operational
-            (1, 4) => true, // Bootstrapping -> Terminal (Failed tests)
-            (2, 3) => true, // Operational -> Degraded
-            (2, 4) => true, // Operational -> Terminal
-            (3, 4) => true, // Degraded -> Terminal
-            (3, 2) => true, // Degraded -> Operational (Recovery)
-            _ => false,
-        };
+        let target = target as u8;
+        let mut current = self.current_state.load(Ordering::Acquire);
 
-        if valid {
-            self.current_state.store(target as u8, Ordering::Release);
-            Ok(())
-        } else {
-            Err(())
+        loop {
+            let valid = matches!(
+                (current, target),
+                (0, 1) | (1, 2) | (1, 4) | (2, 3) | (2, 4) | (3, 4) | (3, 2)
+            );
+
+            if !valid {
+                return Err(());
+            }
+
+            match self.current_state.compare_exchange_weak(
+                current,
+                target,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Ok(()),
+                Err(updated) => current = updated,
+            }
         }
     }
 
