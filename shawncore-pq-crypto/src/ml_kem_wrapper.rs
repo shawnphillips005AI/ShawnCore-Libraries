@@ -4,7 +4,8 @@
 //! ML-KEM-1024 (FIPS 203) Key Encapsulation Mechanism wrapper.
 //! Provides post-quantum key establishment with strict constant-time and zeroization guarantees.
 //! Hardware-agnostic implementation for MarTac USVs.
-//! Fully compliant with NIST FIPS 203 specifications for Module-Lattice-Based Key-Encapsulation Mechanism.
+//! Uses the selected `ml-kem` dependency's ML-KEM-1024 implementation; independent
+//! conformance testing remains outside this crate's scope.
 
 use crate::error::CryptoError;
 use crate::zeroize::secure_cache_flush;

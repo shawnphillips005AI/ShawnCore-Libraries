@@ -1,47 +1,69 @@
 # ShawnCore Libraries
 
-No-std Rust libraries for embedded systems that need hybrid cryptography and deterministic RTOS synchronization primitives.
+ShawnCore is a no-std Rust prototype for embedded systems that need hybrid cryptographic session establishment alongside deterministic RTOS synchronization primitives. It provides Rust APIs and C-callable FFI boundaries; platform integration remains the responsibility of the host firmware.
 
-## Crates
+## Architecture
 
-- `shawncore-pq-crypto`: ML-KEM-1024, ML-DSA-87, X25519, hybrid HKDF derivation with separate Tx/Rx keys, ChaCha20/HMAC-SHA384 AEAD, entropy management, and C FFI.
-- `shawncore-rtos-sync`: static DMA pools, SPSC queues, ring buffers, scheduling, state machines, and telemetry support.
+- `shawncore-pq-crypto`: ML-KEM-1024, ML-DSA-87, X25519, hybrid HKDF-SHA384 derivation, ChaCha20/HMAC-SHA384 authenticated encryption, entropy handling, session lifecycle management, and C FFI.
+- `shawncore-rtos-sync`: DMA-pool ownership tracking, SPSC and ring buffers, priority scheduling, state machines, interrupt spinlocks, latency tracking, and telemetry support.
+- `shawncore-ffi`: the C-linkable `staticlib` facade. It owns the required `no_std` panic handler and includes both component crates' exported FFI symbols.
 
-## Verification
+The hybrid KDF returns exactly 128 bytes. For a responder, transmit material is bytes `0..32 || 96..128` and receive material is bytes `32..96`. The initiator applies the complementary assignment. Each directional key is therefore 64 bytes: 32 bytes for ChaCha20 encryption and 32 bytes for HMAC-SHA384 authentication. The handshake transcript includes a fixed protocol label, the ML-KEM ciphertext, the sender X25519 public key, and application info.
+
+## Security Boundaries
+
+Session decryption authenticates the packet before committing replay-window state. Duplicate and out-of-window nonces are rejected. Failed packet encryption does not advance the transmit sequence; exhaustion is rejected before a nonce is reused. Session and temporary derivation material are explicitly zeroized by the implementation where supported by the underlying types.
+
+Rust atomic ordering establishes ordering and visibility under the Rust memory model. It does not itself flush processor caches, make data visible to a DMA device, or prove board-level coherency. The host must register platform-specific cache flush/invalidate callbacks where required and validate the resulting cache, barrier, interrupt, and DMA behavior on the target hardware.
+
+The SPSC queues rely on one producer and one consumer, with exclusive slot ownership transferred through Acquire/Release publication. They are CPU-shared-memory structures. They are not a complete DMA protocol without host-provided cache-maintenance operations and a board-specific ownership contract.
+
+## C FFI Contract
+
+Build the C artifact with `cargo build -p shawncore-ffi --release`. Link the resulting `target/release/libshawncore_ffi.a` and include [`shawncore-ffi/include/shawncore.h`](shawncore-ffi/include/shawncore.h). The header exposes every ABI function, stable C payload layouts, and size/alignment queries for opaque Rust objects and queue slots.
+
+Opaque objects must use the crate-exported `sizeof` and `alignof` values, be initialized exactly once, and be destroyed exactly once after all concurrent users stop. Pointer arguments must be valid, aligned for their declared object types, and live for the entire call. Buffers must satisfy their documented lengths and non-overlap requirements. A non-null pointer is not sufficient evidence that it is mapped, writable, owned by the caller, or valid for the required lifetime; those are host obligations.
+
+Register panic, interrupt, monotonic-clock, watchdog, and cache callbacks before calling paths that require them. Callback registrations use C ABI function pointers and must remain valid for the duration of any possible call. The provided C HAL file is compile-only scaffolding, not an implementation of cache, interrupt, watchdog, panic, or clock behavior.
+
+## Validation Status
+
+**IMPLEMENTED:** AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF/session keys, FFI surfaces, RTOS primitives, and C HAL stubs.
+
+**TESTED:** local Rust unit tests cover crypto round trips and tampering, selected FFI null/overlap handling, session establishment, replay-related paths, queue reuse/corruption paths, DMA-pool exhaustion and stale-generation rejection, scheduler boundaries, state transitions, and the FFT one-cache-line ABI. A C11 smoke program compiles, links, and executes against the release static library.
+
+**FUZZED:** the `ffi_aead_fuzz` cargo-fuzz target supplies valid storage while varying bounded lengths and data, including malformed ciphertext, overlap, and null-with-length cases. Its compile check is part of CI; a fuzz campaign is a separate nightly CI job.
+
+**STATICALLY REVIEWED:** strict Clippy, formatting, workspace checks, documentation build, C syntax compilation, and a bare-metal AArch64 type check are configured in CI.
+
+**MODEL TESTED:** software tests exercise Rust-level ordering and API behavior only; they do not model cache-coherent DMA hardware.
+
+**HARDWARE VALIDATED:** not yet validated by this repository.
+
+**NOT YET VALIDATED:** target ABI interoperability, cache coherency, DMA visibility, ISR/NMI/FIQ behavior, watchdog behavior, entropy-source quality, sanitizer-backed native FFI misuse tests, ML-KEM/ML-DSA known-answer and external interoperability tests, and independent security review.
+
+## Reproducible Checks
 
 ```text
 cargo fmt --all -- --check
-cargo test --workspace --all-targets
 cargo check --workspace --all-targets
-cargo check --target aarch64-unknown-none --workspace
+cargo test --workspace --all-targets
+cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo build --workspace --release
 cargo doc --workspace --no-deps
+cargo check --target aarch64-unknown-none --workspace
 cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz
-cc -std=c11 -Wall -Wextra -Werror -fsyntax-only integration/martac_hal_stubs.c
+cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include -fsyntax-only integration/martac_hal_stubs.c
+cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include integration/c_api_smoke.c target/release/libshawncore_ffi.a -o /tmp/shawncore-c-api-smoke
+/tmp/shawncore-c-api-smoke
 ```
 
-The crypto crate includes round-trip tests for AEAD, HKDF, X25519, ML-KEM, ML-DSA, and the hybrid session manager.
+`rust-toolchain.toml` pins Rust `1.85.0`, including the `aarch64-unknown-none` target used by the configured target check. Release profiles use `panic = "abort"` so a Rust panic cannot unwind through the C ABI; the host panic callback still needs a platform fail-safe response.
 
-The repository toolchain file pins Rust `1.85.0` and the `aarch64-unknown-none` target for the bare-metal build. This is required because the selected `ml-dsa` dependency resolves through `signature 3.x`, which requires Rust `1.85` and Edition 2024 support.
+## Status and Claims
 
-Release profiles use `panic = "abort"` so Rust panics cannot unwind across the C ABI. The MarTac firmware must still register the panic callback and implement the platform fail-safe response.
+This is a prototype intended for technical evaluation. It implements ML-KEM-1024 and ML-DSA-87 using their selected dependency implementations and a hybrid key-establishment design. It is not a claim of FIPS certification, CNSA approval, operational USV readiness, or comprehensive security assurance. Those conclusions require independent review, known-answer and interoperability testing, target-specific validation, and host-organization acceptance testing.
 
-The `fuzz/` directory contains a cargo-fuzz harness for bounded malformed-input testing of the AEAD FFI. It intentionally uses valid in-process storage and fuzzed lengths; arbitrary invalid pointers cannot be safely dereferenced by a harness and require sanitizer-backed native FFI testing.
+## Distribution
 
-## FFI Requirements
-
-The host must allocate each opaque object with the `sizeof` and `alignof` functions exported by its crate, initialize it exactly once, and destroy it exactly once. Object storage may be reused only after destruction, with all producers and consumers stopped. Host callbacks for cache flushing, stack wiping, panic handling, and RTOS interrupt save/restore must be registered before invoking paths that require them.
-
-The FFI contracts require valid pointers, correct buffer lengths, and single-producer/single-consumer ownership where documented. The host must provide hardware-in-the-loop validation for DMA coherency, interrupt behavior, stack wiping, and target ABI integration.
-
-RTOS SPSC queues require registered cache invalidate and flush callbacks before use. The DMA pool uses an ABA-tagged lock-free Treiber free list and returns an ownership generation with each allocation; both the index and generation are required to release a buffer. Lock-free does not mean wait-free under arbitrary contention, so callers must handle allocation failure deterministically.
-
-Version 1.2 adds per-session Tx/Rx key integrity checks, per-slot seqlock validation against torn DMA reads, and a scheduler watchdog matrix. Critical tasks must call the scheduler check-in API before the configured watchdog window closes. A zero critical-task mask disables watchdog petting until configured by the host.
-
-## Toolchain Note
-
-`rust-toolchain.toml` pins the compiler and bare-metal target used by local and CI verification. MarTac should approve this toolchain for the target firmware build before integration.
-
-## Compliance Notice
-
-The libraries implement the ML-KEM and ML-DSA algorithms and a hybrid key-establishment design. This repository is not a claim of FIPS certification, CNSA approval, or operational USV readiness. Those claims require independent review, known-answer and interoperability testing, target-specific validation, and MarTac acceptance testing.
+This repository is proprietary and all rights are reserved. The crates are intentionally excluded from registry publication; distribution, evaluation, and integration require a separate written agreement with the copyright holder.

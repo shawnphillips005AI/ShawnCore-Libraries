@@ -2,9 +2,10 @@
 #![deny(missing_docs)]
 
 //! ML-DSA-87 (FIPS 204) Digital Signature Algorithm wrapper.
-//! Provides post-quantum digital signatures with strict constant-time and zeroization guarantees.
+//! Provides post-quantum digital-signature operations and wrapper-managed zeroization.
 //! Hardware-agnostic implementation for MarTac USVs.
-//! Fully compliant with NIST FIPS 204 specifications for Module-Lattice-Based Digital Signature Standard.
+//! Uses the selected `ml-dsa` dependency's ML-DSA-87 implementation; independent
+//! conformance testing remains outside this crate's scope.
 
 use crate::error::CryptoError;
 use crate::zeroize::secure_cache_flush;

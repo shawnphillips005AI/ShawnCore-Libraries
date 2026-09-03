@@ -21,6 +21,73 @@ use crate::x25519_wrapper::{
     x25519_diffie_hellman, x25519_keygen, X25519Public, X25519Secret, X25519SharedSecret,
 };
 
+macro_rules! opaque_type_layout {
+    ($type:ty, $sizeof:ident, $alignof:ident) => {
+        #[doc = concat!("Returns the memory size required to allocate a `", stringify!($type), "`.")]
+        #[no_mangle]
+        pub extern "C" fn $sizeof() -> usize {
+            core::mem::size_of::<$type>()
+        }
+
+        #[doc = concat!("Returns the memory alignment required to allocate a `", stringify!($type), "`.")]
+        #[no_mangle]
+        pub extern "C" fn $alignof() -> usize {
+            core::mem::align_of::<$type>()
+        }
+    };
+}
+
+opaque_type_layout!(
+    PublicKey1024,
+    shawncore_crypto_ml_kem_publickey_sizeof,
+    shawncore_crypto_ml_kem_publickey_alignof
+);
+opaque_type_layout!(
+    DecapsKey1024,
+    shawncore_crypto_ml_kem_decapskey_sizeof,
+    shawncore_crypto_ml_kem_decapskey_alignof
+);
+opaque_type_layout!(
+    SharedKey1024,
+    shawncore_crypto_ml_kem_sharedkey_sizeof,
+    shawncore_crypto_ml_kem_sharedkey_alignof
+);
+opaque_type_layout!(
+    Ciphertext1024,
+    shawncore_crypto_ml_kem_ciphertext_sizeof,
+    shawncore_crypto_ml_kem_ciphertext_alignof
+);
+opaque_type_layout!(
+    PublicKey87,
+    shawncore_crypto_ml_dsa_publickey_sizeof,
+    shawncore_crypto_ml_dsa_publickey_alignof
+);
+opaque_type_layout!(
+    SigningKey87,
+    shawncore_crypto_ml_dsa_signingkey_sizeof,
+    shawncore_crypto_ml_dsa_signingkey_alignof
+);
+opaque_type_layout!(
+    Signature87,
+    shawncore_crypto_ml_dsa_signature_sizeof,
+    shawncore_crypto_ml_dsa_signature_alignof
+);
+opaque_type_layout!(
+    X25519Public,
+    shawncore_crypto_x25519_publickey_sizeof,
+    shawncore_crypto_x25519_publickey_alignof
+);
+opaque_type_layout!(
+    X25519Secret,
+    shawncore_crypto_x25519_secret_sizeof,
+    shawncore_crypto_x25519_secret_alignof
+);
+opaque_type_layout!(
+    X25519SharedSecret,
+    shawncore_crypto_x25519_sharedsecret_sizeof,
+    shawncore_crypto_x25519_sharedsecret_alignof
+);
+
 // ============================================================================
 // Session Manager FFI
 // ============================================================================
@@ -357,10 +424,9 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encrypt_packet(
         || out_nonce.is_null()
         || out_tag.is_null()
         || (aad.is_null() && aad_len > 0)
-        || ranges_overlap(ciphertext, data_len, plaintext, data_len)
-        || ranges_overlap(out_nonce, 12, plaintext, data_len)
-        || ranges_overlap(out_tag, 48, plaintext, data_len)
-        || ranges_overlap(out_nonce, 12, out_tag, 48)
+        || session_encrypt_buffers_overlap(
+            manager, aad, aad_len, plaintext, ciphertext, data_len, out_nonce, out_tag,
+        )
     {
         return ShawncoreCryptoErr::InvalidLength;
     }
@@ -403,9 +469,9 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_decrypt_packet(
         || tag.is_null()
         || plaintext.is_null()
         || (aad.is_null() && aad_len > 0)
-        || ranges_overlap(plaintext, data_len, ciphertext, data_len)
-        || ranges_overlap(plaintext, data_len, nonce, 12)
-        || ranges_overlap(plaintext, data_len, tag, 48)
+        || session_decrypt_buffers_overlap(
+            manager, aad, aad_len, ciphertext, data_len, nonce, tag, plaintext,
+        )
     {
         return ShawncoreCryptoErr::InvalidLength;
     }
@@ -848,6 +914,57 @@ fn ranges_overlap<T, U>(
     };
 
     (first as usize) < second_end && (second as usize) < first_end
+}
+
+#[allow(clippy::too_many_arguments)]
+fn session_encrypt_buffers_overlap(
+    manager: *const SessionManager,
+    aad: *const u8,
+    aad_len: usize,
+    plaintext: *const u8,
+    ciphertext: *mut u8,
+    data_len: usize,
+    out_nonce: *mut u8,
+    out_tag: *mut u8,
+) -> bool {
+    let manager_size = core::mem::size_of::<SessionManager>();
+    ranges_overlap(manager, manager_size, aad, aad_len)
+        || ranges_overlap(manager, manager_size, plaintext, data_len)
+        || ranges_overlap(manager, manager_size, ciphertext, data_len)
+        || ranges_overlap(manager, manager_size, out_nonce, 12)
+        || ranges_overlap(manager, manager_size, out_tag, 48)
+        || ranges_overlap(ciphertext, data_len, aad, aad_len)
+        || ranges_overlap(ciphertext, data_len, plaintext, data_len)
+        || ranges_overlap(ciphertext, data_len, out_nonce, 12)
+        || ranges_overlap(ciphertext, data_len, out_tag, 48)
+        || ranges_overlap(out_nonce, 12, aad, aad_len)
+        || ranges_overlap(out_nonce, 12, plaintext, data_len)
+        || ranges_overlap(out_nonce, 12, out_tag, 48)
+        || ranges_overlap(out_tag, 48, aad, aad_len)
+        || ranges_overlap(out_tag, 48, plaintext, data_len)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn session_decrypt_buffers_overlap(
+    manager: *const SessionManager,
+    aad: *const u8,
+    aad_len: usize,
+    ciphertext: *const u8,
+    data_len: usize,
+    nonce: *const u8,
+    tag: *const u8,
+    plaintext: *mut u8,
+) -> bool {
+    let manager_size = core::mem::size_of::<SessionManager>();
+    ranges_overlap(manager, manager_size, aad, aad_len)
+        || ranges_overlap(manager, manager_size, ciphertext, data_len)
+        || ranges_overlap(manager, manager_size, nonce, 12)
+        || ranges_overlap(manager, manager_size, tag, 48)
+        || ranges_overlap(manager, manager_size, plaintext, data_len)
+        || ranges_overlap(plaintext, data_len, aad, aad_len)
+        || ranges_overlap(plaintext, data_len, ciphertext, data_len)
+        || ranges_overlap(plaintext, data_len, nonce, 12)
+        || ranges_overlap(plaintext, data_len, tag, 48)
 }
 
 #[allow(clippy::too_many_arguments)]

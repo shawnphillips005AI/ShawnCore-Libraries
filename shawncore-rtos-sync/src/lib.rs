@@ -25,6 +25,7 @@ pub mod telemetry_queue;
 #[cfg(test)]
 mod tests {
     use super::bitmap_scheduler::PerCoreScheduler;
+    use super::ffi::FftResult;
     use super::state_machine::{EnclaveState, StateMachine};
     use super::tcb::Tcb;
 
@@ -39,6 +40,12 @@ mod tests {
         machine.try_advance(EnclaveState::Operational).unwrap();
         assert!(machine.try_advance(EnclaveState::Init).is_err());
         assert_eq!(machine.get_state(), EnclaveState::Operational as u8);
+    }
+
+    #[test]
+    fn fft_result_has_one_cache_line_layout() {
+        assert_eq!(core::mem::size_of::<FftResult>(), 64);
+        assert_eq!(core::mem::align_of::<FftResult>(), 64);
     }
 
     #[test]
