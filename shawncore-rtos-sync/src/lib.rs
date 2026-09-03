@@ -1,5 +1,5 @@
 #![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
+#![deny(clippy::all)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 

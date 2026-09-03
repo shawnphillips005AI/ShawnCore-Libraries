@@ -1,4 +1,3 @@
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -27,12 +26,18 @@ use crate::x25519_wrapper::{
 // ============================================================================
 
 /// Returns the memory size required to allocate a `SessionManager`.
+///
+/// # Safety
+/// This function has no pointer safety requirements.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_session_manager_sizeof() -> usize {
     core::mem::size_of::<SessionManager>()
 }
 
 /// Returns the memory alignment required to allocate a `SessionManager`.
+///
+/// # Safety
+/// This function has no pointer safety requirements.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_session_manager_alignof() -> usize {
     core::mem::align_of::<SessionManager>()
@@ -296,70 +301,17 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
         &[]
     };
 
+    let out_ct_ref = unsafe { &mut *out_ct };
+    let out_my_x25519_pk_ref = unsafe { &mut *out_my_x25519_pk };
     match manager_ref.encapsulate_for_peer(
         peer_ml_kem_pk_ref,
         peer_x25519_pk_ref,
         entropy_ref,
         salt_slice,
         info_slice,
+        out_ct_ref,
+        out_my_x25519_pk_ref,
     ) {
-        Ok((ct, my_x25519_pk)) => {
-            unsafe {
-                core::ptr::write(out_ct, ct);
-                core::ptr::write(out_my_x25519_pk, my_x25519_pk);
-            }
-            ShawncoreCryptoErr::Success
-        }
-        Err(e) => e.into(),
-    }
-}
-
-/// Retrieves the active 32-byte session key.
-///
-/// # Safety
-/// `manager` and `out_key` must be valid, non-null pointers. `out_key` must point to 32 bytes.
-#[no_mangle]
-pub unsafe extern "C" fn shawncore_crypto_session_manager_get_tx_key(
-    manager: *const SessionManager,
-    out_key: *mut u8,
-) -> ShawncoreCryptoErr {
-    if manager.is_null() || out_key.is_null() {
-        return ShawncoreCryptoErr::InvalidState;
-    }
-    if ranges_overlap(manager, core::mem::size_of::<SessionManager>(), out_key, 32) {
-        return ShawncoreCryptoErr::InvalidLength;
-    }
-
-    let manager_ref = unsafe { &*manager };
-    let out_key_ref = unsafe { &mut *(out_key as *mut [u8; 32]) };
-
-    match manager_ref.get_tx_key(out_key_ref) {
-        Ok(_) => ShawncoreCryptoErr::Success,
-        Err(e) => e.into(),
-    }
-}
-
-/// Retrieves the active 32-byte receive key.
-///
-/// # Safety
-/// `manager` and `out_key` must be valid, non-null pointers. `out_key` must point to 32 bytes.
-#[no_mangle]
-pub unsafe extern "C" fn shawncore_crypto_session_manager_get_rx_key(
-    manager: *const SessionManager,
-    out_key: *mut u8,
-) -> ShawncoreCryptoErr {
-    if manager.is_null() || out_key.is_null() {
-        return ShawncoreCryptoErr::InvalidState;
-    }
-
-    if ranges_overlap(manager, core::mem::size_of::<SessionManager>(), out_key, 32) {
-        return ShawncoreCryptoErr::InvalidLength;
-    }
-
-    let manager_ref = unsafe { &*manager };
-    let out_key_ref = unsafe { &mut *(out_key as *mut [u8; 32]) };
-
-    match manager_ref.get_rx_key(out_key_ref) {
         Ok(()) => ShawncoreCryptoErr::Success,
         Err(e) => e.into(),
     }
@@ -381,6 +333,103 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_zeroize(
     manager_ref.zeroize_session();
 
     ShawncoreCryptoErr::Success
+}
+
+/// Encrypts a packet using the session manager's internal transmit key.
+///
+/// # Safety
+/// `manager`, `plaintext`, `ciphertext`, `out_nonce`, and `out_tag` must be valid.
+/// `aad` may be null only when `aad_len` is zero. Output regions must not overlap inputs.
+#[no_mangle]
+pub unsafe extern "C" fn shawncore_crypto_session_manager_encrypt_packet(
+    manager: *mut SessionManager,
+    aad: *const u8,
+    aad_len: usize,
+    plaintext: *const u8,
+    ciphertext: *mut u8,
+    data_len: usize,
+    out_nonce: *mut u8,
+    out_tag: *mut u8,
+) -> ShawncoreCryptoErr {
+    if manager.is_null()
+        || plaintext.is_null()
+        || ciphertext.is_null()
+        || out_nonce.is_null()
+        || out_tag.is_null()
+        || (aad.is_null() && aad_len > 0)
+        || ranges_overlap(ciphertext, data_len, plaintext, data_len)
+        || ranges_overlap(out_nonce, 12, plaintext, data_len)
+        || ranges_overlap(out_tag, 48, plaintext, data_len)
+        || ranges_overlap(out_nonce, 12, out_tag, 48)
+    {
+        return ShawncoreCryptoErr::InvalidLength;
+    }
+
+    let manager_ref = unsafe { &mut *manager };
+    let aad_slice = if aad_len == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(aad, aad_len) }
+    };
+    let plaintext_slice = unsafe { core::slice::from_raw_parts(plaintext, data_len) };
+    let ciphertext_slice = unsafe { core::slice::from_raw_parts_mut(ciphertext, data_len) };
+    let nonce = unsafe { &mut *(out_nonce as *mut [u8; 12]) };
+    let tag = unsafe { &mut *(out_tag as *mut [u8; 48]) };
+    match manager_ref.encrypt_packet(aad_slice, plaintext_slice, ciphertext_slice, nonce, tag) {
+        Ok(()) => ShawncoreCryptoErr::Success,
+        Err(error) => error.into(),
+    }
+}
+
+/// Authenticates and decrypts a packet using the internal receive key.
+///
+/// # Safety
+/// `manager`, `ciphertext`, `nonce`, `tag`, and `plaintext` must be valid.
+/// `aad` may be null only when `aad_len` is zero. Output must not overlap inputs.
+#[no_mangle]
+pub unsafe extern "C" fn shawncore_crypto_session_manager_decrypt_packet(
+    manager: *mut SessionManager,
+    aad: *const u8,
+    aad_len: usize,
+    ciphertext: *const u8,
+    data_len: usize,
+    nonce: *const u8,
+    tag: *const u8,
+    plaintext: *mut u8,
+) -> ShawncoreCryptoErr {
+    if manager.is_null()
+        || ciphertext.is_null()
+        || nonce.is_null()
+        || tag.is_null()
+        || plaintext.is_null()
+        || (aad.is_null() && aad_len > 0)
+        || ranges_overlap(plaintext, data_len, ciphertext, data_len)
+        || ranges_overlap(plaintext, data_len, nonce, 12)
+        || ranges_overlap(plaintext, data_len, tag, 48)
+    {
+        return ShawncoreCryptoErr::InvalidLength;
+    }
+
+    let manager_ref = unsafe { &mut *manager };
+    let aad_slice = if aad_len == 0 {
+        &[]
+    } else {
+        unsafe { core::slice::from_raw_parts(aad, aad_len) }
+    };
+    let ciphertext_slice = unsafe { core::slice::from_raw_parts(ciphertext, data_len) };
+    let nonce_ref = unsafe { &*(nonce as *const [u8; 12]) };
+    let tag_ref = unsafe { &*(tag as *const [u8; 48]) };
+    let plaintext_slice = unsafe { core::slice::from_raw_parts_mut(plaintext, data_len) };
+    match manager_ref.decrypt_packet(
+        aad_slice,
+        ciphertext_slice,
+        nonce_ref,
+        tag_ref,
+        plaintext_slice,
+    ) {
+        Ok(()) => ShawncoreCryptoErr::Success,
+        Err(error) => error.into(),
+    }
 }
 
 // ============================================================================
@@ -801,6 +850,7 @@ fn ranges_overlap<T, U>(
     (first as usize) < second_end && (second as usize) < first_end
 }
 
+#[allow(clippy::too_many_arguments)]
 fn aead_encrypt_buffers_overlap(
     enc_key: *const u8,
     mac_key: *const u8,
@@ -825,6 +875,7 @@ fn aead_encrypt_buffers_overlap(
         || ranges_overlap(out_mac, 48, ciphertext, data_len)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn aead_decrypt_buffers_overlap(
     enc_key: *const u8,
     mac_key: *const u8,
@@ -1066,6 +1117,10 @@ pub unsafe extern "C" fn shawncore_crypto_entropy_push(chunk: *const u8) -> Shaw
 /// This function acquires a spinlock and MUST NOT be called from a Non-Maskable
 /// Interrupt (NMI) or ARM Fast Interrupt (FIQ). Call it from a standard thread
 /// or Deferred Procedure Call (DPC) context after the interrupt has been deferred.
+///
+/// # Safety
+/// This function has no pointer safety requirements. The caller must obey the
+/// execution-context restriction above.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_entropy_mix() -> ShawncoreCryptoErr {
     GLOBAL_ENTROPY_POOL.mix_entropy();

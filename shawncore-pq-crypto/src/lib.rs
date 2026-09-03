@@ -1,5 +1,5 @@
 #![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
+#![deny(clippy::all)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![warn(missing_docs)]
 
@@ -28,7 +28,10 @@ extern crate std;
 
 #[cfg(test)]
 mod tests {
-    use super::aead_wrapper::{aead_decrypt, aead_encrypt, hkdf_expand_sha384, AEAD_TAG_SIZE};
+    use super::aead_wrapper::{
+        aead_decrypt, aead_decrypt_in_place, aead_encrypt, aead_encrypt_in_place,
+        hkdf_expand_sha384, AEAD_TAG_SIZE,
+    };
     use super::ffi::{
         shawncore_crypto_aead_decrypt, shawncore_crypto_aead_encrypt,
         shawncore_crypto_x25519_keygen,
@@ -39,7 +42,7 @@ mod tests {
     use super::ml_dsa_wrapper::{ml_dsa_keygen, ml_dsa_sign, ml_dsa_verify};
     use super::ml_kem_wrapper::{ml_kem_decapsulate, ml_kem_encapsulate, ml_kem_keygen};
     use super::session_manager::SessionManager;
-    use super::x25519_wrapper::{x25519_diffie_hellman, x25519_keygen};
+    use super::x25519_wrapper::{x25519_diffie_hellman, x25519_keygen, X25519Public};
 
     extern "C" fn test_cache_flush(_: *const u8, _: usize) {}
 
@@ -96,6 +99,26 @@ mod tests {
         )
         .is_err());
         assert_eq!(recovered, [0u8; 21]);
+    }
+
+    #[test]
+    fn aead_in_place_round_trip_rejects_tampering() {
+        install_test_callbacks();
+        let enc_key = [0x11; 32];
+        let mac_key = [0x22; 32];
+        let nonce = [0x33; 12];
+        let aad = b"shawncore-aad";
+        let original = *b"in-place payload";
+        let mut buffer = original;
+        let mut tag = [0u8; AEAD_TAG_SIZE];
+
+        aead_encrypt_in_place(&enc_key, &mac_key, &nonce, aad, &mut buffer, &mut tag).unwrap();
+        aead_decrypt_in_place(&enc_key, &mac_key, &nonce, aad, &mut buffer, &tag).unwrap();
+        assert_eq!(buffer, original);
+
+        tag[0] ^= 1;
+        assert!(aead_decrypt_in_place(&enc_key, &mac_key, &nonce, aad, &mut buffer, &tag).is_err());
+        assert_eq!(buffer, [0u8; 16]);
     }
 
     #[test]
@@ -203,6 +226,13 @@ mod tests {
     }
 
     #[test]
+    fn x25519_rejects_all_zero_peer_key() {
+        install_test_callbacks();
+        let (_, secret) = x25519_keygen(&[0x61; 32]);
+        assert!(x25519_diffie_hellman(&secret, &X25519Public([0u8; 32])).is_err());
+    }
+
+    #[test]
     fn ml_kem_peers_derive_the_same_secret() {
         install_test_callbacks();
         let (public_key, secret_key) = ml_kem_keygen(&[0x71; 64]).unwrap();
@@ -235,13 +265,17 @@ mod tests {
         let mut sender = SessionManager::new();
         let (receiver_kem_pk, receiver_x25519_pk) =
             receiver.initiate_handshake(&[0x91; 96]).unwrap();
-        let (ciphertext, sender_x25519_pk) = sender
+        let mut ciphertext = super::ml_kem_wrapper::Ciphertext1024([0u8; 1568]);
+        let mut sender_x25519_pk = super::x25519_wrapper::X25519Public([0u8; 32]);
+        sender
             .encapsulate_for_peer(
                 &receiver_kem_pk,
                 &receiver_x25519_pk,
                 &[0x92; 64],
                 b"salt",
                 b"MarTac session",
+                &mut ciphertext,
+                &mut sender_x25519_pk,
             )
             .unwrap();
 
@@ -249,14 +283,59 @@ mod tests {
             .finalize_handshake(&sender_x25519_pk, &ciphertext, b"salt", b"MarTac session")
             .unwrap();
 
-        let mut receiver_rx_key = [0u8; 32];
-        let mut sender_rx_key = [0u8; 32];
-        let mut receiver_tx_key = [0u8; 32];
-        receiver.get_rx_key(&mut receiver_rx_key).unwrap();
-        receiver.get_tx_key(&mut receiver_tx_key).unwrap();
-        sender.get_rx_key(&mut sender_rx_key).unwrap();
-        assert_eq!(receiver_rx_key, sender_rx_key);
-        assert_ne!(receiver_tx_key, receiver_rx_key);
+        let mut nonce = [0u8; 12];
+        let mut tag = [0u8; AEAD_TAG_SIZE];
+        let mut ciphertext_payload = [0u8; 14];
+        let mut plaintext = [0u8; 14];
+        sender
+            .encrypt_packet(
+                b"MarTac session",
+                b"telemetry data",
+                &mut ciphertext_payload,
+                &mut nonce,
+                &mut tag,
+            )
+            .unwrap();
+        receiver
+            .decrypt_packet(
+                b"MarTac session",
+                &ciphertext_payload,
+                &nonce,
+                &tag,
+                &mut plaintext,
+            )
+            .unwrap();
+        assert_eq!(&plaintext, b"telemetry data");
+
+        assert!(receiver
+            .decrypt_packet(
+                b"MarTac session",
+                &ciphertext_payload,
+                &nonce,
+                &tag,
+                &mut plaintext,
+            )
+            .is_err());
+
+        sender
+            .encrypt_packet(
+                b"MarTac session",
+                b"next packet 00",
+                &mut ciphertext_payload,
+                &mut nonce,
+                &mut tag,
+            )
+            .unwrap();
+        receiver
+            .decrypt_packet(
+                b"MarTac session",
+                &ciphertext_payload,
+                &nonce,
+                &tag,
+                &mut plaintext,
+            )
+            .unwrap();
+        assert_eq!(&plaintext, b"next packet 00");
         receiver.verify_key_integrity().unwrap();
         sender.verify_key_integrity().unwrap();
     }

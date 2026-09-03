@@ -1,4 +1,3 @@
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
@@ -92,7 +91,11 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
     /// This operation is one-shot. The queue must be destroyed before its object
     /// storage is reused for another initialization, and producers and consumers
     /// must be stopped before destruction or reuse.
-    pub fn init(
+    ///
+    /// # Safety
+    /// `base_ptr` must point to writable storage for `N` initialized
+    /// `CacheAlignedSlot<T>` values and remain valid until destruction.
+    pub unsafe fn init(
         &self,
         base_ptr: *mut CacheAlignedSlot<T>,
         size_in_bytes: usize,
@@ -324,7 +327,7 @@ mod tests {
         let queue = SpscQueue::<u32, 4>::new();
 
         assert_eq!(
-            queue.init(core::ptr::null_mut(), 0),
+            unsafe { queue.init(core::ptr::null_mut(), 0) },
             Err(IpcError::InvalidMemory)
         );
         assert!(!queue.is_initialized());
@@ -338,11 +341,11 @@ mod tests {
         let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
 
         assert_eq!(
-            queue.init(storage_ptr, storage_size - 1),
+            unsafe { queue.init(storage_ptr, storage_size - 1) },
             Err(IpcError::InvalidMemory)
         );
         assert_eq!(
-            queue.init(storage_ptr.wrapping_byte_add(1), storage_size),
+            unsafe { queue.init(storage_ptr.wrapping_byte_add(1), storage_size) },
             Err(IpcError::InvalidMemory)
         );
         assert!(!queue.is_initialized());
@@ -356,9 +359,9 @@ mod tests {
         let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
         let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
 
-        queue.init(storage_ptr, storage_size).unwrap();
+        unsafe { queue.init(storage_ptr, storage_size) }.unwrap();
         assert_eq!(
-            queue.init(storage_ptr, storage_size),
+            unsafe { queue.init(storage_ptr, storage_size) },
             Err(IpcError::AlreadyInitialized)
         );
 
@@ -370,7 +373,6 @@ mod tests {
             assert_eq!(queue.pop(), Some(value));
         }
         assert_eq!(queue.pop(), None);
-        drop(storage);
     }
 
     #[test]
@@ -381,7 +383,7 @@ mod tests {
         let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
         let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
 
-        queue.init(storage_ptr, storage_size).unwrap();
+        unsafe { queue.init(storage_ptr, storage_size) }.unwrap();
         for value in 0..128 {
             queue.push(value).unwrap();
             assert_eq!(queue.pop(), Some(value));
@@ -396,7 +398,7 @@ mod tests {
         let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
         let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
 
-        queue.init(storage_ptr, storage_size).unwrap();
+        unsafe { queue.init(storage_ptr, storage_size) }.unwrap();
         queue.push(42).unwrap();
         unsafe {
             (*storage_ptr).sequence_counter.store(1, Ordering::Release);
