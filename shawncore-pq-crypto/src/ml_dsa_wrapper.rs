@@ -1,31 +1,32 @@
-#![no_std]
-#![deny(clippy::pedantic, clippy::nursery)]
 #![forbid(unsafe_op_in_unsafe_fn)]
 #![deny(missing_docs)]
 
 //! ML-DSA-87 (FIPS 204) Digital Signature Algorithm wrapper.
-//! Provides post-quantum digital signatures with strict constant-time and zeroization guarantees.
+//! Provides post-quantum digital-signature operations and wrapper-managed zeroization.
 //! Hardware-agnostic implementation for MarTac USVs.
-//! Fully compliant with NIST FIPS 204 specifications for Module-Lattice-Based Digital Signature Standard.
+//! Uses the selected `ml-dsa` dependency's ML-DSA-87 implementation; independent
+//! conformance testing remains outside this crate's scope.
 
 use crate::error::CryptoError;
 use crate::zeroize::secure_cache_flush;
 use core::sync::atomic::{compiler_fence, Ordering};
-use ml_dsa::ml_dsa_87::{KeyPair, SigningKey, VerifyingKey};
+use ml_dsa::{
+    Keypair, MlDsa87, Signature, SignatureEncoding, Signer, SigningKey, Verifier, VerifyingKey,
+};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Public verifying key for ML-DSA-87.
 /// Used to verify the authenticity and integrity of signed messages.
 #[repr(C, align(64))]
 #[derive(Clone)]
-pub struct PublicKey87(pub VerifyingKey);
+pub struct PublicKey87(pub VerifyingKey<MlDsa87>);
 
 /// Secret signing key for ML-DSA-87.
 /// Used to generate digital signatures. Automatically zeroized upon being dropped.
 /// `Clone` is explicitly omitted to prevent key material duplication.
 #[repr(C, align(64))]
 #[derive(Zeroize, ZeroizeOnDrop)]
-pub struct SigningKey87(#[zeroize(skip)] pub SigningKey);
+pub struct SigningKey87(#[zeroize(skip)] pub SigningKey<MlDsa87>);
 
 /// Signature produced by ML-DSA-87.
 /// A 4627-byte array representing the post-quantum digital signature.
@@ -41,12 +42,10 @@ pub struct Signature87(pub [u8; 4627]);
 /// # Returns
 /// A tuple containing the `PublicKey87` and `SigningKey87`.
 pub fn ml_dsa_keygen(seed: &[u8; 32]) -> Result<(PublicKey87, SigningKey87), CryptoError> {
-    let kp = KeyPair::from_seed(seed);
+    let sk = SigningKey::<MlDsa87>::from_seed(seed.into());
+    let vk = sk.verifying_key().clone();
 
-    Ok((
-        PublicKey87(kp.verifying_key().clone()),
-        SigningKey87(kp.signing_key().clone()),
-    ))
+    Ok((PublicKey87(vk), SigningKey87(sk)))
 }
 
 /// Signs a message using the provided ML-DSA-87 secret key.
@@ -59,7 +58,7 @@ pub fn ml_dsa_keygen(seed: &[u8; 32]) -> Result<(PublicKey87, SigningKey87), Cry
 /// The generated `Signature87`, or a `CryptoError` if the signature length is invalid.
 pub fn ml_dsa_sign(sk: &SigningKey87, msg: &[u8]) -> Result<Signature87, CryptoError> {
     let sig = sk.0.sign(msg);
-    let sig_slice = sig.as_bytes();
+    let sig_slice = sig.to_bytes();
 
     if sig_slice.len() != 4627 {
         return Err(CryptoError::InvalidLength);
@@ -68,7 +67,7 @@ pub fn ml_dsa_sign(sk: &SigningKey87, msg: &[u8]) -> Result<Signature87, CryptoE
     compiler_fence(Ordering::SeqCst);
 
     let mut signature = Signature87([0u8; 4627]);
-    signature.0.copy_from_slice(sig_slice);
+    signature.0.copy_from_slice(sig_slice.as_ref());
 
     secure_cache_flush(signature.0.as_ptr(), signature.0.len());
 
@@ -84,12 +83,8 @@ pub fn ml_dsa_sign(sk: &SigningKey87, msg: &[u8]) -> Result<Signature87, CryptoE
 ///
 /// # Returns
 /// `Ok(())` if the signature is valid, or `CryptoError::VerificationFailed` if invalid.
-pub fn ml_dsa_verify(
-    pk: &PublicKey87,
-    msg: &[u8],
-    sig: &Signature87,
-) -> Result<(), CryptoError> {
-    let sig_obj = match ml_dsa::ml_dsa_87::Signature::from_bytes(&sig.0) {
+pub fn ml_dsa_verify(pk: &PublicKey87, msg: &[u8], sig: &Signature87) -> Result<(), CryptoError> {
+    let sig_obj = match Signature::<MlDsa87>::try_from(sig.0.as_slice()) {
         Ok(s) => s,
         Err(_) => {
             return Err(CryptoError::VerificationFailed);
@@ -98,5 +93,6 @@ pub fn ml_dsa_verify(
 
     compiler_fence(Ordering::SeqCst);
 
-    pk.0.verify(msg, &sig_obj).map_err(|_| CryptoError::VerificationFailed)
+    pk.0.verify(msg, &sig_obj)
+        .map_err(|_| CryptoError::VerificationFailed)
 }
