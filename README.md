@@ -86,7 +86,7 @@ cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include integration/c_api_smo
 /tmp/shawncore-c-api-smoke
 ```
 
-`rust-toolchain.toml` pins Rust `1.85.0`, including the `aarch64-unknown-none` target used by the configured target check. Release profiles use `panic = "abort"` so a Rust panic cannot unwind through the C ABI; the host panic callback still needs a platform fail-safe response.
+`rust-toolchain.toml` pins Rust `1.85.0`, the `rustfmt` and `clippy` components, and the `aarch64-unknown-none` target used by the configured target check. Release profiles use `panic = "abort"` so a Rust panic cannot unwind through the C ABI; the host panic callback still needs a platform fail-safe response.
 
 ## Limitations
 

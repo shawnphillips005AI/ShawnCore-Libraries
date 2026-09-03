@@ -1,6 +1,27 @@
+# Cargo build output
 /target/
 /fuzz/target/
+
+# cargo-fuzz crash/timeout artifacts
 /fuzz/artifacts/
-/release/
+
+# Generated documentation and packaging output
 /doc/
+/release/
 /package/
+
+# Compiled objects and libraries
+*.o
+*.a
+*.rlib
+*.so
+*.dylib
+*.dll
+*.exe
+
+# Editor and OS metadata
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store

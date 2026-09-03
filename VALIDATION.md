@@ -2,7 +2,8 @@
 
 This record applies to the ShawnCore-Libraries working tree evaluated on
 2026-09-03 in an Ubuntu 24.04.4 development container. The repository pins
-Rust 1.85.0 and `aarch64-unknown-none` in `rust-toolchain.toml`.
+Rust 1.85.0, the `rustfmt`/`clippy` components, and the `aarch64-unknown-none`
+target in `rust-toolchain.toml`.
 
 This is host-side evidence for a prototype. It does not establish target
 hardware behavior, certification, production approval, or independent review.
@@ -89,10 +90,13 @@ explicitly outside the evidence collected in this host-side validation record.
 
 ## RELEASE HYGIENE
 
-`.gitignore` excludes `target/`, `fuzz/target/`, and fuzz artifacts. Intentional
-fuzz corpus files and the fuzz lockfile are retained. `git diff --check` and the
-editor diagnostic check completed without reported errors.
+`.gitignore` excludes `target/`, `fuzz/target/`, fuzz crash artifacts, generated
+documentation/packaging output, compiled object/library files, and editor/OS
+metadata. Intentional fuzz corpus files and the fuzz lockfile are retained.
+`git diff --check` and the editor diagnostic check completed without reported
+errors.
 
-The working tree contains modified and untracked source files. Before external
-distribution, review and commit the exact intended source set so the recipient
-can reproduce this evidence from the delivered revision.
+The tracked source tree contains no generated build output. `target/` and
+`fuzz/target/` exist only as local, ignored build directories and are not part of
+the distribution set. Before external distribution, commit the intended source
+set so the recipient can reproduce this evidence from the delivered revision.
