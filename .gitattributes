@@ -1,0 +1,14 @@
+# Fuzz regression inputs are exact byte sequences. Never normalize, never diff,
+# never apply line-ending conversion: any rewrite silently invalidates the corpus.
+fuzz/corpus/** binary
+
+# Pin LF for source and configuration so a checkout or archive extraction on
+# Windows cannot alter file content.
+*.rs   text eol=lf
+*.c    text eol=lf
+*.h    text eol=lf
+*.toml text eol=lf
+*.yml  text eol=lf
+*.md   text eol=lf
+Makefile text eol=lf
+LICENSE  text eol=lf
