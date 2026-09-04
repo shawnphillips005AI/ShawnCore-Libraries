@@ -78,7 +78,8 @@ cargo check --target aarch64-unknown-none --workspace
 
 [`integration/Makefile`](integration/Makefile) wraps the checks below:
 `make syntax`, `make run`, `make asan`, and `make valgrind`. The equivalent
-explicit commands are:
+explicit commands are below. `make run`, `make asan`, and `make valgrind`
+build the required release archive automatically.
 
 ```text
 cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include -fsyntax-only integration/martac_hal_stubs.c

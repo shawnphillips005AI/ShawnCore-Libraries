@@ -438,6 +438,7 @@ version = "0.0.0"
 dependencies = [
  "libfuzzer-sys",
  "shawncore-pq-crypto",
+ "shawncore-rtos-sync",
 ]
 
 [[package]]
@@ -452,6 +453,13 @@ dependencies = [
  "sha2",
  "subtle",
  "x25519-dalek",
+ "zeroize",
+]
+
+[[package]]
+name = "shawncore-rtos-sync"
+version = "12.3.1"
+dependencies = [
  "zeroize",
 ]
 
