@@ -7,6 +7,28 @@ qualification, or production readiness.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [12.3.2] — 2026-09-10
+
+### Fixed
+
+- Serialized high-level entropy operations so the global SPSC entropy queue has a
+  single consumer and concurrent extraction cannot race pool-state evolution.
+- Removed variable-sized SHA-384 output generation from the interrupt-masked
+  entropy-pool critical section; only fixed-size pool snapshots and state commits
+  are protected by `CryptoSpinlock`.
+- Concurrent entropy extraction now returns a retryable `EntropyBusy` error rather
+  than spinning indefinitely, avoiding priority inversion and ISR deadlock hazards.
+- Zeroized ML-KEM key-generation and encapsulation seed temporaries.
+- Retained volatile payload access in lock-free queue paths with the existing
+  Acquire/Release ownership protocol.
+- Reduced DMA zeroization operation count using aligned volatile word clears while
+  preserving arbitrary-length handling and cache maintenance.
+
+### Validation
+
+Fresh 12.3.2 validation must be recorded from the patched source tree. Inherited
+12.3.1 results remain historical evidence.
+
 ## [12.3.1] — 2026-09-03
 
 Security hardening release for the C ABI and entropy accumulator.

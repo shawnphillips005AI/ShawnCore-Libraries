@@ -101,6 +101,15 @@ impl<T, C: InterruptContext> Drop for CryptoSpinlockGuard<'_, T, C> {
     }
 }
 
+/// Releases high-level entropy-operation ownership when dropped.
+struct EntropyOperationGuard<'a>(&'a AtomicBool);
+
+impl Drop for EntropyOperationGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, Ordering::Release);
+    }
+}
+
 /// Global asynchronous entropy queue fed by the host OS.
 pub static GLOBAL_ENTROPY_QUEUE: EntropyQueue = EntropyQueue::new();
 
@@ -152,6 +161,7 @@ impl EntropyPool {
             return;
         }
 
+        let _operation_guard = EntropyOperationGuard(&self.mixing);
         let mut chunk = [0u8; ENTROPY_CHUNK_SIZE];
         let mut queue_hasher = Sha384::new();
         let mut mixed = false;
@@ -186,8 +196,6 @@ impl EntropyPool {
             };
             self.reseed_count.fetch_add(1, Ordering::Release);
         }
-
-        self.mixing.store(false, Ordering::Release);
     }
 
     /// Extracts entropy from the accumulator.
@@ -204,45 +212,58 @@ impl EntropyPool {
     /// `Ok(())` if successful, or `CryptoError::EntropyStarvation` if the pool
     /// has never been seeded by the host OS.
     pub fn extract_entropy(&self, out: &mut [u8]) -> Result<(), CryptoError> {
+        // `mixing` is a non-blocking high-level ownership gate for entropy
+        // operations. A caller that loses the gate returns a retryable error
+        // rather than spinning; this is safe even if the caller is an ISR and
+        // the current owner is a lower-priority task.
         self.mix_entropy();
-
-        // If another caller is already draining the single-consumer entropy
-        // queue, wait with interrupts enabled for that mixer to finish before
-        // deciding the pool is starved. This avoids reporting starvation solely
-        // because a concurrent mixer won the queue-consumer handoff.
-        while self.mixing.load(Ordering::Acquire) {
-            core::hint::spin_loop();
+        if self
+            .mixing
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return Err(CryptoError::EntropyBusy);
         }
+        let _operation_guard = EntropyOperationGuard(&self.mixing);
 
         if self.reseed_count.load(Ordering::Acquire) == 0 {
             return Err(CryptoError::EntropyStarvation);
         }
 
-        {
-            let mut guard = self.pool.lock();
-            let mut offset = 0;
+        let mut offset = 0usize;
+        while offset < out.len() {
+            // Snapshot the 48-byte pool state under the short interrupt-masked
+            // lock. The high-level ownership gate prevents another entropy
+            // operation from changing the pool until this block commits.
+            let state_snapshot = {
+                let guard = self.pool.lock();
+                *guard
+            };
 
-            while offset < out.len() {
-                // Forward Secrecy: Domain separation for output generation
-                let mut out_hasher = Sha384::new();
-                out_hasher.update([0x00]); // Domain separator for output
-                out_hasher.update(*guard);
-                let out_result = out_hasher.finalize();
+            // Expensive hashing remains outside `CryptoSpinlock`, keeping
+            // interrupts enabled during variable-sized extraction.
+            let mut out_hasher = Sha384::new();
+            out_hasher.update([0x00]);
+            out_hasher.update(state_snapshot);
+            let mut out_result = out_hasher.finalize();
 
-                // Forward Secrecy: Domain separation for internal state update
-                let mut state_hasher = Sha384::new();
-                state_hasher.update([0x01]); // Domain separator for state update
-                state_hasher.update(*guard);
-                let state_result = state_hasher.finalize();
+            let mut state_hasher = Sha384::new();
+            state_hasher.update([0x01]);
+            state_hasher.update(state_snapshot);
+            let mut state_result = state_hasher.finalize();
 
-                let copy_len = core::cmp::min(48, out.len() - offset);
-                out[offset..offset + copy_len].copy_from_slice(&out_result[..copy_len]);
+            let copy_len = core::cmp::min(48, out.len() - offset);
+            out[offset..offset + copy_len].copy_from_slice(&out_result[..copy_len]);
 
-                // Update pool state to the new forward-secret hash
+            // Commit the new forward-secret state under the short lock.
+            {
+                let mut guard = self.pool.lock();
                 guard.copy_from_slice(&state_result);
-
-                offset += copy_len;
             }
+
+            secure_zeroize(&mut out_result);
+            secure_zeroize(&mut state_result);
+            offset += copy_len;
         }
 
         unsafe {
@@ -301,20 +322,17 @@ mod tests {
     }
 
     #[test]
-    fn extract_waits_for_an_in_progress_mixer_before_reporting_starvation() {
+    fn extract_reports_busy_without_waiting_for_an_active_mixer() {
         let pool = EntropyPool::new();
+        pool.reseed_count.store(1, Ordering::Release);
         pool.mixing.store(true, Ordering::Release);
 
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(10));
-                pool.reseed_count.store(1, Ordering::Release);
-                pool.mixing.store(false, Ordering::Release);
-            });
-
-            let mut out = [0u8; 1];
-            assert!(pool.extract_entropy(&mut out).is_ok());
-        });
+        let mut out = [0u8; 1];
+        assert_eq!(
+            pool.extract_entropy(&mut out),
+            Err(CryptoError::EntropyBusy)
+        );
+        pool.mixing.store(false, Ordering::Release);
     }
 
     #[test]

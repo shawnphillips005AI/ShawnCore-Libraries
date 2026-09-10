@@ -18,4 +18,6 @@ pub enum CryptoError {
     VerificationFailed,
     /// Entropy pool starvation.
     EntropyStarvation,
+    /// Entropy operation is already in progress; retry without blocking.
+    EntropyBusy,
 }

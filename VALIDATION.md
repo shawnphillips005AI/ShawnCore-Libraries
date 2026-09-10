@@ -1,6 +1,8 @@
 # Validation Record
 
-This record applies to ShawnCore-Libraries 12.3.1 evaluated on 2026-09-03 in an
+This record documents the 12.3.1 host-side validation inherited by the 12.3.2
+release-candidate. New 12.3.2 results must be recorded from the patched tree before
+release. The underlying 12.3.1 evidence was evaluated on 2026-09-03 in an
 Ubuntu 24.04.4 development container. The repository pins
 Rust 1.85.0, the `rustfmt`/`clippy` components, and the `aarch64-unknown-none`
 target in `rust-toolchain.toml`.
