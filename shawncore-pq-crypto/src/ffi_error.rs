@@ -24,6 +24,8 @@ pub enum ShawncoreCryptoErr {
     VerificationFailed = 4,
     /// Entropy pool starvation.
     EntropyStarvation = 5,
+    /// Entropy operation is already in progress; retry without blocking.
+    EntropyBusy = 6,
     /// A panic occurred within the Rust boundary.
     Panic = 99,
 }
@@ -36,6 +38,7 @@ impl From<crate::error::CryptoError> for ShawncoreCryptoErr {
             crate::error::CryptoError::HkdfError => Self::HkdfError,
             crate::error::CryptoError::VerificationFailed => Self::VerificationFailed,
             crate::error::CryptoError::EntropyStarvation => Self::EntropyStarvation,
+            crate::error::CryptoError::EntropyBusy => Self::EntropyBusy,
         }
     }
 }
