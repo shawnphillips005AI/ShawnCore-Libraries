@@ -279,8 +279,6 @@ impl EntropyPool {
 
 #[cfg(test)]
 mod tests {
-    static ENTROPY_TEST_SERIAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
     use super::*;
     use crate::ffi_callbacks::{
         shawncore_crypto_register_cache_flush, shawncore_crypto_register_disable_interrupts,
@@ -312,9 +310,6 @@ mod tests {
 
     #[test]
     fn concurrent_mixer_is_rejected_while_another_mixer_owns_the_queue() {
-        let _entropy_test_guard = ENTROPY_TEST_SERIAL_LOCK
-            .lock()
-            .expect("entropy test lock poisoned");
         assert!(REENTRY_TEST_POOL
             .mixing
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -328,9 +323,6 @@ mod tests {
 
     #[test]
     fn extract_reports_busy_without_waiting_for_an_active_mixer() {
-        let _entropy_test_guard = ENTROPY_TEST_SERIAL_LOCK
-            .lock()
-            .expect("entropy test lock poisoned");
         let pool = EntropyPool::new();
         pool.reseed_count.store(1, Ordering::Release);
         pool.mixing.store(true, Ordering::Release);
@@ -345,9 +337,6 @@ mod tests {
 
     #[test]
     fn cache_callback_can_reenter_entropy_mixing_without_deadlocking() {
-        let _entropy_test_guard = ENTROPY_TEST_SERIAL_LOCK
-            .lock()
-            .expect("entropy test lock poisoned");
         unsafe {
             shawncore_crypto_register_disable_interrupts(Some(disable_interrupts));
             shawncore_crypto_register_restore_interrupts(Some(restore_interrupts));

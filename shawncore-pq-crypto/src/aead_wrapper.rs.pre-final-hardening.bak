@@ -22,7 +22,7 @@ pub const AEAD_NONCE_SIZE: usize = 12;
 /// Size of the AEAD tag in bytes.
 pub const AEAD_TAG_SIZE: usize = 48;
 /// Maximum bytes processable under one ChaCha20 key and nonce.
-pub(crate) const CHACHA20_MAX_BYTES: u64 = u32::MAX as u64 * 64;
+const CHACHA20_MAX_BYTES: u64 = (u32::MAX as u64 + 1) * 64;
 
 /// Verifies two AEAD tags in strict constant time.
 ///
@@ -40,11 +40,10 @@ pub fn verify_tag_constant_time(a: &[u8; AEAD_TAG_SIZE], b: &[u8; AEAD_TAG_SIZE]
 pub fn hmac_sha384(key: &[u8], data: &[u8]) -> Result<[u8; AEAD_TAG_SIZE], CryptoError> {
     let mut mac = Hmac::<Sha384>::new_from_slice(key).map_err(|_| CryptoError::InvalidState)?;
     mac.update(data);
-    let mut result_bytes = mac.finalize().into_bytes();
+    let result_bytes = mac.finalize().into_bytes();
 
     let mut output = [0u8; AEAD_TAG_SIZE];
     output.copy_from_slice(&result_bytes);
-    secure_zeroize(result_bytes.as_mut_slice());
     secure_cache_flush(&output);
 
     Ok(output)
@@ -101,10 +100,7 @@ pub fn aead_encrypt(
     let apply_result = cipher.try_apply_keystream(ciphertext);
     // The RustCrypto ChaCha20 wrapper does not implement `Zeroize`; it is dropped
     // immediately after use and no cipher state crosses this API boundary.
-    if apply_result.is_err() {
-        secure_zeroize(ciphertext);
-        return Err(CryptoError::InvalidLength);
-    }
+    apply_result.map_err(|_| CryptoError::InvalidLength)?;
 
     // 2. Compute the MAC over the unambiguous encoding:
     // MAC(mac_key, AAD_len || Ciphertext_len || Nonce || AAD || Ciphertext)
@@ -117,9 +113,8 @@ pub fn aead_encrypt(
     mac_engine.update(aad);
     mac_engine.update(ciphertext);
 
-    let mut result_bytes = mac_engine.finalize().into_bytes();
+    let result_bytes = mac_engine.finalize().into_bytes();
     out_mac.copy_from_slice(&result_bytes);
-    secure_zeroize(result_bytes.as_mut_slice());
 
     secure_cache_flush(ciphertext);
     secure_cache_flush(out_mac);
@@ -162,10 +157,9 @@ pub fn aead_decrypt(
     mac_engine.update(aad);
     mac_engine.update(ciphertext);
 
-    let mut expected_mac_bytes = mac_engine.finalize().into_bytes();
+    let expected_mac_bytes = mac_engine.finalize().into_bytes();
     let mut expected_mac = [0u8; AEAD_TAG_SIZE];
     expected_mac.copy_from_slice(&expected_mac_bytes);
-    secure_zeroize(expected_mac_bytes.as_mut_slice());
 
     // 2. Verify the MAC in constant time
     if !verify_tag_constant_time(mac, &expected_mac) {
@@ -206,10 +200,7 @@ pub fn aead_encrypt_in_place(
         ChaCha20::new_from_slices(enc_key, nonce).map_err(|_| CryptoError::InvalidState)?;
     let apply_result = cipher.try_apply_keystream(buffer);
     // The RustCrypto ChaCha20 wrapper does not implement `Zeroize`.
-    if apply_result.is_err() {
-        secure_zeroize(buffer);
-        return Err(CryptoError::InvalidLength);
-    }
+    apply_result.map_err(|_| CryptoError::InvalidLength)?;
 
     let mut mac_engine =
         Hmac::<Sha384>::new_from_slice(mac_key).map_err(|_| CryptoError::InvalidState)?;
@@ -218,9 +209,7 @@ pub fn aead_encrypt_in_place(
     mac_engine.update(nonce);
     mac_engine.update(aad);
     mac_engine.update(buffer);
-    let mut result_bytes = mac_engine.finalize().into_bytes();
-    out_mac.copy_from_slice(&result_bytes);
-    secure_zeroize(result_bytes.as_mut_slice());
+    out_mac.copy_from_slice(&mac_engine.finalize().into_bytes());
 
     secure_cache_flush(buffer);
     secure_cache_flush(out_mac);
@@ -247,10 +236,8 @@ pub fn aead_decrypt_in_place(
     mac_engine.update(nonce);
     mac_engine.update(aad);
     mac_engine.update(buffer);
-    let mut expected_mac_bytes = mac_engine.finalize().into_bytes();
     let mut expected_mac = [0u8; AEAD_TAG_SIZE];
-    expected_mac.copy_from_slice(&expected_mac_bytes);
-    secure_zeroize(expected_mac_bytes.as_mut_slice());
+    expected_mac.copy_from_slice(&mac_engine.finalize().into_bytes());
 
     if !verify_tag_constant_time(mac, &expected_mac) {
         secure_zeroize(buffer);

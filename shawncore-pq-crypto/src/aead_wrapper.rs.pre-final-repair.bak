@@ -22,7 +22,7 @@ pub const AEAD_NONCE_SIZE: usize = 12;
 /// Size of the AEAD tag in bytes.
 pub const AEAD_TAG_SIZE: usize = 48;
 /// Maximum bytes processable under one ChaCha20 key and nonce.
-pub(crate) const CHACHA20_MAX_BYTES: u64 = u32::MAX as u64 * 64;
+pub(crate) pub(crate) const CHACHA20_MAX_BYTES: u64 = u32::MAX as u64 * 64;
 
 /// Verifies two AEAD tags in strict constant time.
 ///

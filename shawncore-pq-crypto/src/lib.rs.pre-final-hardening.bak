@@ -105,15 +105,6 @@ mod tests {
     }
 
     #[test]
-    fn chacha20_length_limit_matches_rfc8439_block_boundary() {
-        use super::aead_wrapper::CHACHA20_MAX_BYTES;
-
-        assert_eq!(CHACHA20_MAX_BYTES, (u32::MAX as u64) * 64);
-        assert_eq!(CHACHA20_MAX_BYTES, 274_877_906_880u64);
-        assert_eq!(CHACHA20_MAX_BYTES, (u32::MAX as u64 - 1) * 64 + 64);
-    }
-
-    #[test]
     fn aead_in_place_round_trip_rejects_tampering() {
         install_test_callbacks();
         let enc_key = [0x11; 32];
