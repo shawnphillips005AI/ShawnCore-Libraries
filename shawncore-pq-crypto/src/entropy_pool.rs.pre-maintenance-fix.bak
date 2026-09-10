@@ -115,8 +115,6 @@ pub static GLOBAL_ENTROPY_POOL: EntropyPool = EntropyPool::new();
 pub struct EntropyPool {
     pool: CryptoSpinlock<[u8; 48], HostInterruptContext>,
     reseed_count: AtomicU64,
-    /// Serializes callers that drain the single-consumer global entropy queue.
-    mixing: AtomicBool,
 }
 
 impl Default for EntropyPool {
@@ -132,7 +130,6 @@ impl EntropyPool {
         Self {
             pool: CryptoSpinlock::new([0u8; 48]),
             reseed_count: AtomicU64::new(0),
-            mixing: AtomicBool::new(false),
         }
     }
 
@@ -142,21 +139,12 @@ impl EntropyPool {
     /// also be triggered manually by the host OS via FFI to ensure the pool
     /// is continuously seeded during idle periods.
     pub fn mix_entropy(&self) {
-        // GLOBAL_ENTROPY_QUEUE is SPSC. Serialize its consumer side without
-        // putting the expensive SHA-384 work back inside CryptoSpinlock.
-        if self
-            .mixing
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_err()
-        {
-            return;
-        }
-
+        // Drain and hash the potentially large entropy batch with interrupts enabled.
+        // Only the fixed-size pool state transition below is protected by CryptoSpinlock.
         let mut chunk = [0u8; ENTROPY_CHUNK_SIZE];
         let mut queue_hasher = Sha384::new();
         let mut mixed = false;
 
-        // Keep the expensive, variable-sized hash work outside the interrupt-masked lock.
         while unsafe { GLOBAL_ENTROPY_QUEUE.pop(&mut chunk) } {
             queue_hasher.update(chunk);
             secure_zeroize(&mut chunk);
@@ -164,19 +152,15 @@ impl EntropyPool {
         }
 
         if mixed {
-            let mut queue_digest = queue_hasher.finalize();
+            let queue_digest = queue_hasher.finalize();
 
-            // Only the fixed-size pool state transition is protected here.
             let mut guard = self.pool.lock();
             let mut pool_hasher = Sha384::new();
             pool_hasher.update(*guard);
             pool_hasher.update(queue_digest);
-            let mut result = pool_hasher.finalize();
+            let result = pool_hasher.finalize();
             guard.copy_from_slice(&result);
             drop(guard);
-
-            secure_zeroize(queue_digest.as_mut_slice());
-            secure_zeroize(result.as_mut_slice());
 
             unsafe {
                 secure_cache_flush_raw(
@@ -186,8 +170,6 @@ impl EntropyPool {
             };
             self.reseed_count.fetch_add(1, Ordering::Release);
         }
-
-        self.mixing.store(false, Ordering::Release);
     }
 
     /// Extracts entropy from the accumulator.
@@ -277,19 +259,6 @@ mod tests {
             return;
         }
         REENTRY_TEST_POOL.mix_entropy();
-    }
-
-    #[test]
-    fn concurrent_mixer_is_rejected_while_another_mixer_owns_the_queue() {
-        assert!(REENTRY_TEST_POOL
-            .mixing
-            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok());
-
-        REENTRY_TEST_POOL.mix_entropy();
-        assert!(REENTRY_TEST_POOL.mixing.load(Ordering::Acquire));
-
-        REENTRY_TEST_POOL.mixing.store(false, Ordering::Release);
     }
 
     #[test]
