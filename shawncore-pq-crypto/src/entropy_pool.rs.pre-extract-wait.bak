@@ -206,14 +206,6 @@ impl EntropyPool {
     pub fn extract_entropy(&self, out: &mut [u8]) -> Result<(), CryptoError> {
         self.mix_entropy();
 
-        // If another caller is already draining the single-consumer entropy
-        // queue, wait with interrupts enabled for that mixer to finish before
-        // deciding the pool is starved. This avoids reporting starvation solely
-        // because a concurrent mixer won the queue-consumer handoff.
-        while self.mixing.load(Ordering::Acquire) {
-            core::hint::spin_loop();
-        }
-
         if self.reseed_count.load(Ordering::Acquire) == 0 {
             return Err(CryptoError::EntropyStarvation);
         }
@@ -298,23 +290,6 @@ mod tests {
         assert!(REENTRY_TEST_POOL.mixing.load(Ordering::Acquire));
 
         REENTRY_TEST_POOL.mixing.store(false, Ordering::Release);
-    }
-
-    #[test]
-    fn extract_waits_for_an_in_progress_mixer_before_reporting_starvation() {
-        let pool = EntropyPool::new();
-        pool.mixing.store(true, Ordering::Release);
-
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(10));
-                pool.reseed_count.store(1, Ordering::Release);
-                pool.mixing.store(false, Ordering::Release);
-            });
-
-            let mut out = [0u8; 1];
-            assert!(pool.extract_entropy(&mut out).is_ok());
-        });
     }
 
     #[test]
