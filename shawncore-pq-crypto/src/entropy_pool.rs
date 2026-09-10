@@ -139,27 +139,29 @@ impl EntropyPool {
     /// also be triggered manually by the host OS via FFI to ensure the pool
     /// is continuously seeded during idle periods.
     pub fn mix_entropy(&self) {
+        // Drain and hash the potentially large entropy batch with interrupts enabled.
+        // Only the fixed-size pool state transition below is protected by CryptoSpinlock.
         let mut chunk = [0u8; ENTROPY_CHUNK_SIZE];
-        let mixed = {
-            let mut guard = self.pool.lock();
-            let mut hasher = Sha384::new();
-            hasher.update(*guard);
+        let mut queue_hasher = Sha384::new();
+        let mut mixed = false;
 
-            let mut mixed = false;
-            while unsafe { GLOBAL_ENTROPY_QUEUE.pop(&mut chunk) } {
-                hasher.update(chunk);
-                secure_zeroize(&mut chunk);
-                mixed = true;
-            }
-
-            if mixed {
-                let result = hasher.finalize();
-                guard.copy_from_slice(&result);
-            }
-            mixed
-        };
+        while unsafe { GLOBAL_ENTROPY_QUEUE.pop(&mut chunk) } {
+            queue_hasher.update(chunk);
+            secure_zeroize(&mut chunk);
+            mixed = true;
+        }
 
         if mixed {
+            let queue_digest = queue_hasher.finalize();
+
+            let mut guard = self.pool.lock();
+            let mut pool_hasher = Sha384::new();
+            pool_hasher.update(*guard);
+            pool_hasher.update(queue_digest);
+            let result = pool_hasher.finalize();
+            guard.copy_from_slice(&result);
+            drop(guard);
+
             unsafe {
                 secure_cache_flush_raw(
                     self.pool.data.get().cast(),

@@ -212,7 +212,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
             (*slot_ptr)
                 .sequence_counter
                 .store(sequence.wrapping_add(1) | 1, Ordering::Release);
-            *(*slot_ptr).data.get() = item;
+            core::ptr::write_volatile((*slot_ptr).data.get(), item);
             host_cache_flush(
                 (*slot_ptr).data.get().cast::<u8>(),
                 core::mem::size_of::<T>(),
@@ -284,7 +284,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
                 (*slot_ptr).data.get().cast::<u8>(),
                 core::mem::size_of::<T>(),
             );
-            let item = *(*slot_ptr).data.get();
+            let item = core::ptr::read_volatile((*slot_ptr).data.get());
             let second_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
             if first_sequence != second_sequence || second_sequence & 1 != 0 {
                 return None;

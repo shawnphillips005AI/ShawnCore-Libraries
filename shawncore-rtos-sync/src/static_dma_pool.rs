@@ -275,9 +275,31 @@ impl<T: Copy, const N: usize, const BITMAP_WORDS: usize> StaticDmaPool<T, N, BIT
         unsafe {
             let pointer = base_ptr.add(buffer_idx).cast::<u8>();
             let length = core::mem::size_of::<T>();
-            for offset in 0..length {
-                core::ptr::write_volatile(pointer.add(offset), 0);
+            let word_size = core::mem::size_of::<u64>();
+            let align = core::mem::align_of::<u64>();
+            let mut offset = 0usize;
+
+            // Clear a byte prefix only when T's address is not already u64-aligned.
+            // The pool's backing storage is required to be suitably aligned for T,
+            // so this prefix is at most 7 bytes.
+            while offset < length && ((pointer as usize + offset) & (align - 1)) != 0 {
+                core::ptr::write_volatile(pointer.add(offset), 0u8);
+                offset += 1;
             }
+
+            // Clear aligned words with volatile stores. This preserves the
+            // compiler-visible wipe while reducing operations by up to 8x.
+            while offset + word_size <= length {
+                core::ptr::write_volatile(pointer.add(offset).cast::<u64>(), 0u64);
+                offset += word_size;
+            }
+
+            // Clear any trailing bytes.
+            while offset < length {
+                core::ptr::write_volatile(pointer.add(offset), 0u8);
+                offset += 1;
+            }
+
             host_cache_flush(pointer, length);
         }
         compiler_fence(Ordering::Release);
