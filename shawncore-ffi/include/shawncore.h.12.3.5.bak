@@ -123,16 +123,16 @@ shawncore_crypto_err shawncore_crypto_session_manager_encrypt_packet(
     const uint8_t *plaintext,
     uint8_t *ciphertext,
     size_t data_len,
-    uint8_t out_nonce[static 12],
-    uint8_t out_tag[static 48]);
+    uint8_t *out_nonce,
+    uint8_t *out_tag);
 shawncore_crypto_err shawncore_crypto_session_manager_decrypt_packet(
     shawncore_crypto_session_manager *manager,
     const uint8_t *aad,
     size_t aad_len,
     const uint8_t *ciphertext,
     size_t data_len,
-    const uint8_t nonce[static 12],
-    const uint8_t tag[static 48],
+    const uint8_t *nonce,
+    const uint8_t *tag,
     uint8_t *plaintext);
 
 size_t shawncore_crypto_ml_kem_publickey_sizeof(void);
@@ -262,12 +262,12 @@ shawncore_crypto_err shawncore_crypto_ml_dsa_signature_from_bytes(
     shawncore_crypto_ml_dsa_signature *out);
 
 shawncore_crypto_err shawncore_crypto_hmac_sha384(
-    const uint8_t key[static 32],
+    const uint8_t *key,
     const uint8_t *data,
     size_t data_len,
-    uint8_t out_mac[static 48]);
+    uint8_t *out_mac);
 shawncore_crypto_err shawncore_crypto_hkdf_expand_sha384(
-    const uint8_t prk[static 48],
+    const uint8_t *prk,
     const uint8_t *info,
     size_t info_len,
     uint8_t *out,
@@ -282,7 +282,7 @@ shawncore_crypto_err shawncore_crypto_aead_encrypt(
     const uint8_t *plaintext,
     uint8_t *ciphertext,
     size_t data_len,
-    uint8_t out_mac[static 48]);
+    uint8_t *out_mac);
 shawncore_crypto_err shawncore_crypto_aead_decrypt(
     const uint8_t enc_key[static 32],
     const uint8_t mac_key[static 32],
@@ -293,7 +293,7 @@ shawncore_crypto_err shawncore_crypto_aead_decrypt(
     const uint8_t mac[static 48],
     uint8_t *plaintext,
     size_t data_len);
-shawncore_crypto_err shawncore_crypto_entropy_push(const uint8_t chunk[static 32]);
+shawncore_crypto_err shawncore_crypto_entropy_push(const uint8_t *chunk);
 shawncore_crypto_err shawncore_crypto_entropy_mix(void);
 
 /*

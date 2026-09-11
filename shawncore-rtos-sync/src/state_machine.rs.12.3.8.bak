@@ -71,10 +71,7 @@ impl StateMachine {
                 Ordering::Acquire,
             ) {
                 Ok(_) => return Ok(()),
-                Err(updated) => {
-                    core::hint::spin_loop();
-                    current = updated;
-                }
+                Err(updated) => current = updated,
             }
         }
     }

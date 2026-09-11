@@ -65,10 +65,7 @@ impl LatencyTracker {
                 Ordering::Relaxed,
             ) {
                 Ok(_) => break,
-                Err(updated_max) => {
-                    core::hint::spin_loop();
-                    current_max = updated_max;
-                }
+                Err(updated_max) => current_max = updated_max,
             }
         }
 
@@ -82,10 +79,7 @@ impl LatencyTracker {
                 Ordering::Relaxed,
             ) {
                 Ok(_) => break,
-                Err(updated_total) => {
-                    core::hint::spin_loop();
-                    current_total = updated_total;
-                }
+                Err(updated_total) => current_total = updated_total,
             }
         }
         self.samples.fetch_add(1, Ordering::Release);

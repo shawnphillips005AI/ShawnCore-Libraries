@@ -164,7 +164,6 @@ impl SessionManager {
             Ok(s) => s.0,
             Err(e) => {
                 pq_secret.zeroize();
-                self.zeroize_session();
                 return Err(e);
             }
         };
