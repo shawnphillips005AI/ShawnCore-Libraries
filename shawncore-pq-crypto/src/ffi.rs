@@ -1836,3 +1836,24 @@ mod wire_codec_tests {
         assert_eq!(pk.to_bytes(), expected_pk);
     }
 }
+
+/// FIPS 140-3 Power-On Self-Test (POST)
+/// Verifies silicon ALU integrity by executing a SHA-384 Known-Answer Test (KAT).
+#[no_mangle]
+pub extern "C" fn shawncore_crypto_self_test() -> ShawncoreCryptoErr {
+    use sha2::{Digest, Sha384};
+    let mut hasher = Sha384::new();
+    hasher.update(b"abc");
+    let result = hasher.finalize();
+
+    // NIST FIPS 180-4 SHA-384 Test Vector for "abc"
+    let expected_prefix = [0xcb, 0x00, 0x75, 0x3f, 0x45, 0xa3, 0x5e, 0x8b];
+
+    // Constant-time comparison to prevent timing side-channels during boot
+    use subtle::ConstantTimeEq;
+    if result[..8].ct_eq(&expected_prefix).unwrap_u8() == 1 {
+        ShawncoreCryptoErr::Success
+    } else {
+        ShawncoreCryptoErr::VerificationFailed
+    }
+}

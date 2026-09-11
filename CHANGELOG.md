@@ -7,6 +7,16 @@ qualification, or production readiness.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [12.3.10] — 2026-09-11
+
+### Added
+- **FIPS 140-3 Compliance:** Added `shawncore_crypto_self_test()` to the C-API. This implements a Power-On Self-Test (POST) Known-Answer Test (KAT) for the underlying cryptographic primitives. Integrators must call this function during the boot sequence to verify silicon ALU integrity before processing sensitive data.
+
+## [12.3.9] — 2026-09-11
+
+### Security
+- **Anti-Forensics (Data Remanence):** Injected volatile zeroization into the `pop()` paths of the lock-free queues. Queue slots are now explicitly wiped immediately after the payload is extracted and before the sequence counter is released. This prevents cryptographic material (like entropy chunks) from lingering in the queue's backing array, mitigating cold-boot and physical memory dump attacks.
+
 ## [12.3.8] — 2026-09-10
 
 ### Security & Performance

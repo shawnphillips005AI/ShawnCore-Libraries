@@ -270,6 +270,12 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
             // FIX: AArch64 Weak Memory Model Barrier
             // Prevent the CPU from reordering the payload read AFTER the second sequence check.
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+            // FIX: Data Remanence Prevention
+            // Zeroize the queue slot immediately after extraction so secret material doesn't linger in RAM.
+            let dst = (*slot_ptr).data.get() as *mut u8;
+            for i in 0..core::mem::size_of_val(&item) {
+                core::ptr::write_volatile(dst.add(i), 0);
+            }
             let second_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
             if first_sequence != second_sequence || second_sequence & 1 != 0 {
                 return None;
