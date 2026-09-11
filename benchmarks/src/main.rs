@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Shawn Phillips. All Rights Reserved.
+// Dual-licensed under AGPLv3 and Commercial License.
+
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 

@@ -267,10 +267,3 @@ certification or approval conclusion.
 This repository is proprietary and all rights are reserved. The crates are
 intentionally excluded from registry publication; distribution, evaluation, and
 integration require a separate written agreement with the copyright holder.
-
-## 💼 Commercial Licensing & Integration
-ShawnCore is available under a **Dual-License model**:
-1. **AGPLv3** for open-source evaluation and academic research.
-2. **Commercial License** for proprietary, closed-source defense and enterprise applications.
-
-If you are an Engineering Director or Principal Architect looking to integrate Post-Quantum Cryptography and lock-free RTOS primitives into your platform, please reach out to discuss commercial licensing, hardware PoC integration, or acquisition.
