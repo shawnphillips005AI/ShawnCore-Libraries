@@ -107,7 +107,7 @@ impl PerCoreScheduler {
             && tcb.stack_size >= core::mem::size_of::<u64>()
             && stack_end.is_some_and(|end| tcb.rsp >= tcb.stack_base && tcb.rsp <= end);
 
-        if tcb.priority >= 16 || !valid_stack || self.tasks[tcb.priority as usize].stack_base != 0 {
+        if tcb.priority >= 16 || !valid_stack || self.ready_bitmap & (1 << tcb.priority) != 0 {
             return Err(SchedulerError::TaskFault);
         }
 

@@ -285,6 +285,9 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
                 core::mem::size_of::<T>(),
             );
             let item = core::ptr::read_volatile((*slot_ptr).data.get());
+            // FIX: AArch64 Weak Memory Model Barrier
+            // Prevent the CPU from reordering the payload read AFTER the second sequence check.
+            core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
             let second_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
             if first_sequence != second_sequence || second_sequence & 1 != 0 {
                 return None;

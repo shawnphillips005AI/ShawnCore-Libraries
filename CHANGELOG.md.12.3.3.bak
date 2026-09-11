@@ -7,41 +7,6 @@ qualification, or production readiness.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [12.3.8] — 2026-09-10
-
-### Security & Performance
-- **CAS Bus Starvation (Hardware Livelock):** Injected `core::hint::spin_loop()` into the `compare_exchange_weak` failure branches of the State Machine and Latency Tracker. This emits hardware `YIELD` instructions, preventing tight CAS loops from flooding the memory controller and starving concurrent cores.
-- **Double-Panic Abort Prevention:** Wrapped the `no_std` FFI panic handler in an `AtomicBool` reentrancy guard. If the host C-callback triggers a secondary Rust panic, the system now safely halts via a spin loop rather than triggering an uncatchable hardware `ud2` illegal instruction abort.
-
-## [12.3.7] — 2026-09-10
-
-### Security
-- **Replay Window Shift Overflow:** Fixed a critical cryptographic protocol vulnerability where a sequence number jump of $\ge 64$ would trigger CPU shift masking (e.g., `x << 64` evaluating to `x << 0` on ARM/x86). The sliding window now explicitly zeroes itself on large sequence jumps, structurally preventing "Phantom Replay" attacks.
-
-## [12.3.6] — 2026-09-10
-
-### Security
-- **Silicon-Level Memory Barriers:** Injected `SeqCst` hardware memory fences into the lock-free queue consumer paths. This prevents AArch64/RISC-V weak memory models from speculatively reordering the volatile payload read *after* the trailing sequence-counter validation, structurally eliminating a hardware-level Seqlock data race.
-- **C-API Hardening:** Finalized C99 `[static N]` array extents for `entropy_push`, `hmac_sha384`, and `hkdf_expand_sha384` to guarantee strict compile-time bounds checking across the entire FFI surface.
-
-## [12.3.5] — 2026-09-10
-
-### Changed
-- **Deployment Optimization:** Enabled `lto = "fat"`, `codegen-units = 1`, and `strip = "symbols"` in the release profile. This guarantees cross-crate inlining across the FFI boundary and aggressively strips dead code, significantly reducing the `.a` static archive footprint for constrained microcontrollers.
-- **C-API Hardening:** Completed the C99 `[static N]` array extent rollout by applying strict bounds to the remaining AEAD and Session Manager nonce (`[static 12]`) and MAC (`[static 48]`) pointers.
-
-## [12.3.4] — 2026-09-10
-
-### Fixed
-- **State Machine Memory Leak:** `finalize_handshake` now correctly invokes `self.zeroize_session()` if the X25519 Diffie-Hellman derivation fails, ensuring temporary post-quantum keys are not left in RAM.
-- **Scheduler Task Overwrite:** `create_task` now checks the actual TCB array (`stack_base != 0`) instead of the `ready_bitmap` to verify slot availability, preventing the silent overwrite of blocked/sleeping tasks.
-
-## [12.3.3] — 2026-09-10
-
-### Security
-- **C-API Hardening:** Upgraded all fixed-length FFI pointer arguments (entropy, nonces, keys, MACs) to use C99 `[static N]` array extents. This enforces strict compile-time bounds checking and non-null guarantees in the C compiler without altering the Rust ABI.
-- **Documentation:** Explicitly documented the Rust move-semantics "ghost stack copy" limitation for large cryptographic keys in `SECURITY.md`.
-
 ## [12.3.2] — 2026-09-10
 
 ### Fixed
