@@ -187,8 +187,6 @@ impl SessionManager {
         let mut hybrid_key_128 = match hybrid_key_res {
             Ok(k) => k,
             Err(e) => {
-                pq_secret.zeroize();
-                classical_secret.zeroize();
                 self.zeroize_session();
                 return Err(e);
             }
@@ -388,30 +386,26 @@ impl SessionManager {
         let mut mac_key = [0u8; 32];
         enc_key.copy_from_slice(&key[..32]);
         mac_key.copy_from_slice(&key[32..]);
-        let mut pending_nonce = [0u8; 12];
-        pending_nonce[..8].copy_from_slice(&self.tx_counter.to_le_bytes());
-        pending_nonce[8..].fill(0);
-
+        let mut candidate_nonce = [0u8; 12];
+        candidate_nonce[..8].copy_from_slice(&self.tx_counter.to_le_bytes());
+        candidate_nonce[8..].fill(0);
         let result = aead_encrypt(
             &enc_key,
             &mac_key,
-            &pending_nonce,
+            &candidate_nonce,
             aad,
             plaintext,
             ciphertext,
             tag,
         );
-
         enc_key.zeroize();
         mac_key.zeroize();
+        result?;
 
-        if let Err(e) = result {
-            pending_nonce.zeroize();
-            return Err(e);
-        }
-
-        nonce.copy_from_slice(&pending_nonce);
-        pending_nonce.zeroize();
+        // Publish the nonce only after encryption and authentication succeed.
+        // A failed encryption therefore leaves the caller-visible nonce unchanged.
+        nonce.copy_from_slice(&candidate_nonce);
+        candidate_nonce.zeroize();
         self.tx_counter = self
             .tx_counter
             .checked_add(1)
