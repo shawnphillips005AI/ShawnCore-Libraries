@@ -86,6 +86,9 @@ void shawncore_crypto_register_disable_interrupts(shawncore_disable_interrupts_c
 void shawncore_crypto_register_restore_interrupts(shawncore_restore_interrupts_callback callback);
 void shawncore_crypto_register_cache_flush(shawncore_cache_callback callback);
 
+/* FIPS 140-3 Power-On Self-Test (POST). Must be called before any cryptographic operations. */
+shawncore_crypto_err shawncore_crypto_self_test(void);
+
 /* Session input buffers and mutable session/output objects must not overlap. */
 size_t shawncore_crypto_session_manager_sizeof(void);
 size_t shawncore_crypto_session_manager_alignof(void);
