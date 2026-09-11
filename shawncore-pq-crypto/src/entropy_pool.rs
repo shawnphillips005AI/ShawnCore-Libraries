@@ -235,7 +235,7 @@ impl EntropyPool {
             // Snapshot the 48-byte pool state under the short interrupt-masked
             // lock. The high-level ownership gate prevents another entropy
             // operation from changing the pool until this block commits.
-            let state_snapshot = {
+            let mut state_snapshot = {
                 let guard = self.pool.lock();
                 *guard
             };
@@ -263,6 +263,7 @@ impl EntropyPool {
 
             secure_zeroize(&mut out_result);
             secure_zeroize(&mut state_result);
+            secure_zeroize(&mut state_snapshot);
             offset += copy_len;
         }
 

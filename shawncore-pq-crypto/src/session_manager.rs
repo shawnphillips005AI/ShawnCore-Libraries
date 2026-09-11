@@ -4,8 +4,14 @@
 //! Post-Quantum Session Key Manager.
 //! Hybrid ML-KEM-1024 and X25519 handshake.
 //! Hardware-agnostic implementation for MarTac USVs.
+//!
+//! Security boundary: the handshake transcript does not authenticate a peer identity.
+//! Deployments that require MITM resistance must bind the handshake to an authenticated
+//! identity or trust anchor in the integrating protocol.
 //! Manages both ML-KEM-1024 and X25519 key encapsulation/decapsulation to establish
-//! a secure, forward-secret hybrid symmetric key for network communications.
+//! a hybrid symmetric key for network communications. Peer authentication, trust
+//! binding, and any application-level forward-secrecy guarantees are defined by
+//! the integrating protocol rather than this module alone.
 //! Prevents single-algorithm cryptographic collapse.
 //! Every sensitive local (entropy arrays, shared secrets, and the derived hybrid
 //! key) explicitly calls `.zeroize()` on every return path, success or error,

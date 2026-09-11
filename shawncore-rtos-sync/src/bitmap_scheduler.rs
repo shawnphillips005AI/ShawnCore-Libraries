@@ -13,6 +13,9 @@
 //! * **O(1) Selection:** Perfectly preserves the O(1) partitioned runqueue logic utilizing
 //!   the `trailing_zeros()` hardware-accelerated selection against a 16-bit ready bitmap.
 //! * **Stack Overflow Protection:** Integrates stack canary verification on every context switch.
+//! * **Stack Layout Contract:** The host must provision each task stack so the reserved
+//!   canary word at `stack_base` is outside the initial stack frame and consistent with
+//!   the target architecture's stack-growth direction.
 
 use crate::error::SchedulerError;
 use crate::ffi_callbacks::host_pet_watchdog;
@@ -45,6 +48,17 @@ impl Default for PerCoreScheduler {
     fn default() -> Self {
         Self::new()
     }
+}
+
+fn valid_stack_pointer(tcb: &Tcb, rsp: u64) -> bool {
+    let Some(stack_end) = tcb.stack_base.checked_add(tcb.stack_size as u64) else {
+        return false;
+    };
+    tcb.stack_base != 0
+        && tcb.stack_base % core::mem::align_of::<u64>() as u64 == 0
+        && tcb.stack_size >= core::mem::size_of::<u64>()
+        && rsp >= tcb.stack_base
+        && rsp <= stack_end
 }
 
 impl PerCoreScheduler {
@@ -101,11 +115,7 @@ impl PerCoreScheduler {
         mut tcb: Tcb,
         canary_value: u64,
     ) -> Result<(), SchedulerError> {
-        let stack_end = tcb.stack_base.checked_add(tcb.stack_size as u64);
-        let valid_stack = tcb.stack_base != 0
-            && tcb.stack_base % core::mem::align_of::<u64>() as u64 == 0
-            && tcb.stack_size >= core::mem::size_of::<u64>()
-            && stack_end.is_some_and(|end| tcb.rsp >= tcb.stack_base && tcb.rsp <= end);
+        let valid_stack = valid_stack_pointer(&tcb, tcb.rsp);
 
         if tcb.priority >= 16 || !valid_stack || self.tasks[tcb.priority as usize].stack_base != 0 {
             return Err(SchedulerError::TaskFault);
@@ -191,50 +201,64 @@ impl PerCoreScheduler {
             host_pet_watchdog();
             self.watchdog_matrix = 0;
         }
+
         let current_idx = self.current_task;
 
-        // Save the current task's stack pointer and verify its canary
-        if current_idx < MAX_TASKS {
-            self.tasks[current_idx].rsp = current_rsp;
-
-            let tcb = &self.tasks[current_idx];
-            if tcb.stack_base != 0 {
-                if tcb.stack_base % core::mem::align_of::<u64>() as u64 != 0
-                    || tcb.stack_size < core::mem::size_of::<u64>()
-                {
-                    return 0;
+        // A zero RSP means the host has no current task context to save (for example,
+        // scheduler entry from an idle/boot path). Preserve that established behavior.
+        if current_idx < MAX_TASKS && current_rsp != 0 && self.tasks[current_idx].stack_base != 0 {
+            let canary_ok = {
+                let tcb = &self.tasks[current_idx];
+                if !valid_stack_pointer(tcb, current_rsp) {
+                    false
+                } else {
+                    // # Safety
+                    // The host OS contract guarantees the task stack remains mapped,
+                    // writable, aligned, and exclusively owned for the task lifetime.
+                    let current_canary = unsafe {
+                        let canary_ptr = tcb.stack_base as *const u64;
+                        core::ptr::read_volatile(canary_ptr)
+                    };
+                    current_canary == tcb.stack_canary
                 }
+            };
 
-                // # Safety
-                // Spatial: `stack_base` is provided by the host OS and assumed to be valid.
-                // Temporal: The stack memory is valid for the lifetime of the task.
-                // Alignment: `stack_base` must be 8-byte aligned.
-                let current_canary = unsafe {
-                    let canary_ptr = tcb.stack_base as *const u64;
-                    core::ptr::read_volatile(canary_ptr)
-                };
-
-                if current_canary != tcb.stack_canary {
-                    // Stack overflow detected. Return 0 to signal a catastrophic fault to the host OS.
-                    return 0;
-                }
+            if !canary_ok {
+                return 0;
             }
+
+            self.tasks[current_idx].rsp = current_rsp;
         }
 
-        // O(1) Priority Queue: Find the lowest bit set in the ready_bitmap using hardware trailing_zeros.
-        // This guarantees deterministic execution time regardless of the number of tasks.
+        // O(1) priority selection using the ready bitmap.
         let mut next_idx = self.ready_bitmap.trailing_zeros() as usize;
-
-        // Fallback to idle task (priority 15) if no tasks are ready
         if next_idx >= MAX_TASKS {
             next_idx = 15;
         }
 
+        // A ready task must have a registered stack and a saved RSP within that stack.
+        // An empty idle slot is valid when the scheduler falls back to priority 15.
+        if self.tasks[next_idx].stack_base != 0 {
+            let next_tcb = &self.tasks[next_idx];
+            if !valid_stack_pointer(next_tcb, next_tcb.rsp) {
+                return 0;
+            }
+            // # Safety
+            // The host OS contract guarantees the task stack remains mapped, writable,
+            // aligned, and exclusively owned for the task lifetime.
+            let next_canary = unsafe {
+                let canary_ptr = next_tcb.stack_base as *const u64;
+                core::ptr::read_volatile(canary_ptr)
+            };
+            if next_canary != next_tcb.stack_canary {
+                return 0;
+            }
+        } else if next_idx != 15 || (self.ready_bitmap & (1u16 << next_idx)) != 0 {
+            return 0;
+        }
+
         self.current_task = next_idx;
-
-        // Ensure the updated TCB state is visible before returning the new RSP to the host OS.
         compiler_fence(Ordering::SeqCst);
-
         self.tasks[next_idx].rsp
     }
 }
