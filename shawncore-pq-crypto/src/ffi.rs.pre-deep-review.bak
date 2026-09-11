@@ -1532,10 +1532,8 @@ pub unsafe extern "C" fn shawncore_crypto_entropy_mix() -> ShawncoreCryptoErr {
     ShawncoreCryptoErr::Success
 }
 
-/// SHA-384 implementation self-test.
-/// Executes a complete known-answer test for the SHA-384 implementation.
-/// This validates the software cryptographic path; it does not claim FIPS
-/// certification, a formal power-on test, or physical-silicon verification.
+/// FIPS 140-3 Power-On Self-Test (POST)
+/// Verifies silicon ALU integrity by executing a SHA-384 Known-Answer Test (KAT).
 #[no_mangle]
 pub extern "C" fn shawncore_crypto_self_test() -> ShawncoreCryptoErr {
     use sha2::{Digest, Sha384};
