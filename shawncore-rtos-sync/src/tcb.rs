@@ -16,9 +16,6 @@
 pub struct Tcb {
     /// Entry point of the task (function pointer address).
     pub entry_point: u64,
-    /// Base physical or virtual address of the task's stack. The integration layer
-    /// must define stack growth direction and reserve the first `u64` at this base
-    /// address for the scheduler canary; the initial stack frame must not overlap it.
     /// Base physical or virtual address of the task's stack. The integration layer must
     /// define the target stack-growth direction and reserve the first aligned `u64` at
     /// `stack_base` for the scheduler's canary; the initial stack frame must not overlap it.

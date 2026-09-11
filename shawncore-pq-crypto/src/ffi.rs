@@ -125,6 +125,9 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_init(
     if manager.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(manager) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
 
     unsafe {
         core::ptr::write(manager, SessionManager::new());
@@ -142,6 +145,9 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_destroy(
     manager: *mut SessionManager,
 ) -> ShawncoreCryptoErr {
     if manager.is_null() {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+    if !ptr_is_aligned(manager) {
         return ShawncoreCryptoErr::InvalidState;
     }
 
@@ -165,6 +171,10 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_initiate_handshake(
     out_x25519_pk: *mut X25519Public,
 ) -> ShawncoreCryptoErr {
     if manager.is_null() || entropy.is_null() || out_ml_kem_pk.is_null() || out_x25519_pk.is_null()
+    {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+    if !ptr_is_aligned(manager) || !ptr_is_aligned(out_ml_kem_pk) || !ptr_is_aligned(out_x25519_pk)
     {
         return ShawncoreCryptoErr::InvalidState;
     }
@@ -230,6 +240,9 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_handshake(
     info_len: usize,
 ) -> ShawncoreCryptoErr {
     if manager.is_null() || peer_x25519_pk.is_null() || ml_kem_ct.is_null() {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+    if !ptr_is_aligned(manager) || !ptr_is_aligned(peer_x25519_pk) || !ptr_is_aligned(ml_kem_ct) {
         return ShawncoreCryptoErr::InvalidState;
     }
     if (salt.is_null() && salt_len > 0) || (info.is_null() && info_len > 0) {
@@ -450,6 +463,10 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_zeroize(
     manager: *mut SessionManager,
 ) -> ShawncoreCryptoErr {
     if manager.is_null() {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
+    if !ptr_is_aligned(manager) {
         return ShawncoreCryptoErr::InvalidState;
     }
 
@@ -1053,6 +1070,9 @@ macro_rules! wire_codec {
             if value.is_null() || out.is_null() {
                 return ShawncoreCryptoErr::InvalidState;
             }
+            if !ptr_is_aligned(value) {
+                return ShawncoreCryptoErr::InvalidState;
+            }
             if out_len != $len {
                 return ShawncoreCryptoErr::InvalidLength;
             }
@@ -1083,6 +1103,9 @@ macro_rules! wire_codec {
             out: *mut $type,
         ) -> ShawncoreCryptoErr {
             if bytes.is_null() || out.is_null() {
+                return ShawncoreCryptoErr::InvalidState;
+            }
+            if !ptr_is_aligned(out) {
                 return ShawncoreCryptoErr::InvalidState;
             }
             if len != $len {
@@ -1155,6 +1178,11 @@ wire_codec!(
 // ============================================================================
 // AEAD & KDF FFI
 // ============================================================================
+
+#[inline]
+fn ptr_is_aligned<T>(ptr: *const T) -> bool {
+    (ptr as usize) % core::mem::align_of::<T>() == 0
+}
 
 fn ranges_overlap<T, U>(
     first: *const T,
@@ -1532,32 +1560,81 @@ pub unsafe extern "C" fn shawncore_crypto_entropy_mix() -> ShawncoreCryptoErr {
     ShawncoreCryptoErr::Success
 }
 
-/// SHA-384 implementation self-test.
-/// Executes a complete known-answer test for the SHA-384 implementation.
-/// This validates the software cryptographic path; it does not claim FIPS
-/// certification, a formal power-on test, or physical-silicon verification.
+/// Software cryptographic self-test suite.
+///
+/// Executes known-answer tests for SHA-384, HMAC-SHA384, HKDF-SHA384, and
+/// X25519. This validates the linked software cryptographic paths; it does not
+/// claim FIPS certification, a formal power-on test, or physical-silicon verification.
 #[no_mangle]
 pub extern "C" fn shawncore_crypto_self_test() -> ShawncoreCryptoErr {
     use sha2::{Digest, Sha384};
+    use subtle::ConstantTimeEq;
+
+    // 1. SHA-384("abc") — NIST FIPS 180-4.
     let mut hasher = Sha384::new();
     hasher.update(b"abc");
-    let result = hasher.finalize();
-
-    // NIST FIPS 180-4 SHA-384 test vector for "abc".
-    let expected = [
+    let digest = hasher.finalize();
+    let sha_expected = [
         0xcb, 0x00, 0x75, 0x3f, 0x45, 0xa3, 0x5e, 0x8b, 0xb5, 0xa0, 0x3d, 0x69, 0x9a, 0xc6, 0x50,
         0x07, 0x27, 0x2c, 0x32, 0xab, 0x0e, 0xde, 0xd1, 0x63, 0x1a, 0x8b, 0x60, 0x5a, 0x43, 0xff,
         0x5b, 0xed, 0x80, 0x86, 0x07, 0x2b, 0xa1, 0xe7, 0xcc, 0x23, 0x58, 0xba, 0xec, 0xa1, 0x34,
         0xc8, 0x25, 0xa7,
     ];
-
-    // Constant-time full-digest comparison for the boot self-test.
-    use subtle::ConstantTimeEq;
-    if result.as_slice().ct_eq(&expected).unwrap_u8() == 1 {
-        ShawncoreCryptoErr::Success
-    } else {
-        ShawncoreCryptoErr::VerificationFailed
+    if digest.as_slice().ct_eq(&sha_expected).unwrap_u8() != 1 {
+        return ShawncoreCryptoErr::VerificationFailed;
     }
+
+    // 2. HMAC-SHA384 with a 32-byte 0x0b key and "Hi There".
+    let hmac_key = [0x0b; 32];
+    let hmac_expected = [
+        0xc3, 0xf1, 0x61, 0x59, 0x43, 0xd1, 0xdd, 0x07, 0xa8, 0x3b, 0xb6, 0x44, 0xb9, 0x7f, 0xb3,
+        0xdc, 0x2b, 0x8a, 0x93, 0x6a, 0xa5, 0x38, 0x9d, 0xe2, 0xa3, 0xe9, 0xdd, 0x91, 0xbc, 0x3b,
+        0xae, 0x0d, 0x0c, 0x30, 0x33, 0x4a, 0x30, 0x17, 0x33, 0xaa, 0x54, 0xed, 0x5e, 0x1f, 0x07,
+        0x69, 0xe8, 0x68,
+    ];
+    let hmac_result = match hmac_sha384(&hmac_key, b"Hi There") {
+        Ok(value) => value,
+        Err(_) => return ShawncoreCryptoErr::VerificationFailed,
+    };
+    if hmac_result.ct_eq(&hmac_expected).unwrap_u8() != 1 {
+        return ShawncoreCryptoErr::VerificationFailed;
+    }
+
+    // 3. HKDF-Expand-SHA384 using a deterministic PRK.
+    let prk = [0x0b; 48];
+    let hkdf_expected = [
+        0xaf, 0x5e, 0x50, 0x8e, 0xb4, 0xbb, 0xde, 0x0b, 0xc4, 0xef, 0xeb, 0x3b, 0x15, 0x31, 0xe9,
+        0x5b, 0x93, 0x34, 0x7f, 0x29, 0x2d, 0x76, 0xc1, 0x57, 0x4e, 0x6c, 0x42, 0xad, 0x47, 0xc0,
+        0x17, 0x88,
+    ];
+    let mut hkdf_output = [0u8; 32];
+    if hkdf_expand_sha384(&prk, b"test", &mut hkdf_output).is_err() {
+        return ShawncoreCryptoErr::VerificationFailed;
+    }
+    if hkdf_output.ct_eq(&hkdf_expected).unwrap_u8() != 1 {
+        return ShawncoreCryptoErr::VerificationFailed;
+    }
+
+    // 4. X25519 deterministic KAT.
+    let alice_seed = [0x42; 32];
+    let bob_seed = [0x24; 32];
+    let (alice_public, alice_secret) = x25519_keygen(&alice_seed);
+    let (bob_public, _) = x25519_keygen(&bob_seed);
+    let x25519_expected = [
+        0x07, 0x91, 0x1f, 0xea, 0x37, 0x85, 0xe6, 0xcd, 0x67, 0x63, 0xe1, 0xfd, 0x5d, 0xab, 0x46,
+        0x1f, 0xc0, 0x8a, 0x68, 0x41, 0xaf, 0x21, 0xdb, 0x4a, 0x8a, 0xc7, 0xb7, 0xf9, 0x9b, 0x64,
+        0x10, 0x3a,
+    ];
+    let x25519_result = match x25519_diffie_hellman(&alice_secret, &bob_public) {
+        Ok(value) => value,
+        Err(_) => return ShawncoreCryptoErr::VerificationFailed,
+    };
+    if x25519_result.0.ct_eq(&x25519_expected).unwrap_u8() != 1 {
+        return ShawncoreCryptoErr::VerificationFailed;
+    }
+
+    let _ = alice_public;
+    ShawncoreCryptoErr::Success
 }
 
 #[cfg(test)]
@@ -1766,6 +1843,25 @@ mod wire_codec_tests {
     }
 
     #[test]
+    fn wire_codec_rejects_misaligned_typed_outputs() {
+        install_callbacks();
+        let mut raw = [0u8; core::mem::size_of::<PublicKey1024>() + 64];
+        let misaligned = unsafe { raw.as_mut_ptr().add(1).cast::<PublicKey1024>() };
+        let encoded = [0u8; ML_KEM_PUBLICKEY_BYTES];
+
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_ml_kem_publickey_from_bytes(
+                    encoded.as_ptr(),
+                    encoded.len(),
+                    misaligned,
+                )
+            },
+            ShawncoreCryptoErr::InvalidState
+        );
+    }
+
+    #[test]
     fn wire_codec_rejects_null_wrong_length_and_overlap() {
         install_callbacks();
         let (pk, _dk) = crate::ml_kem_wrapper::ml_kem_keygen(&[1u8; 64]).unwrap();
@@ -1824,6 +1920,17 @@ mod wire_codec_tests {
                 )
             },
             ShawncoreCryptoErr::InvalidLength
+        );
+    }
+
+    #[test]
+    fn session_manager_init_rejects_misaligned_storage() {
+        let mut raw = [0u8; core::mem::size_of::<SessionManager>() + 64];
+        let misaligned = unsafe { raw.as_mut_ptr().add(1).cast::<SessionManager>() };
+
+        assert_eq!(
+            unsafe { shawncore_crypto_session_manager_init(misaligned) },
+            ShawncoreCryptoErr::InvalidState
         );
     }
 

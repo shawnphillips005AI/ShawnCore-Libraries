@@ -21,13 +21,23 @@ jobs:
           path: ~/.cargo/registry
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: cargo fmt --all -- --check
-      - run: cargo test --workspace --all-targets
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - name: Audit root dependency lockfile
+        run: cargo audit --locked
+      - name: Audit fuzz dependency lockfile
+        run: cargo audit --locked --file fuzz/Cargo.lock
+      - run: cargo test --workspace --all-targets --locked
       - run: cargo test --workspace --all-targets --release
-      - run: cargo test --release --workspace --all-targets
-      - run: cargo check --workspace --all-targets
+      - run: cargo check --workspace --all-targets --locked
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
-      - run: cargo check --target aarch64-unknown-none --workspace
-      - run: cargo build --workspace --release
+      - name: RustSec dependency audit
+        run: |
+          cargo install cargo-audit --version 0.22.1 --locked
+          cargo audit --locked
+          cargo audit --manifest-path fuzz/Cargo.toml --locked
+      - run: cargo check --target aarch64-unknown-none --workspace --locked
+      - run: cargo build --workspace --release --locked
       - run: cargo doc --workspace --no-deps
       - run: cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz
       - run: cargo check --manifest-path fuzz/Cargo.toml --bin session_replay_fuzz
