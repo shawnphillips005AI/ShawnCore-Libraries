@@ -194,6 +194,10 @@ fn establish(pair: &mut SessionPair, input: &[u8], offset: usize, test_failed_re
     );
 
     if test_failed_recovery {
+        // An invalid X25519 peer is a fatal handshake failure: finalize_handshake()
+        // deliberately zeroizes the responder's pending state. Exercise that path,
+        // then rebuild both sides before attempting the valid handshake so this fuzz
+        // target never assumes a destroyed handshake state can recover in-place.
         let invalid_peer = X25519Public([0; 32]);
         assert_ne!(
             unsafe {
@@ -205,6 +209,44 @@ fn establish(pair: &mut SessionPair, input: &[u8], offset: usize, test_failed_re
                     salt.len(),
                     info.as_ptr(),
                     info.len(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+
+        assert_eq!(
+            unsafe { shawncore_crypto_session_manager_zeroize(pair.initiator.as_mut_ptr()) },
+            ShawncoreCryptoErr::Success
+        );
+        assert_eq!(
+            unsafe { shawncore_crypto_session_manager_zeroize(pair.responder.as_mut_ptr()) },
+            ShawncoreCryptoErr::Success
+        );
+
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_initiate_handshake(
+                    pair.responder.as_mut_ptr(),
+                    responder_entropy.as_ptr(),
+                    responder_kem.as_mut_ptr(),
+                    responder_x25519.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_encapsulate_for_peer(
+                    pair.initiator.as_mut_ptr(),
+                    responder_kem.as_ptr(),
+                    responder_x25519.as_ptr(),
+                    initiator_entropy.as_ptr(),
+                    salt.as_ptr(),
+                    salt.len(),
+                    info.as_ptr(),
+                    info.len(),
+                    ciphertext.as_mut_ptr(),
+                    initiator_x25519.as_mut_ptr(),
                 )
             },
             ShawncoreCryptoErr::Success
@@ -332,6 +374,10 @@ fuzz_target!(|input: &[u8]| {
                 establish(&mut pair, input, offset, operation & 1 != 0);
                 epoch = epoch.wrapping_add(1);
                 established = true;
+                // Packets are session-scoped. A successful re-establishment replaces
+                // the session keys and replay window, so retained packets from the
+                // previous epoch must not be treated as candidates for the new session.
+                packets.clear();
             }
             2 | 3 if established => {
                 let recipient = if operation & 1 == 0 {
@@ -362,8 +408,12 @@ fuzz_target!(|input: &[u8]| {
                 if established && packet.epoch == epoch && !packet.delivered {
                     assert_eq!(decrypt(&mut pair, &packet), ShawncoreCryptoErr::Success);
                     packets[index].delivered = true;
+                    // Only a packet that was just accepted may be replay-tested.
+                    // Packets that were not eligible above must not be forced through
+                    // an unconditional rejection assertion because they may still be
+                    // valid first deliveries under a different session state.
+                    assert_ne!(decrypt(&mut pair, &packet), ShawncoreCryptoErr::Success);
                 }
-                assert_ne!(decrypt(&mut pair, &packet), ShawncoreCryptoErr::Success);
             }
             6 | 7 if !packets.is_empty() => {
                 let index = byte_at(input, offset) as usize % packets.len();
