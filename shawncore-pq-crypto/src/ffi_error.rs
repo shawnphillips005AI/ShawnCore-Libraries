@@ -54,7 +54,9 @@ static PANIC_CALLBACK: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 ///
 /// # Safety
 /// When present, `cb` must be a valid C-ABI function for every possible call.
-/// Registration and replacement must not race with callback invocation.
+/// Registration is intended for integration-time setup; replacement or removal
+/// requires external quiescence so no concurrent or panic-context invocation can
+/// use the old callback. The callback code address must remain valid for every call.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_register_panic_hook(cb: Option<PanicCallback>) {
     PANIC_CALLBACK.store(

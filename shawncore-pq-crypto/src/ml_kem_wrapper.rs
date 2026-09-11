@@ -81,8 +81,10 @@ impl PublicKey1024 {
 /// A tuple containing the `PublicKey1024` and `DecapsKey1024`.
 pub fn ml_kem_keygen(entropy: &[u8; 64]) -> Result<(PublicKey1024, DecapsKey1024), CryptoError> {
     // Both conversions are infallible: `entropy` is a fixed 64-byte array split at 32.
-    let mut d: [u8; 32] = entropy[..32].try_into().unwrap();
-    let mut z: [u8; 32] = entropy[32..].try_into().unwrap();
+    let mut d = [0u8; 32];
+    let mut z = [0u8; 32];
+    d.copy_from_slice(&entropy[..32]);
+    z.copy_from_slice(&entropy[32..]);
     let (dk, ek) = <MlKem1024 as KemCore>::generate_deterministic(&d.into(), &z.into());
     d.zeroize();
     z.zeroize();
@@ -102,8 +104,15 @@ pub fn ml_kem_encapsulate(
     entropy: &[u8; 32],
 ) -> Result<(SharedKey1024, Ciphertext1024), CryptoError> {
     let mut m: [u8; 32] = *entropy;
-    let (ct, ss) = ml_kem::EncapsulateDeterministic::encapsulate_deterministic(&ek.0, &m.into())
-        .map_err(|_| CryptoError::InvalidState)?;
+    let encapsulation =
+        ml_kem::EncapsulateDeterministic::encapsulate_deterministic(&ek.0, &m.into());
+    let (ct, ss) = match encapsulation {
+        Ok(value) => value,
+        Err(_) => {
+            m.zeroize();
+            return Err(CryptoError::InvalidState);
+        }
+    };
     m.zeroize();
 
     let mut shared = SharedKey1024([0u8; 32]);

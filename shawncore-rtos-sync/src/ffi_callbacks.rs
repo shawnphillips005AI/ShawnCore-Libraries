@@ -46,7 +46,9 @@ static PET_WATCHDOG_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 /// Registers the host OS callback for disabling interrupts.
 ///
 /// # Safety
-/// `cb` must be a valid function pointer to a C-ABI compatible function.
+/// `cb` must be a valid C-ABI compatible function pointer. Registration is
+/// intended for integration-time setup; replacement or removal requires external
+/// quiescence so no concurrent or interrupt-context invocation can use the old pointer.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_register_disable_interrupts(
     cb: Option<DisableInterruptsCb>,
@@ -60,7 +62,9 @@ pub unsafe extern "C" fn shawncore_rtos_register_disable_interrupts(
 /// Registers the host OS callback for restoring interrupts.
 ///
 /// # Safety
-/// `cb` must be a valid function pointer to a C-ABI compatible function.
+/// `cb` must be a valid C-ABI compatible function pointer. Registration is
+/// intended for integration-time setup; replacement or removal requires external
+/// quiescence so no concurrent or interrupt-context invocation can use the old pointer.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_register_restore_interrupts(
     cb: Option<RestoreInterruptsCb>,
@@ -74,7 +78,9 @@ pub unsafe extern "C" fn shawncore_rtos_register_restore_interrupts(
 /// Registers the host OS callback for reading the monotonic clock.
 ///
 /// # Safety
-/// `cb` must be a valid function pointer to a C-ABI compatible function.
+/// `cb` must be a valid C-ABI compatible function pointer. Registration is
+/// intended for integration-time setup; replacement or removal requires external
+/// quiescence so no concurrent or interrupt-context invocation can use the old pointer.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_register_read_monotonic_clock(
     cb: Option<ReadMonotonicClockCb>,
@@ -89,7 +95,9 @@ pub unsafe extern "C" fn shawncore_rtos_register_read_monotonic_clock(
 /// It is invoked before the CPU-side consumer reads a slot that a device may have written.
 ///
 /// # Safety
-/// `cb` must be a valid function pointer to a C-ABI compatible function.
+/// `cb` must be a valid C-ABI compatible function pointer. Registration is
+/// intended for integration-time setup; replacement or removal requires external
+/// quiescence so no concurrent or interrupt-context invocation can use the old pointer.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_register_cache_invalidate(cb: Option<CacheInvalidateCb>) {
     CACHE_INVALIDATE_CB.store(
@@ -102,7 +110,9 @@ pub unsafe extern "C" fn shawncore_rtos_register_cache_invalidate(cb: Option<Cac
 /// It is invoked after the CPU-side producer writes a slot that a device may read.
 ///
 /// # Safety
-/// `cb` must be a valid function pointer to a C-ABI compatible function.
+/// `cb` must be a valid C-ABI compatible function pointer. Registration is
+/// intended for integration-time setup; replacement or removal requires external
+/// quiescence so no concurrent or interrupt-context invocation can use the old pointer.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_register_cache_flush(cb: Option<CacheFlushCb>) {
     CACHE_FLUSH_CB.store(
@@ -114,7 +124,9 @@ pub unsafe extern "C" fn shawncore_rtos_register_cache_flush(cb: Option<CacheFlu
 /// Registers the host OS callback for petting the hardware watchdog.
 ///
 /// # Safety
-/// `cb` must be a valid function pointer to a C-ABI compatible function.
+/// `cb` must be a valid C-ABI compatible function pointer. Registration is
+/// intended for integration-time setup; replacement or removal requires external
+/// quiescence so no concurrent or interrupt-context invocation can use the old pointer.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_register_pet_watchdog(cb: Option<PetWatchdogCb>) {
     PET_WATCHDOG_CB.store(

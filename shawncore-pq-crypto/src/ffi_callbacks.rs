@@ -31,7 +31,10 @@ static CACHE_FLUSH_CB: AtomicPtr<()> = AtomicPtr::new(core::ptr::null_mut());
 ///
 /// # Safety
 /// When present, `cb` must be a valid C-ABI function for every possible call.
-/// Registration and replacement must not race with callback invocation.
+/// Registration is intended for integration-time setup. Callback replacement or
+/// removal requires external quiescence: no caller or interrupt may be able to invoke
+/// the previous callback while registration is being changed, and the callback's code
+/// address must remain valid for every possible invocation.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_register_disable_interrupts(
     cb: Option<DisableInterruptsCb>,
@@ -46,7 +49,10 @@ pub unsafe extern "C" fn shawncore_crypto_register_disable_interrupts(
 ///
 /// # Safety
 /// When present, `cb` must be a valid C-ABI function for every possible call.
-/// Registration and replacement must not race with callback invocation.
+/// Registration is intended for integration-time setup. Callback replacement or
+/// removal requires external quiescence: no caller or interrupt may be able to invoke
+/// the previous callback while registration is being changed, and the callback's code
+/// address must remain valid for every possible invocation.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_register_restore_interrupts(
     cb: Option<RestoreInterruptsCb>,
@@ -61,7 +67,10 @@ pub unsafe extern "C" fn shawncore_crypto_register_restore_interrupts(
 ///
 /// # Safety
 /// When present, `cb` must be a valid C-ABI function for every possible call.
-/// Registration and replacement must not race with callback invocation.
+/// Registration is intended for integration-time setup. Callback replacement or
+/// removal requires external quiescence: no caller or interrupt may be able to invoke
+/// the previous callback while registration is being changed, and the callback's code
+/// address must remain valid for every possible invocation.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_register_cache_flush(cb: Option<CacheFlushCb>) {
     CACHE_FLUSH_CB.store(

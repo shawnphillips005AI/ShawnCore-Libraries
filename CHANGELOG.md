@@ -10,7 +10,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [12.3.10] — 2026-09-11
 
 ### Added
-- **FIPS 140-3 Compliance:** Added `shawncore_crypto_self_test()` to the C-API. This implements a Power-On Self-Test (POST) Known-Answer Test (KAT) for the underlying cryptographic primitives. Integrators must call this function during the boot sequence to verify silicon ALU integrity before processing sensitive data.
+- Added `shawncore_crypto_self_test()` to the C API as a SHA-384 software known-answer test.
+- The self-test does not claim FIPS 140-3 certification, a formal power-on test, or physical-silicon verification.
 
 ## [12.3.9] — 2026-09-11
 

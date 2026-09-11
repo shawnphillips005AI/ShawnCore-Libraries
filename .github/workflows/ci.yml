@@ -22,15 +22,19 @@ jobs:
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: cargo fmt --all -- --check
       - run: cargo test --workspace --all-targets
+      - run: cargo test --workspace --all-targets --release
+      - run: cargo test --release --workspace --all-targets
       - run: cargo check --workspace --all-targets
       - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - run: cargo check --target aarch64-unknown-none --workspace
       - run: cargo build --workspace --release
       - run: cargo doc --workspace --no-deps
       - run: cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz
+      - run: cargo check --manifest-path fuzz/Cargo.toml --bin session_replay_fuzz
       - run: cargo check --manifest-path fuzz/Cargo.toml --bin rtos_stateful_fuzz
       - run: make -C integration syntax
       - run: make -C integration run
+      - run: make -C integration asan
       - run: |
           grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_[:space:]*]*[[:space:]]+shawncore_(crypto|rtos)_[A-Za-z0-9_]+[[:space:]]*\(' shawncore-ffi/include/shawncore.h | sed -E 's/.*[[:space:]](shawncore_(crypto|rtos)_[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/' | sort -u > /tmp/shawncore-header-function-symbols
           nm -g --defined-only target/release/libshawncore_ffi.a | awk '{print $3}' | grep -E '^shawncore_(crypto|rtos)_' | sort -u > /tmp/shawncore-archive-symbols
@@ -45,4 +49,5 @@ jobs:
           components: rust-src
       - run: cargo install cargo-fuzz --version 0.12.0 --locked
       - run: cargo +nightly fuzz run ffi_aead_fuzz -- -runs=10000 -max_len=512
+      - run: cargo +nightly fuzz run session_replay_fuzz -- -runs=10000 -max_len=512
       - run: cargo +nightly fuzz run rtos_stateful_fuzz -- -runs=10000 -max_len=512

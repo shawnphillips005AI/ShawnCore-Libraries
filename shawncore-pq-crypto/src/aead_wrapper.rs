@@ -168,7 +168,9 @@ pub fn aead_decrypt(
     secure_zeroize(expected_mac_bytes.as_mut_slice());
 
     // 2. Verify the MAC in constant time
-    if !verify_tag_constant_time(mac, &expected_mac) {
+    let tag_valid = verify_tag_constant_time(mac, &expected_mac);
+    secure_zeroize(&mut expected_mac);
+    if !tag_valid {
         secure_zeroize(plaintext);
         return Err(CryptoError::VerificationFailed);
     }
@@ -252,7 +254,9 @@ pub fn aead_decrypt_in_place(
     expected_mac.copy_from_slice(&expected_mac_bytes);
     secure_zeroize(expected_mac_bytes.as_mut_slice());
 
-    if !verify_tag_constant_time(mac, &expected_mac) {
+    let tag_valid = verify_tag_constant_time(mac, &expected_mac);
+    secure_zeroize(&mut expected_mac);
+    if !tag_valid {
         secure_zeroize(buffer);
         return Err(CryptoError::VerificationFailed);
     }
