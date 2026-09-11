@@ -131,10 +131,6 @@ impl SessionManager {
     /// Processes an incoming hybrid ciphertext/public key from the Command Center to establish
     /// the session key.
     ///
-    /// Any cryptographic failure after a pending handshake has started consumes the pending
-    /// ephemeral ML-KEM/X25519 state and requires a fresh `initiate_handshake` call.
-    /// This fail-closed behavior prevents failed handshake inputs from reusing ephemeral state.
-    ///
     /// # Arguments
     /// * `peer_x25519_pk` - The peer's X25519 public key.
     /// * `ml_kem_ct` - The ML-KEM-1024 ciphertext.
@@ -165,7 +161,6 @@ impl SessionManager {
         let mut pq_secret = match pq_secret_res {
             Ok(s) => s.0,
             Err(e) => {
-                self.zeroize_session();
                 return Err(e);
             }
         };
@@ -187,7 +182,6 @@ impl SessionManager {
         let mut hybrid_key_128 = match hybrid_key_res {
             Ok(k) => k,
             Err(e) => {
-                self.zeroize_session();
                 return Err(e);
             }
         };
@@ -544,6 +538,38 @@ mod tests {
             manager.verify_key_integrity(),
             Err(CryptoError::InvalidState)
         );
+    }
+
+    #[test]
+    fn failed_encryption_leaves_nonce_output_unchanged() {
+        unsafe {
+            shawncore_crypto_register_cache_flush(Some(test_cache_flush));
+        }
+        let mut manager = SessionManager {
+            ml_kem_dk: None,
+            x25519_sk: None,
+            tx_key: Some([0x11; 64]),
+            rx_key: Some([0x22; 64]),
+            tx_key_checksum: key_checksum(&[0x11; 64]),
+            rx_key_checksum: key_checksum(&[0x22; 64]),
+            is_established: true,
+            tx_counter: 7,
+            rx_counter: 0,
+            rx_window: 0,
+        };
+
+        let original_nonce = [0xA5; 12];
+        let mut nonce = original_nonce;
+        let plaintext = [0xCC; 4];
+        let mut ciphertext = [0u8; 4];
+        let mut tag = [0u8; 48];
+
+        assert_eq!(
+            manager.encrypt_packet(b"aad", &plaintext, &mut ciphertext, &mut nonce, &mut tag,),
+            Err(CryptoError::InvalidLength)
+        );
+        assert_eq!(nonce, original_nonce);
+        assert_eq!(manager.tx_counter, 7);
     }
 
     #[test]

@@ -372,6 +372,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "shawncore-benchmarks"
+version = "12.3.2"
+dependencies = [
+ "shawncore-pq-crypto",
+]
+
+[[package]]
 name = "shawncore-ffi"
 version = "12.3.2"
 dependencies = [
