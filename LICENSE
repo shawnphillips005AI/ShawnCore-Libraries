@@ -1,6 +1,14 @@
-All rights reserved.
+ShawnCore - Dual Licensing Model
 
-This repository and its contents are proprietary. No license, permission, or
-right to use, copy, modify, distribute, sublicense, or create derivative works
-is granted except through a separate written agreement with the copyright
-holder.
+Copyright (c) 2026 Shawn Phillips. All Rights Reserved.
+
+ShawnCore is distributed under a dual-license model to support both open-source evaluation and proprietary commercial integration.
+
+1. OPEN SOURCE EVALUATION LICENSE (AGPLv3)
+This program is free software: you can redistribute it and/or modify it under the terms of the GNU Affero General Public License as published by the Free Software Foundation, either version 3 of the License, or (at your option) any later version.
+(See https://www.gnu.org/licenses/agpl-3.0.txt for full text).
+
+2. COMMERCIAL / PROPRIETARY LICENSE
+For use in closed-source, proprietary, or commercial products (including defense, aerospace, and enterprise applications) without the copyleft restrictions of the AGPLv3, a Commercial License is required. 
+
+To purchase a Commercial License, or to discuss integration consulting and acqui-hire opportunities, please contact the author directly.

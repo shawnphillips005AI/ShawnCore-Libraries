@@ -57,7 +57,7 @@ before dispatching cache maintenance.
 | Self-contained archive check | PASS | For `aarch64-unknown-none`, the set of undefined symbols minus the set of archive-defined symbols is empty; `nm` shows no `malloc`, `free`, `__rust_alloc`, libc I/O, or pthread references. |
 | AddressSanitizer C smoke | PASS | `make -C integration asan` built with `-fsanitize=address` and executed with `ASAN_OPTIONS=detect_leaks=1`; no findings. |
 | Valgrind C smoke | PASS | `make -C integration valgrind` reported `ERROR SUMMARY: 0 errors from 0 contexts` and `in use at exit: 0 bytes in 0 blocks`. |
-| Rust-instrumented AddressSanitizer | RESERVED FOR COMMERCIAL PARTNERS | Attempted, but nightly failed to resolve `zeroize_derive` in sanitizer build mode (`E0463`). No Rust ASan result is claimed. |
+| Rust-instrumented AddressSanitizer | BLOCKED | Attempted, but nightly failed to resolve `zeroize_derive` in sanitizer build mode (`E0463`). No Rust ASan result is claimed. |
 
 The C smoke test checks ABI size/alignment, selected null errors, zero-length
 AEAD/HKDF calls, wire codec rejection of null and wrong-length arguments, a full
@@ -97,12 +97,12 @@ any certification or approval conclusion.
 
 | Gate | Result | Reason |
 | --- | --- | --- |
-| AArch64 target behavior and ABI | RESERVED FOR COMMERCIAL PARTNERS | The target compiled, but no target board or target C execution was available. |
-| DMA/cache coherency and ownership | RESERVED FOR COMMERCIAL PARTNERS | Requires target memory map, device, cache-maintenance implementation, and board tests. |
-| Interrupt, ISR/NMI/FIQ, watchdog, and stack behavior | RESERVED FOR COMMERCIAL PARTNERS | Requires approved HAL, RTOS integration, and hardware fault-path tests. |
-| Hardware entropy quality | RESERVED FOR COMMERCIAL PARTNERS | Requires qualified source and target health testing. |
-| ML-KEM/ML-DSA KATs and interoperability | RESERVED FOR COMMERCIAL PARTNERS | No external KAT/interoperability suite was executed. |
-| Independent security review | RESERVED FOR COMMERCIAL PARTNERS | No independent review has been performed or claimed. |
+| AArch64 target behavior and ABI | BLOCKED | The target compiled, but no target board or target C execution was available. |
+| DMA/cache coherency and ownership | BLOCKED | Requires target memory map, device, cache-maintenance implementation, and board tests. |
+| Interrupt, ISR/NMI/FIQ, watchdog, and stack behavior | BLOCKED | Requires approved HAL, RTOS integration, and hardware fault-path tests. |
+| Hardware entropy quality | BLOCKED | Requires qualified source and target health testing. |
+| ML-KEM/ML-DSA KATs and interoperability | BLOCKED | No external KAT/interoperability suite was executed. |
+| Independent security review | BLOCKED | No independent review has been performed or claimed. |
 
 ## NOT YET VALIDATED
 
@@ -123,6 +123,3 @@ distribution set; they were removed from the working tree during release
 cleanup, so reproducing this evidence requires rebuilding from source. Before
 external distribution, commit the intended source set so the recipient can
 reproduce this evidence from the delivered revision.
-
-## 🚀 Commercial Hardware Validation Opportunity
-*Note to Enterprise Evaluators:* ShawnCore is currently passing all host-side validation, ASan, and Fuzzing gates. The final bare-metal target validation (cache coherency and DMA callbacks) is reserved for commercial hardware partners. If you are evaluating ShawnCore for a proprietary flight-controller or RTOS architecture, please reach out to discuss a hardware Proof-of-Concept (PoC) integration.

@@ -1,3 +1,6 @@
+// Copyright (c) 2026 Shawn Phillips. All Rights Reserved.
+// Dual-licensed under AGPLv3 and Commercial License.
+
 #include "shawncore.h"
 
 _Static_assert(sizeof(shawncore_rtos_tcb) == 64, "TCB ABI changed");
