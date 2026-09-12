@@ -111,7 +111,7 @@ a security proof; CI configures a separate 10,000-execution fuzz job.
 ## Requested Technical Review
 
 - Confirm the C ABI, object lifecycle, callback lifetime, and overlap contracts
-  match the intended MARTAC integration environment.
+  match the intended target integration environment.
 - Evaluate the platform HAL contract for interrupt masking, fault handling,
   watchdog policy, monotonic clock behavior, and cache maintenance.
 - Validate target stack layout/context-switch behavior and scheduler canary use.

@@ -5,7 +5,7 @@
 #![deny(missing_docs)]
 
 //! Foreign Function Interface (FFI) for the Cryptographic Stack.
-//! Defines opaque C-callable boundaries for the MarTac host OS. The host must
+//! Defines opaque C-callable boundaries for the Target host OS. The host must
 //! uphold each exported function's documented pointer, lifetime, alignment,
 //! ownership, and concurrency preconditions.
 

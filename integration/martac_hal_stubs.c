@@ -2,7 +2,7 @@
 // Dual-licensed under AGPLv3 and Commercial License.
 
 /*
- * MarTac HAL integration stubs (COMPILE-ONLY, NOT FOR PRODUCTION).
+ * Target HAL integration stubs (COMPILE-ONLY, NOT FOR PRODUCTION).
  *
  * These functions intentionally contain no platform behavior. Replace every body
  * with the board-approved implementation and register the callbacks before
@@ -16,7 +16,7 @@
 void host_panic_handler(void)
 {
     /*
-     * Replace with the MarTac fault path: capture immutable diagnostics,
+     * Replace with the Target fault path: capture immutable diagnostics,
      * disable unsafe peripherals, and enter the platform fail-safe state.
      * This function must not return or unwind into Rust.
      */

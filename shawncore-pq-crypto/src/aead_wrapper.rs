@@ -7,7 +7,7 @@
 //! Constant-time Authenticated Encryption with Associated Data (AEAD) utilities.
 //! Provides side-channel resistant tag verification, HMAC, HKDF expansion, and
 //! a robust Encrypt-then-MAC AEAD construction.
-//! Hardware-agnostic implementation for MarTac USVs.
+//! Hardware-agnostic implementation for autonomous surface vehicles.
 
 use crate::error::CryptoError;
 use crate::zeroize::{secure_cache_flush, secure_zeroize};

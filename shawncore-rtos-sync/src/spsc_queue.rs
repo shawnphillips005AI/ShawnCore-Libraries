@@ -6,7 +6,7 @@
 
 //! Lock-free Single-Producer Single-Consumer (SPSC) queue.
 //!
-//! Hardware-agnostic implementation for MarTac USVs.
+//! Hardware-agnostic implementation for autonomous surface vehicles.
 //! It accepts host-provided, page-aligned memory buffers via `init()`. Page
 //! alignment is a storage requirement; it does not establish DMA pinning or
 //! cache coherency.
@@ -289,7 +289,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
             );
             let item = core::ptr::read_volatile((*slot_ptr).data.get());
             // FIX: AArch64 Weak Memory Model Barrier
-            // Prevent the CPU from reordering the payload read AFTER the second sequence check.
+            // Provides a SeqCst ordering barrier between the payload access and sequence validation under the Rust atomic memory model.
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
             // FIX: Data Remanence Prevention
             // Zeroize the queue slot immediately after extraction so secret material doesn't linger in RAM.

@@ -434,7 +434,7 @@ dependencies = [
 
 [[package]]
 name = "shawncore-fuzz"
-version = "0.0.0"
+version = "12.3.10"
 dependencies = [
  "libfuzzer-sys",
  "shawncore-pq-crypto",
@@ -443,7 +443,7 @@ dependencies = [
 
 [[package]]
 name = "shawncore-pq-crypto"
-version = "12.3.2"
+version = "12.3.10"
 dependencies = [
  "chacha20",
  "hkdf",
@@ -458,7 +458,7 @@ dependencies = [
 
 [[package]]
 name = "shawncore-rtos-sync"
-version = "12.3.2"
+version = "12.3.10"
 dependencies = [
  "zeroize",
 ]

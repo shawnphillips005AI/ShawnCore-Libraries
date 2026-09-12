@@ -6,7 +6,7 @@
 
 //! Task Control Block (TCB) for the O(1) Bitmap Scheduler.
 //!
-//! Hardware-agnostic implementation for MarTac USVs.
+//! Hardware-agnostic implementation for autonomous surface vehicles.
 //! Tracks the stack pointer for true preemptive context switching and
 //! maintains a cryptographic stack canary to detect stack overflows.
 

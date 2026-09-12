@@ -1,8 +1,6 @@
 # Validation Record
 
-This record documents the 12.3.1 host-side validation inherited by the 12.3.10
-release-candidate. New 12.3.10 results must be recorded from the patched tree before
-release. The underlying 12.3.1 evidence was evaluated on 2026-09-03 in an
+This record documents the host-side validation evidence currently carried by the 12.3.10 release-candidate. Historical 12.3.1 execution results remain identified as historical evidence. This document does not claim a fresh 12.3.10 test run unless explicitly marked as executed.
 Ubuntu 24.04.4 development container. The repository pins
 Rust 1.85.0, the `rustfmt`/`clippy` components, and the `aarch64-unknown-none`
 target in `rust-toolchain.toml`.
@@ -26,7 +24,7 @@ hardware behavior, certification, production approval, or independent review.
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets` | PASS | Actually executed and passed: 56 unit tests (31 crypto, 25 RTOS); the FFI facade has no unit tests. |
+| `cargo test --workspace --all-targets` | PASS | Historical 12.3.1 execution evidence: 56 unit tests (31 crypto, 25 RTOS); the FFI facade had no unit tests. The current source tree contains 61 #[test] functions; a fresh 12.3.10 execution is not claimed by this record. |
 
 The executed tests cover AEAD and in-place round trips, authentication failure,
 FFI null/zero-length/overlap handling, session re-establishment, replay,
@@ -134,3 +132,13 @@ reproduce this evidence from the delivered revision.
 - Current source-tree count: `61` Rust functions annotated with `#[test]`.
 - The source tree contains crypto self-test/KAT coverage.
 - Hardware validation, independent interoperability/KAT cross-validation, and independent security review remain separate validation gates.
+
+
+### Current source-tree test inventory
+
+The current repository source tree contains **61** Rust functions annotated with `#[test]`. This is a source-tree inventory, not a claim that 12.3.10 tests were executed. Historical execution results are retained with their original release context.
+
+
+## Current source-tree test count
+
+The current 12.3.10 source tree contains **61 Rust `#[test]` functions**. This is a source-tree count and must not be conflated with the historical 56-test execution recorded above. A fresh test run is required before claiming current execution results.

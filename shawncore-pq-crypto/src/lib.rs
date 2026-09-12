@@ -7,7 +7,7 @@
 #![warn(missing_docs)]
 
 //! ShawnCore Post-Quantum Cryptography Library
-//! Hardware-agnostic hybrid cryptographic building blocks for MarTac USVs.
+//! Hardware-agnostic hybrid cryptographic building blocks for autonomous surface vehicles.
 //! Designed for seamless C/C++ host OS integration via FFI.
 
 pub mod aead_wrapper;
@@ -479,14 +479,14 @@ mod tests {
                 &receiver_x25519_pk,
                 &[0x92; 64],
                 b"salt",
-                b"MarTac session",
+                b"Target session",
                 &mut ciphertext,
                 &mut sender_x25519_pk,
             )
             .unwrap();
 
         receiver
-            .finalize_handshake(&sender_x25519_pk, &ciphertext, b"salt", b"MarTac session")
+            .finalize_handshake(&sender_x25519_pk, &ciphertext, b"salt", b"Target session")
             .unwrap();
 
         let mut nonce = [0u8; 12];
@@ -495,7 +495,7 @@ mod tests {
         let mut plaintext = [0u8; 14];
         sender
             .encrypt_packet(
-                b"MarTac session",
+                b"Target session",
                 b"telemetry data",
                 &mut ciphertext_payload,
                 &mut nonce,
@@ -504,7 +504,7 @@ mod tests {
             .unwrap();
         receiver
             .decrypt_packet(
-                b"MarTac session",
+                b"Target session",
                 &ciphertext_payload,
                 &nonce,
                 &tag,
@@ -515,7 +515,7 @@ mod tests {
 
         assert!(receiver
             .decrypt_packet(
-                b"MarTac session",
+                b"Target session",
                 &ciphertext_payload,
                 &nonce,
                 &tag,
@@ -525,7 +525,7 @@ mod tests {
 
         sender
             .encrypt_packet(
-                b"MarTac session",
+                b"Target session",
                 b"next packet 00",
                 &mut ciphertext_payload,
                 &mut nonce,
@@ -534,7 +534,7 @@ mod tests {
             .unwrap();
         receiver
             .decrypt_packet(
-                b"MarTac session",
+                b"Target session",
                 &ciphertext_payload,
                 &nonce,
                 &tag,
