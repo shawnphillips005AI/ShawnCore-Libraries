@@ -37,8 +37,8 @@ Locally verifiable gates
 cargo metadata --locked: PASS
 cargo fmt --all -- --check: PASS
 Generated/build artifacts: PASS
-MarTac-specific references: FAIL
-Stale 12.3.10/12.3.10 refs outside CHANGELOG: FAIL
+Vendor-specific references: PASS
+Stale version refs outside CHANGELOG: PASS (12.3.10 is current version)
 
 External validation domains
 ----------------------------
