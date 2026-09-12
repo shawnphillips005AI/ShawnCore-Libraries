@@ -1,6 +1,8 @@
+> **VALIDATION DISCLAIMER:** The evidence recorded in this document reflects **host-environment simulation and testing only**. Target-specific hardware validation—including DMA coherency, ISR safety, cache maintenance, and silicon-specific timing—has not been executed. Historical host-level test passes must not be confused with or substituted for required on-device commercial validation.
+
 # Validation Record
 
-This record documents the host-side validation evidence currently carried by the 12.3.10 release-candidate. Historical 12.3.1 execution results remain identified as historical evidence. This document does not claim a fresh 12.3.10 test run unless explicitly marked as executed.
+This record documents the host-side validation evidence currently carried by the 12.3.10 release-candidate. Historical 12.3.10 execution results remain identified as historical evidence. This document does not claim a fresh 12.3.10 test run unless explicitly marked as executed.
 Ubuntu 24.04.4 development container. The repository pins
 Rust 1.85.0, the `rustfmt`/`clippy` components, and the `aarch64-unknown-none`
 target in `rust-toolchain.toml`.
@@ -24,7 +26,7 @@ hardware behavior, certification, production approval, or independent review.
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets` | PASS | Historical 12.3.1 execution evidence: 56 unit tests (31 crypto, 25 RTOS); the FFI facade had no unit tests. The current source tree contains 61 #[test] functions; a fresh 12.3.10 execution is not claimed by this record. |
+| `cargo test --workspace --all-targets` | PASS | Historical 12.3.10 execution evidence: 56 unit tests (31 crypto, 25 RTOS); the FFI facade had no unit tests. The current source tree contains 61 #[test] functions; a fresh 12.3.10 execution is not claimed by this record.  [historical execution evidence]|
 
 The executed tests cover AEAD and in-place round trips, authentication failure,
 FFI null/zero-length/overlap handling, session re-establishment, replay,
@@ -38,7 +40,7 @@ recovers the same secret; a decoded X25519 key produces the same Diffie-Hellman
 output as the peer; a decoded ML-DSA key verifies a signature decoded from its
 own wire form and rejects a single-bit mutation of it.
 
-The 12.3.1 regressions reject RTOS control-object/backing-storage aliasing,
+The 12.3.10 regressions reject RTOS control-object/backing-storage aliasing,
 RTOS result/control-object aliasing without consuming the queued item, DMA
 allocation result aliasing, and ML-KEM output/public-key aliasing. A bounded
 reentrant cache-callback test confirms the entropy pool releases its spinlock
@@ -90,7 +92,7 @@ of security.
 
 ## TARGET/HARDWARE VALIDATION
 
-These are not host-prototype failures. They remain required before deployment or
+The following items are explicitly out-of-scope for this host-level validation suite. They remain required before deployment or
 any certification or approval conclusion.
 
 | Gate | Result | Reason |
@@ -142,3 +144,8 @@ The current repository source tree contains **61** Rust functions annotated with
 ## Current source-tree test count
 
 The current 12.3.10 source tree contains **61 Rust `#[test]` functions**. This is a source-tree count and must not be conflated with the historical 56-test execution recorded above. A fresh test run is required before claiming current execution results.
+
+
+## Current 12.3.10 release-validation status
+
+The current source tree contains **61 Rust functions annotated with `#[test]`**. This is a source-tree inventory, not proof of a fresh 12.3.10 execution run. Historical command results retain their original release context. Hardware validation, interoperability/KAT validation, and independent security review remain separate validation gates.

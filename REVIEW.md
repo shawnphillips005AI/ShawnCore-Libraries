@@ -82,7 +82,7 @@ explicit commands are below. `make run`, `make asan`, and `make valgrind`
 build the required release archive automatically.
 
 ```text
-cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include -fsyntax-only integration/martac_hal_stubs.c
+cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include -fsyntax-only integration/hal_stubs.c
 cc -std=c11 -Wall -Wextra -Werror -I shawncore-ffi/include integration/c_api_smoke.c target/release/libshawncore_ffi.a -o /tmp/shawncore-c-api-smoke
 /tmp/shawncore-c-api-smoke
 ```

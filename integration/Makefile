@@ -35,7 +35,7 @@ $(error PROFILE must be "release" or "debug")
 endif
 
 SMOKE_SRC := $(ROOT)/integration/c_api_smoke.c
-HAL_SRC   := $(ROOT)/integration/martac_hal_stubs.c
+HAL_SRC   := $(ROOT)/integration/hal_stubs.c
 SMOKE_BIN := $(BUILDDIR)/shawncore-c-api-smoke
 ASAN_BIN  := $(BUILDDIR)/shawncore-c-api-smoke-asan
 
