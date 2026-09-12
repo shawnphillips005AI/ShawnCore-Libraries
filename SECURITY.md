@@ -147,7 +147,7 @@ Callback rules:
   this does not relax the non-reentrancy contract.
 - The panic hook must implement a platform fail-safe response. Panic aborts; it
   does not return.
-- `shawncore-ffi/../integration/martac_hal_stubs.c` is compile-only scaffolding.
+- `shawncore-ffi/../integration/hal_stubs.c` is compile-only scaffolding.
   It does **not** implement cache, interrupt, watchdog, or clock behavior.
 
 ### 2. Allocate opaque objects correctly

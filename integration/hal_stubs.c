@@ -79,7 +79,7 @@ uint64_t host_read_monotonic_clock(void)
     return 0;
 }
 
-void martac_hal_register_callbacks(void)
+void hal_register_callbacks(void)
 {
     shawncore_crypto_register_panic_hook(host_panic_handler);
     shawncore_crypto_register_disable_interrupts(host_disable_interrupts);

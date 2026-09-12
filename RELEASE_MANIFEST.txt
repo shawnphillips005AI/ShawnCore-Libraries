@@ -1,0 +1,70 @@
+ShawnCore-Libraries Release Manifest
+====================================
+
+Release: 12.3.10
+Generated UTC: 2026-09-12T20:24:35+00:00
+Git commit: f4fb6f1b8385f8aa82651ae11acca711427d75ec
+
+Toolchain
+---------
+rustc: rustc 1.85.0 (4d91de4e4 2025-02-17)
+cargo: cargo 1.85.0 (d73d2caf9 2024-12-31)
+
+Repository inventory
+--------------------
+Rust #[test] functions (source inventory): 61
+
+Cargo packages
+--------------
+shawncore-benchmarks 12.3.10 (benchmarks/Cargo.toml)
+shawncore-ffi 12.3.10 (shawncore-ffi/Cargo.toml)
+shawncore-fuzz 12.3.10 (fuzz/Cargo.toml)
+shawncore-pq-crypto 12.3.10 (shawncore-pq-crypto/Cargo.toml)
+shawncore-rtos-sync 12.3.10 (shawncore-rtos-sync/Cargo.toml)
+
+ShawnCore lockfile packages
+---------------------------
+shawncore-benchmarks 12.3.10 (Cargo.lock)
+shawncore-ffi 12.3.10 (Cargo.lock)
+shawncore-fuzz 12.3.10 (fuzz/Cargo.lock)
+shawncore-pq-crypto 12.3.10 (Cargo.lock)
+shawncore-pq-crypto 12.3.10 (fuzz/Cargo.lock)
+shawncore-rtos-sync 12.3.10 (Cargo.lock)
+shawncore-rtos-sync 12.3.10 (fuzz/Cargo.lock)
+
+Locally verifiable gates
+------------------------
+cargo metadata --locked: PASS
+cargo fmt --all -- --check: PASS
+Generated/build artifacts: PASS
+MarTac-specific references: FAIL
+Stale 12.3.10/12.3.10 refs outside CHANGELOG: FAIL
+
+External validation domains
+----------------------------
+Miri: EXTERNAL RESULT — not inferred by this script
+Fuzzing: EXTERNAL RESULT — not inferred by this script
+AddressSanitizer: EXTERNAL RESULT — not inferred by this script
+Valgrind: EXTERNAL RESULT — not inferred by this script
+Hardware validation: NOT CLAIMED
+Independent security review: NOT CLAIMED
+
+Git state
+---------
+Working tree dirty: YES
+M REVIEW.md
+ M SECURITY.md
+ M VALIDATION.md
+ D c_api_smoke
+ M integration/Makefile
+ D integration/HAL-Stubs.c
+?? RELEASE_MANIFEST.txt
+?? integration/hal_stubs.c
+?? patch.py
+
+Release note
+------------
+This manifest records only locally verifiable repository state.
+External validation claims must be backed by their own evidence.
+A clean source tree is not equivalent to formal verification,
+hardware validation, or independent security certification.
