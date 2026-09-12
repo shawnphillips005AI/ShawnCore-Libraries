@@ -1,6 +1,6 @@
 [package]
 name = "shawncore-benchmarks"
-version = "12.3.2"
+version = "12.3.10"
 edition = "2021"
 rust-version = "1.85"
 publish = false

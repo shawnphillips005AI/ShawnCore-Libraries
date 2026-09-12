@@ -1,7 +1,7 @@
 # Validation Record
 
-This record documents the 12.3.1 host-side validation inherited by the 12.3.2
-release-candidate. New 12.3.2 results must be recorded from the patched tree before
+This record documents the 12.3.1 host-side validation inherited by the 12.3.10
+release-candidate. New 12.3.10 results must be recorded from the patched tree before
 release. The underlying 12.3.1 evidence was evaluated on 2026-09-03 in an
 Ubuntu 24.04.4 development container. The repository pins
 Rust 1.85.0, the `rustfmt`/`clippy` components, and the `aarch64-unknown-none`
@@ -126,3 +126,11 @@ reproduce this evidence from the delivered revision.
 
 ## 🚀 Commercial Hardware Validation Opportunity
 *Note to Enterprise Evaluators:* ShawnCore is currently passing all host-side validation, ASan, and Fuzzing gates. The final bare-metal target validation (cache coherency and DMA callbacks) is reserved for commercial hardware partners. If you are evaluating ShawnCore for a proprietary flight-controller or RTOS architecture, please reach out to discuss a hardware Proof-of-Concept (PoC) integration.
+
+
+### Current release-hygiene status
+
+- Current repository release target: `12.3.10`.
+- Current source-tree count: `61` Rust functions annotated with `#[test]`.
+- The source tree contains crypto self-test/KAT coverage.
+- Hardware validation, independent interoperability/KAT cross-validation, and independent security review remain separate validation gates.

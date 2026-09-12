@@ -1,6 +1,6 @@
 [package]
 name = "shawncore-fuzz"
-version = "0.0.0"
+version = "12.3.10"
 edition = "2021"
 publish = false
 
