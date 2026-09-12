@@ -6,7 +6,7 @@
 
 //! Post-Quantum Session Key Manager.
 //! Hybrid ML-KEM-1024 and X25519 handshake.
-//! Hardware-agnostic implementation for MarTac USVs.
+//! Hardware-agnostic implementation for autonomous surface vehicles.
 //!
 //! Security boundary: the handshake transcript does not authenticate a peer identity.
 //! Deployments that require MITM resistance must bind the handshake to an authenticated

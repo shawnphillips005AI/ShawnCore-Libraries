@@ -6,7 +6,7 @@
 
 //! Fortuna-style asynchronous entropy pool.
 //!
-//! Hardware-agnostic implementation for MarTac USVs.
+//! Hardware-agnostic implementation for autonomous surface vehicles.
 //! Mitigates RNG exhaustion DoS vectors by providing a continuously
 //! seeded background accumulator fed by the host OS via the `EntropyQueue`.
 //! Integrates with the host OS interrupt context to prevent ISR deadlocks.

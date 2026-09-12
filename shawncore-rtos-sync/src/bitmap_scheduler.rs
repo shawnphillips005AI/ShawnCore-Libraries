@@ -6,7 +6,7 @@
 
 //! O(1) Partitioned Bitmap Scheduler.
 //!
-//! Hardware-agnostic implementation for MarTac USVs.
+//! Hardware-agnostic implementation for autonomous surface vehicles.
 //! Implements a mathematically sound O(1) bitmap-based priority scheduler.
 //!
 //! # Architectural Notes

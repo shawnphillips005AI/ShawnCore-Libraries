@@ -6,7 +6,7 @@
 
 //! ML-DSA-87 (FIPS 204) Digital Signature Algorithm wrapper.
 //! Provides post-quantum digital-signature operations and wrapper-managed zeroization.
-//! Hardware-agnostic implementation for MarTac USVs.
+//! Hardware-agnostic implementation for autonomous surface vehicles.
 //! Uses the selected `ml-dsa` dependency's ML-DSA-87 implementation; independent
 //! conformance testing remains outside this crate's scope.
 

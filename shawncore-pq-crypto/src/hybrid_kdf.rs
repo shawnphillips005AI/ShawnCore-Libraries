@@ -6,7 +6,7 @@
 
 //! NIST SP 800-56C Rev. 2 Hybrid Key Derivation Function.
 //! Combines classical and post-quantum shared secrets into a single key.
-//! Hardware-agnostic implementation for MarTac USVs.
+//! Hardware-agnostic implementation for autonomous surface vehicles.
 //! Designed as a building block for hybrid security architectures. Platform
 //! approval and independent review remain outside this crate's scope.
 

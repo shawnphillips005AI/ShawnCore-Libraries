@@ -6,7 +6,7 @@
 
 //! X25519 Elliptic Curve Diffie-Hellman wrapper.
 //! Provides classical key exchange for hybrid post-quantum schemes.
-//! Hardware-agnostic implementation for MarTac USVs.
+//! Hardware-agnostic implementation for autonomous surface vehicles.
 //! Rejects all-zero and non-contributory peer public keys before returning a
 //! shared secret.
 

@@ -6,7 +6,7 @@
 
 //! ML-KEM-1024 (FIPS 203) Key Encapsulation Mechanism wrapper.
 //! Provides post-quantum key establishment with wrapper-managed zeroization.
-//! Hardware-agnostic implementation for MarTac USVs.
+//! Hardware-agnostic implementation for autonomous surface vehicles.
 //! Uses the selected `ml-kem` dependency's ML-KEM-1024 implementation; independent
 //! conformance testing remains outside this crate's scope. Constant-time behavior
 //! is a property of that dependency and has not been independently measured here.

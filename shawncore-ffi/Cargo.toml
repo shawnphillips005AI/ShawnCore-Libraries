@@ -12,5 +12,5 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-shawncore-pq-crypto = { version = "12.3.2", path = "../shawncore-pq-crypto" }
-shawncore-rtos-sync = { version = "12.3.2", path = "../shawncore-rtos-sync" }
+shawncore-pq-crypto = { version = "12.3.10", path = "../shawncore-pq-crypto" }
+shawncore-rtos-sync = { version = "12.3.10", path = "../shawncore-rtos-sync" }

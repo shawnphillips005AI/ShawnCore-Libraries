@@ -5,7 +5,7 @@
 #![deny(missing_docs)]
 
 //! Secure memory zeroization and cache flushing wrappers.
-//! Hardware-agnostic implementation for MarTac integration.
+//! Hardware-agnostic implementation for Target integration.
 
 use crate::ffi_callbacks::host_cache_flush;
 use core::sync::atomic::{compiler_fence, Ordering};

@@ -7,7 +7,7 @@
 #![warn(missing_docs)]
 
 //! ShawnCore RTOS Sync Library
-//! Hardware-agnostic deterministic execution and synchronization primitives for MarTac USVs.
+//! Hardware-agnostic deterministic execution and synchronization primitives for autonomous surface vehicles.
 //! Designed for seamless C/C++ host OS integration via FFI.
 
 pub mod bitmap_scheduler;

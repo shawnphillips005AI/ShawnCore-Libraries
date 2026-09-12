@@ -74,7 +74,7 @@ fn main() {
     let (x_pk_a, x_sk_a) = x25519_keygen(&X_SEED_A);
     let (_x_pk_b, x_sk_b) = x25519_keygen(&X_SEED_B);
 
-    println!("ShawnCore Benchmarks v12.3.2");
+    println!("ShawnCore Benchmarks v12.3.10");
     println!(
         "Rust target: {}",
         std::env::var("TARGET").unwrap_or_else(|_| "host target".into())
