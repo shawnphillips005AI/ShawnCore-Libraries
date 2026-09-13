@@ -117,6 +117,10 @@ ffi_type_layout!(
     shawncore_rtos_spsc_fft_slot_alignof
 );
 
+fn valid_aligned_ptr<T>(ptr: *const T) -> bool {
+    !ptr.is_null() && (ptr as usize) % core::mem::align_of::<T>() == 0
+}
+
 fn valid_dma_region<T>(memory_base: *mut T, size_in_bytes: usize, element_count: usize) -> bool {
     let required_alignment = core::mem::align_of::<T>();
     if memory_base.is_null()
@@ -149,6 +153,11 @@ fn ranges_overlap<T, U>(
     (first as usize) < second_end && (second as usize) < first_end
 }
 
+#[inline]
+fn ptr_is_aligned<T>(ptr: *const T) -> bool {
+    (ptr as usize) % core::mem::align_of::<T>() == 0
+}
+
 fn object_overlaps_backing<T, U>(object: *const T, backing: *const U, backing_len: usize) -> bool {
     ranges_overlap(object, core::mem::size_of::<T>(), backing, backing_len)
 }
@@ -172,12 +181,16 @@ pub extern "C" fn shawncore_rtos_scheduler_alignof() -> usize {
 /// Initializes a host-allocated `PerCoreScheduler`.
 ///
 /// # Safety
-/// `scheduler` must point to a valid, properly aligned, UNINITIALIZED memory region.
+/// `scheduler` must point to valid, properly aligned, **UNINITIALIZED** storage.
+/// Call the matching destroy function before reusing storage that contains an initialized scheduler.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_scheduler_init(
     scheduler: *mut PerCoreScheduler,
 ) -> ShawncoreRtosErr {
-    if scheduler.is_null() {
+    if !valid_aligned_ptr(scheduler) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(scheduler) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -191,12 +204,15 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_init(
 /// Destroys a `PerCoreScheduler`.
 ///
 /// # Safety
-/// `scheduler` must point to a valid, initialized `PerCoreScheduler`.
+/// `scheduler` must point to a valid, initialized, properly aligned `PerCoreScheduler`.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_scheduler_destroy(
     scheduler: *mut PerCoreScheduler,
 ) -> ShawncoreRtosErr {
-    if scheduler.is_null() {
+    if !valid_aligned_ptr(scheduler) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(scheduler) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -210,7 +226,8 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_destroy(
 /// Populates a `Tcb` structure.
 ///
 /// # Safety
-/// `out_tcb` must point to a valid `Tcb` struct.
+/// `out_tcb` must point to valid, properly aligned, **UNINITIALIZED** storage for a `Tcb`.
+/// Do not overwrite an initialized TCB; reclaim its storage according to its lifecycle before reuse.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_tcb_new(
     entry_point: u64,
@@ -220,8 +237,14 @@ pub unsafe extern "C" fn shawncore_rtos_tcb_new(
     priority: u8,
     out_tcb: *mut Tcb,
 ) -> ShawncoreRtosErr {
-    if out_tcb.is_null() {
+    if !valid_aligned_ptr(out_tcb) {
         return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(out_tcb) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if entry_point == 0 {
+        return ShawncoreRtosErr::TaskFault;
     }
 
     let tcb = Tcb::new_task(entry_point, stack_base, stack_size, initial_rsp, priority);
@@ -236,11 +259,14 @@ pub unsafe extern "C" fn shawncore_rtos_tcb_new(
 /// Retrieves the current stack pointer from a `Tcb`.
 ///
 /// # Safety
-/// `tcb` must be a valid, non-null pointer.
+/// `tcb` must be a valid, non-null, properly aligned pointer to a `Tcb`.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_tcb_get_rsp(tcb: *const Tcb) -> u64 {
-    if tcb.is_null() {
+    if !valid_aligned_ptr(tcb) {
         return 0;
+    }
+    if !ptr_is_aligned(tcb) {
+        return ShawncoreRtosErr::InvalidMemory;
     }
 
     let tcb_ref = unsafe { &*tcb };
@@ -251,10 +277,13 @@ pub unsafe extern "C" fn shawncore_rtos_tcb_get_rsp(tcb: *const Tcb) -> u64 {
 /// Updates the stack pointer in a `Tcb` after a context switch.
 ///
 /// # Safety
-/// `tcb` must be a valid, non-null pointer.
+/// `tcb` must be a valid, non-null, properly aligned pointer to a `Tcb`.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_tcb_set_rsp(tcb: *mut Tcb, rsp: u64) -> ShawncoreRtosErr {
-    if tcb.is_null() {
+    if !valid_aligned_ptr(tcb) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(tcb) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -279,7 +308,10 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_create_task(
     tcb: *const Tcb,
     canary_value: u64,
 ) -> ShawncoreRtosErr {
-    if scheduler.is_null() || tcb.is_null() {
+    if !valid_aligned_ptr(scheduler) || !valid_aligned_ptr(tcb) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(scheduler) || !ptr_is_aligned(tcb) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -303,8 +335,11 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_tick(
     scheduler: *mut PerCoreScheduler,
     current_rsp: u64,
 ) -> u64 {
-    if scheduler.is_null() {
+    if !valid_aligned_ptr(scheduler) {
         return current_rsp; // Fallback to current if invalid
+    }
+    if !ptr_is_aligned(scheduler) {
+        return ShawncoreRtosErr::InvalidMemory;
     }
 
     let scheduler_ref = unsafe { &mut *scheduler };
@@ -320,7 +355,10 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_set_critical_task_mask(
     scheduler: *mut PerCoreScheduler,
     critical_task_mask: u16,
 ) -> ShawncoreRtosErr {
-    if scheduler.is_null() {
+    if !valid_aligned_ptr(scheduler) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(scheduler) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -337,9 +375,13 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_task_check_in(
     scheduler: *mut PerCoreScheduler,
     priority: u8,
 ) -> ShawncoreRtosErr {
-    if scheduler.is_null() || priority >= 16 {
+    if !valid_aligned_ptr(scheduler) || priority >= 16 {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(scheduler) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+
     unsafe { (*scheduler).task_check_in(priority) };
     ShawncoreRtosErr::Success
 }
@@ -363,8 +405,9 @@ pub extern "C" fn shawncore_rtos_dmapool2k_alignof() -> usize {
 /// Initializes a host-allocated `DmaPool2K` and binds it to a host-provided DMA memory region.
 ///
 /// # Safety
-/// `pool` must point to a valid, uninitialized `DmaPool2K`. `memory_base` must point to a page-aligned
-/// region of at least `256 * 2048` bytes.
+/// `pool` must point to valid, properly aligned, **UNINITIALIZED** storage for a `DmaPool2K`.
+/// Call the matching destroy function before reusing initialized pool storage. `memory_base` must point
+/// to a page-aligned region of at least `256 * 2048` bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_dmapool2k_init(
     pool: *mut DmaPool2K,
@@ -375,6 +418,9 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_init(
         || !valid_dma_region(memory_base, size_in_bytes, 256)
         || object_overlaps_backing(pool, memory_base, size_in_bytes)
     {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(pool) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -402,6 +448,9 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_destroy(
     if pool.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(pool) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     unsafe {
         core::ptr::drop_in_place(pool);
@@ -425,6 +474,14 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_allocate(
     if pool.is_null() || out_idx.is_null() || out_generation.is_null() || out_ptr.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(pool)
+        || !ptr_is_aligned(out_idx)
+        || !ptr_is_aligned(out_generation)
+        || !ptr_is_aligned(out_ptr)
+    {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+
     if ranges_overlap(
         pool,
         core::mem::size_of::<DmaPool2K>(),
@@ -488,6 +545,9 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_free(
     if pool.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(pool) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     let pool_ref = unsafe { &*pool };
 
@@ -532,6 +592,9 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_init(
     {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(queue) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     unsafe {
         core::ptr::write(queue, SpscQueueTelemetry::new());
@@ -556,6 +619,9 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_destroy(
     if queue.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(queue) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     unsafe {
         core::ptr::drop_in_place(queue);
@@ -575,6 +641,9 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_push(
     event: *const TelemetryEvent,
 ) -> ShawncoreRtosErr {
     if queue.is_null() || event.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(queue) || !ptr_is_aligned(event) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -600,6 +669,10 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_telemetry_pop(
     if queue.is_null() || out_event.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(queue) || !ptr_is_aligned(out_event) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+
     if ranges_overlap(
         queue,
         core::mem::size_of::<SpscQueueTelemetry>(),
@@ -660,6 +733,9 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_init(
     {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(rb) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     unsafe {
         core::ptr::write(rb, RingBufferEwCommand::new());
@@ -684,6 +760,9 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_destroy(
     if rb.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(rb) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     unsafe {
         core::ptr::drop_in_place(rb);
@@ -703,6 +782,9 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_push(
     item: *const EwCommand,
 ) -> ShawncoreRtosErr {
     if rb.is_null() || item.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(rb) || !ptr_is_aligned(item) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -728,6 +810,10 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_pop(
     if rb.is_null() || out_item.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(rb) || !ptr_is_aligned(out_item) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+
     if ranges_overlap(
         rb,
         core::mem::size_of::<RingBufferEwCommand>(),
@@ -767,6 +853,10 @@ pub unsafe extern "C" fn shawncore_rtos_ringbuffer_ew_peek(
     if rb.is_null() || out_item.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(rb) || !ptr_is_aligned(out_item) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+
     if ranges_overlap(
         rb,
         core::mem::size_of::<RingBufferEwCommand>(),
@@ -828,6 +918,9 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_init(
     {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(queue) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     unsafe {
         core::ptr::write(queue, SpscQueueFft::new());
@@ -852,6 +945,9 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_destroy(
     if queue.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(queue) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     unsafe {
         core::ptr::drop_in_place(queue);
@@ -871,6 +967,9 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_push(
     item: *const FftResult,
 ) -> ShawncoreRtosErr {
     if queue.is_null() || item.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(queue) || !ptr_is_aligned(item) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -896,6 +995,10 @@ pub unsafe extern "C" fn shawncore_rtos_spsc_fft_pop(
     if queue.is_null() || out_item.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(queue) || !ptr_is_aligned(out_item) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+
     if ranges_overlap(
         queue,
         core::mem::size_of::<SpscQueueFft>(),
@@ -941,12 +1044,16 @@ pub extern "C" fn shawncore_rtos_state_machine_alignof() -> usize {
 /// Initializes a host-allocated `StateMachine`.
 ///
 /// # Safety
-/// `machine` must point to a valid, uninitialized `StateMachine`.
+/// `machine` must point to valid, properly aligned, **UNINITIALIZED** storage for a `StateMachine`.
+/// Destroy an initialized state machine before reusing its storage.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_state_machine_init(
     machine: *mut StateMachine,
 ) -> ShawncoreRtosErr {
     if machine.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(machine) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -968,6 +1075,9 @@ pub unsafe extern "C" fn shawncore_rtos_state_machine_destroy(
     if machine.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(machine) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     unsafe {
         core::ptr::drop_in_place(machine);
@@ -986,6 +1096,9 @@ pub unsafe extern "C" fn shawncore_rtos_state_machine_try_advance(
     target_state: u8,
 ) -> ShawncoreRtosErr {
     if machine.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(machine) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -1025,12 +1138,16 @@ pub extern "C" fn shawncore_rtos_latency_tracker_alignof() -> usize {
 /// Initializes a host-allocated `LatencyTracker`.
 ///
 /// # Safety
-/// `tracker` must point to a valid, uninitialized `LatencyTracker`.
+/// `tracker` must point to valid, properly aligned, **UNINITIALIZED** storage for a `LatencyTracker`.
+/// Destroy an initialized tracker before reusing its storage.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_rtos_latency_tracker_init(
     tracker: *mut LatencyTracker,
 ) -> ShawncoreRtosErr {
     if tracker.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(tracker) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -1050,6 +1167,9 @@ pub unsafe extern "C" fn shawncore_rtos_latency_tracker_destroy(
     tracker: *mut LatencyTracker,
 ) -> ShawncoreRtosErr {
     if tracker.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(tracker) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 
@@ -1072,6 +1192,9 @@ pub unsafe extern "C" fn shawncore_rtos_latency_tracker_mark_start(
     if tracker.is_null() {
         return ShawncoreRtosErr::InvalidMemory;
     }
+    if !ptr_is_aligned(tracker) {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
 
     let tracker_ref = unsafe { &*tracker };
     tracker_ref.mark_start(current_timestamp);
@@ -1089,6 +1212,9 @@ pub unsafe extern "C" fn shawncore_rtos_latency_tracker_mark_end(
     current_timestamp: u64,
 ) -> ShawncoreRtosErr {
     if tracker.is_null() {
+        return ShawncoreRtosErr::InvalidMemory;
+    }
+    if !ptr_is_aligned(tracker) {
         return ShawncoreRtosErr::InvalidMemory;
     }
 

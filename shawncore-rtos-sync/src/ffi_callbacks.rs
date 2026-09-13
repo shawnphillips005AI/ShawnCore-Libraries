@@ -10,6 +10,15 @@
 //! for interrupt management and monotonic clock reads, ensuring the Rust core
 //! remains completely architecture-agnostic.
 
+//!
+//! # Callback lifetime contract
+//! Callback registration uses atomics for publication, not lifetime management.
+//! Registration, replacement, or removal requires host-side quiescence so no
+//! executing core or interrupt context can still hold or enter the old callback.
+//! Acquire/Release ordering makes the published function pointer observable; it
+//! does not keep the underlying callback implementation alive or coordinate its
+//! teardown. Callbacks must also remain non-reentrant with respect to ShawnCore.
+
 use crate::ffi_error::invoke_panic_hook;
 use crate::interrupt_spinlock::InterruptContext;
 use core::sync::atomic::{AtomicPtr, Ordering};

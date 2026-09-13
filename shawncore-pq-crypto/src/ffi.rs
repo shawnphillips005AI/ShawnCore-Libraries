@@ -598,8 +598,9 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_decrypt_packet(
 /// Generates an ML-KEM-1024 keypair.
 ///
 /// # Safety
-/// All pointers must be valid and non-null. `entropy` must point to exactly 64 bytes.
-/// Output regions must be distinct and must not overlap `entropy`.
+/// `entropy` must point to exactly 64 bytes. `out_pk` and `out_dk` must point to valid,
+/// properly aligned, **UNINITIALIZED** storage. Previously initialized output objects must
+/// be destroyed with their matching `*_destroy` function before their storage is reused.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_ml_kem_keygen(
     entropy: *const u8,
@@ -609,6 +610,10 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_keygen(
     if entropy.is_null() || out_pk.is_null() || out_dk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(out_pk) || !ptr_is_aligned(out_dk) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     if ranges_overlap(
         out_pk,
         core::mem::size_of::<PublicKey1024>(),
@@ -645,6 +650,10 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_decapskey_destroy(
     if dk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(dk) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     unsafe {
         core::ptr::drop_in_place(dk);
     }
@@ -654,8 +663,10 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_decapskey_destroy(
 /// Encapsulates a shared secret using ML-KEM-1024.
 ///
 /// # Safety
-/// All pointers must be valid and non-null. `entropy` must point to exactly 32 bytes.
-/// Output regions must be distinct and must not overlap `pk` or `entropy`.
+/// `pk` must point to a valid, initialized, properly aligned public key. `out_shared` and
+/// `out_ct` must point to valid, properly aligned, **UNINITIALIZED** storage. Previously
+/// initialized output objects must be destroyed/reclaimed before their storage is reused.
+/// `entropy` must point to exactly 32 bytes.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_ml_kem_encapsulate(
     pk: *const PublicKey1024,
@@ -666,6 +677,10 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_encapsulate(
     if pk.is_null() || entropy.is_null() || out_shared.is_null() || out_ct.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(pk) || !ptr_is_aligned(out_shared) || !ptr_is_aligned(out_ct) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     if ranges_overlap(
         out_shared,
         core::mem::size_of::<SharedKey1024>(),
@@ -709,7 +724,9 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_encapsulate(
 /// Decapsulates a ciphertext using ML-KEM-1024.
 ///
 /// # Safety
-/// All pointers must be valid and non-null.
+/// `dk` and `ct` must point to valid, initialized, properly aligned objects. `out_shared`
+/// must point to valid, properly aligned, **UNINITIALIZED** storage. Destroy/reclaim a prior
+/// shared-key object before reusing its storage.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_ml_kem_decapsulate(
     dk: *const DecapsKey1024,
@@ -719,6 +736,10 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_decapsulate(
     if dk.is_null() || ct.is_null() || out_shared.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(dk) || !ptr_is_aligned(ct) || !ptr_is_aligned(out_shared) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     if ranges_overlap(
         out_shared,
         core::mem::size_of::<SharedKey1024>(),
@@ -758,6 +779,10 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_sharedkey_destroy(
     if sk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(sk) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     unsafe {
         core::ptr::drop_in_place(sk);
     }
@@ -771,7 +796,9 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_sharedkey_destroy(
 /// Generates an ML-DSA-87 keypair.
 ///
 /// # Safety
-/// All pointers must be valid and non-null. `seed` must point to exactly 32 bytes.
+/// `seed` must point to exactly 32 bytes. `out_pk` and `out_sk` must point to valid,
+/// properly aligned, **UNINITIALIZED** storage. Previously initialized output objects must
+/// be destroyed with their matching `*_destroy` function before their storage is reused.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_ml_dsa_keygen(
     seed: *const u8,
@@ -781,6 +808,10 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_keygen(
     if seed.is_null() || out_pk.is_null() || out_sk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(out_pk) || !ptr_is_aligned(out_sk) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     if ranges_overlap(
         out_pk,
         core::mem::size_of::<PublicKey87>(),
@@ -817,6 +848,10 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_signingkey_destroy(
     if sk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(sk) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     unsafe {
         core::ptr::drop_in_place(sk);
     }
@@ -826,7 +861,9 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_signingkey_destroy(
 /// Signs a message using ML-DSA-87.
 ///
 /// # Safety
-/// `sk` and `out_sig` must be valid and non-null. `msg` must be valid for `msg_len`
+/// `sk` must point to a valid, initialized, properly aligned signing key. `out_sig` must
+/// point to valid, properly aligned, **UNINITIALIZED** storage. A prior initialized signature
+/// value must be reclaimed before its storage is reused. `msg` must be valid for `msg_len`
 /// and may be null when `msg_len` is zero.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_ml_dsa_sign(
@@ -838,6 +875,10 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_sign(
     if sk.is_null() || (msg.is_null() && msg_len > 0) || out_sig.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(sk) || !ptr_is_aligned(out_sig) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     if ranges_overlap(
         out_sig,
         core::mem::size_of::<Signature87>(),
@@ -881,6 +922,9 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_verify(
     if pk.is_null() || (msg.is_null() && msg_len > 0) || sig.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(pk) || !ptr_is_aligned(sig) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
 
     let pk_ref = unsafe { &*pk };
     let sig_ref = unsafe { &*sig };
@@ -903,7 +947,9 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_verify(
 /// Generates an X25519 keypair.
 ///
 /// # Safety
-/// All pointers must be valid and non-null. `entropy` must point to exactly 32 bytes.
+/// `entropy` must point to exactly 32 bytes. `out_pk` and `out_sk` must point to valid,
+/// properly aligned, **UNINITIALIZED** storage. A previously initialized secret key must be
+/// destroyed with `shawncore_crypto_x25519_secret_destroy` before its storage is reused.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_x25519_keygen(
     entropy: *const u8,
@@ -913,6 +959,10 @@ pub unsafe extern "C" fn shawncore_crypto_x25519_keygen(
     if entropy.is_null() || out_pk.is_null() || out_sk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(out_pk) || !ptr_is_aligned(out_sk) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     if ranges_overlap(
         out_pk,
         core::mem::size_of::<X25519Public>(),
@@ -946,6 +996,10 @@ pub unsafe extern "C" fn shawncore_crypto_x25519_secret_destroy(
     if sk.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(sk) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     unsafe {
         core::ptr::drop_in_place(sk);
     }
@@ -955,7 +1009,9 @@ pub unsafe extern "C" fn shawncore_crypto_x25519_secret_destroy(
 /// Performs an X25519 Diffie-Hellman key exchange.
 ///
 /// # Safety
-/// All pointers must be valid and non-null.
+/// `sk` and `peer_pk` must point to valid, initialized, properly aligned objects. `out_shared`
+/// must point to valid, properly aligned, **UNINITIALIZED** storage. Reclaim a prior initialized
+/// shared secret before reusing its storage.
 #[no_mangle]
 pub unsafe extern "C" fn shawncore_crypto_x25519_diffie_hellman(
     sk: *const X25519Secret,
@@ -965,6 +1021,10 @@ pub unsafe extern "C" fn shawncore_crypto_x25519_diffie_hellman(
     if sk.is_null() || peer_pk.is_null() || out_shared.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(sk) || !ptr_is_aligned(peer_pk) || !ptr_is_aligned(out_shared) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     if ranges_overlap(
         out_shared,
         core::mem::size_of::<X25519SharedSecret>(),
@@ -1004,6 +1064,10 @@ pub unsafe extern "C" fn shawncore_crypto_x25519_sharedsecret_destroy(
     if ss.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(ss) {
+        return ShawncoreCryptoErr::InvalidState;
+    }
+
     unsafe {
         core::ptr::drop_in_place(ss);
     }

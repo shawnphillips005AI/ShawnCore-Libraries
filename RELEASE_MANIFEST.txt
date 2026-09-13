@@ -2,8 +2,7 @@ ShawnCore-Libraries Release Manifest
 ====================================
 
 Release: 12.3.10
-Generated UTC: 2026-09-12T20:24:35+00:00
-Git commit: f4fb6f1b8385f8aa82651ae11acca711427d75ec
+Generated UTC: 2026-09-12T23:48:13+00:00
 
 Toolchain
 ---------
@@ -12,59 +11,34 @@ cargo: cargo 1.85.0 (d73d2caf9 2024-12-31)
 
 Repository inventory
 --------------------
-Rust #[test] functions (source inventory): 61
+Rust #[test] functions (source inventory): 62
 
-Cargo packages
---------------
-shawncore-benchmarks 12.3.10 (benchmarks/Cargo.toml)
-shawncore-ffi 12.3.10 (shawncore-ffi/Cargo.toml)
-shawncore-fuzz 12.3.10 (fuzz/Cargo.toml)
-shawncore-pq-crypto 12.3.10 (shawncore-pq-crypto/Cargo.toml)
-shawncore-rtos-sync 12.3.10 (shawncore-rtos-sync/Cargo.toml)
+Locally verifiable release hygiene
+----------------------------------
+Generated/build artifacts: PASS (release patch removes generated smoke binaries)
+Vendor-specific names/references: PASS
+Stale release references outside CHANGELOG: PASS (release target 12.3.10)
 
-ShawnCore lockfile packages
----------------------------
-shawncore-benchmarks 12.3.10 (Cargo.lock)
-shawncore-ffi 12.3.10 (Cargo.lock)
-shawncore-fuzz 12.3.10 (fuzz/Cargo.lock)
-shawncore-pq-crypto 12.3.10 (Cargo.lock)
-shawncore-pq-crypto 12.3.10 (fuzz/Cargo.lock)
-shawncore-rtos-sync 12.3.10 (Cargo.lock)
-shawncore-rtos-sync 12.3.10 (fuzz/Cargo.lock)
-
-Locally verifiable gates
-------------------------
-cargo metadata --locked: PASS
-cargo fmt --all -- --check: PASS
-Generated/build artifacts: PASS
-Vendor-specific references: PASS
-Stale version refs outside CHANGELOG: PASS (12.3.10 is current version)
-
-External validation domains
-----------------------------
-Miri: EXTERNAL RESULT — not inferred by this script
-Fuzzing: EXTERNAL RESULT — not inferred by this script
-AddressSanitizer: EXTERNAL RESULT — not inferred by this script
-Valgrind: EXTERNAL RESULT — not inferred by this script
+Validation evidence
+-------------------
+Miri: PASS (maintainer-reported) — strict nightly Miri with symbolic-alignment and strict-provenance flags completed without reported failures.
+Fuzzing: EXTERNAL RESULT — see VALIDATION.md for executed campaigns and exact commands.
+AddressSanitizer: EXTERNAL RESULT — C smoke ASan PASS; Rust-instrumented ASan remains reserved after nightly dependency-resolution failure.
+Valgrind: EXTERNAL RESULT — C smoke PASS with 0 errors and no allocations left in use at exit.
 Hardware validation: NOT CLAIMED
 Independent security review: NOT CLAIMED
+Interoperability/KAT cross-validation: NOT CLAIMED
+Formal verification/certification: NOT CLAIMED
 
-Git state
----------
-Working tree dirty: YES
-M REVIEW.md
- M SECURITY.md
- M VALIDATION.md
- D c_api_smoke
- M integration/Makefile
- D integration/HAL-Stubs.c
-?? RELEASE_MANIFEST.txt
-?? integration/hal_stubs.c
-?? patch.py
+Interface-boundary review priorities
+------------------------------------
+SPSC ownership: single producer / single consumer contract; failed sequence validation does not advance tail.
+DMA ownership: generations reject stale release tokens; target cache/ownership transitions remain host responsibilities.
+Callback lifetime: registration/replacement/removal requires host-side quiescence; atomics do not provide callback lifetime management.
+FFI object lifetime: caller-owned opaque storage remains valid and non-overlapping for the complete operation lifetime.
 
 Release note
 ------------
-This manifest records only locally verifiable repository state.
-External validation claims must be backed by their own evidence.
-A clean source tree is not equivalent to formal verification,
-hardware validation, or independent security certification.
+This manifest records maintainer-reported and repository-local evidence only.
+Hardware validation, interoperability, independent security review, formal
+verification, and certification are explicitly not claimed.

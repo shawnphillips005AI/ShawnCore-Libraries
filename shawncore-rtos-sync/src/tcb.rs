@@ -58,7 +58,7 @@ impl Tcb {
     /// Creates a new active TCB.
     ///
     /// # Arguments
-    /// * `entry_point` - The memory address of the task's entry function.
+    /// * `entry_point` - The non-zero memory address of the task's entry function.
     /// * `stack_base` - The base address of the allocated stack.
     /// * `stack_size` - The size of the allocated stack.
     /// * `initial_rsp` - The initial stack pointer, pre-configured by the host OS.

@@ -120,7 +120,11 @@ impl PerCoreScheduler {
     ) -> Result<(), SchedulerError> {
         let valid_stack = valid_stack_pointer(&tcb, tcb.rsp);
 
-        if tcb.priority >= 16 || !valid_stack || self.tasks[tcb.priority as usize].stack_base != 0 {
+        if tcb.entry_point == 0
+            || tcb.priority >= 16
+            || !valid_stack
+            || self.tasks[tcb.priority as usize].stack_base != 0
+        {
             return Err(SchedulerError::TaskFault);
         }
 
@@ -294,6 +298,23 @@ mod tests {
         let _ = unsafe { scheduler.schedule_tick(0) };
         assert_eq!(WATCHDOG_PETS.load(Ordering::Relaxed), 1);
         assert_eq!(scheduler.watchdog_matrix, 0);
+    }
+
+    #[test]
+    fn idle_fallback_does_not_run_unregistered_priority_15() {
+        let mut scheduler = PerCoreScheduler::new();
+
+        // No ready tasks: priority 15 is a valid idle fallback and has no stack.
+        let rsp = unsafe { scheduler.schedule_tick(0) };
+        assert_eq!(rsp, 0);
+        assert_eq!(scheduler.current_task, 15);
+
+        // A ready bit for an unregistered priority-15 task is a scheduler fault,
+        // not permission to fabricate or run a nonexistent stack.
+        scheduler.ready_bitmap = 1u16 << 15;
+        let rsp = unsafe { scheduler.schedule_tick(0) };
+        assert_eq!(rsp, 0);
+        assert_eq!(scheduler.current_task, 15);
     }
 
     #[test]

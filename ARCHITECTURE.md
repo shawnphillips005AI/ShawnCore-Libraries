@@ -578,3 +578,51 @@ Stated here so it is not inferred from silence:
 
 Each of these is tracked as an explicit gate in [VALIDATION.md](VALIDATION.md)
 with a `BLOCKED` status and a stated reason. None of them is marked passed.
+
+## 12. Interface-Boundary Invariants
+
+The most important integration properties are the contracts at the edges of
+ShawnCore. These are the invariants a target-side review should verify on the
+actual RTOS, cache hierarchy, DMA engine, and C integration.
+
+### SPSC ownership
+
+The queue is valid only with one stable producer and one stable consumer. The
+producer publishes a completed slot through the release-ordered head update;
+the consumer observes that publication through an acquire load. A slot's
+sequence counter is a defensive stability check. A failed second sequence check
+is a rejected observation: the consumer does not advance `tail` and therefore
+does not republish that slot to the producer.
+
+Payload destruction occurs only after the sequence has been validated as stable.
+This separates integrity validation from the destructive zeroization step and
+keeps the failure path from modifying an observation before it has been accepted.
+
+### DMA ownership
+
+Atomic ordering establishes Rust memory-model ordering between participating CPU
+operations. It does not establish device visibility, cache coherency, DMA pinning,
+or ownership transfer. Queue and DMA-pool call sites therefore require the host
+HAL to perform the platform-specific cache and ownership transitions at the
+specified boundaries.
+
+Generation tags identify allocation epochs and reject stale release tokens; they
+cannot make a caller-held pointer safe after its allocation has been returned.
+Target validation must therefore verify both lifetime discipline and the actual
+DMA/cache implementation.
+
+### Callback lifetime
+
+Callback atomics publish function pointers, but they do not extend callback
+lifetime. Registration or replacement must be performed under host-controlled
+quiescence so no core or interrupt context can still execute the old callback.
+Callbacks are integration services, not a substitute for an RTOS callback-lifetime
+protocol.
+
+### FFI object lifetime
+
+Opaque objects are caller-owned storage with explicit size, alignment, overlap,
+and lifecycle checks. The FFI contract assumes that callers do not destroy or
+reuse object storage while any ShawnCore operation still has access to it. A
+security review should therefore verify every create/use/destroy sequence,
+including concurrent C callers and backing-buffer ownership transitions.

@@ -241,7 +241,7 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
         }
 
         // SPSC Queue Memory Reordering Fix
-        // Execute Acquire fence *before* reading the item to prevent speculative reads of stale data.
+        // The acquire operations establish the producer-to-consumer ordering required by the Rust memory model before payload access.
         fence(Ordering::Acquire);
 
         let idx = tail % N;

@@ -127,25 +127,10 @@ reproduce this evidence from the delivered revision.
 ## 🚀 Commercial Hardware Validation Opportunity
 *Note to Enterprise Evaluators:* ShawnCore is currently passing all host-side validation, ASan, and Fuzzing gates. The final bare-metal target validation (cache coherency and DMA callbacks) is reserved for commercial hardware partners. If you are evaluating ShawnCore for a proprietary flight-controller or RTOS architecture, please reach out to discuss a hardware Proof-of-Concept (PoC) integration.
 
+## MIRI
 
-### Current release-hygiene status
+Miri: PASS (maintainer-reported) — `cargo +nightly miri test --workspace --all-targets` with `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check"` completed without reported failures.
 
-- Current repository release target: `12.3.10`.
-- Current source-tree count: `61` Rust functions annotated with `#[test]`.
-- The source tree contains crypto self-test/KAT coverage.
-- Hardware validation, independent interoperability/KAT cross-validation, and independent security review remain separate validation gates.
+## Current Source Inventory
 
-
-### Current source-tree test inventory
-
-The current repository source tree contains **61** Rust functions annotated with `#[test]`. This is a source-tree inventory, not a claim that 12.3.10 tests were executed. Historical execution results are retained with their original release context.
-
-
-## Current source-tree test count
-
-The current 12.3.10 source tree contains **61 Rust `#[test]` functions**. This is a source-tree count and must not be conflated with the historical 56-test execution recorded above. A fresh test run is required before claiming current execution results.
-
-
-## Current 12.3.10 release-validation status
-
-The current source tree contains **61 Rust functions annotated with `#[test]`**. This is a source-tree inventory, not proof of a fresh 12.3.10 execution run. Historical command results retain their original release context. Hardware validation, interoperability/KAT validation, and independent security review remain separate validation gates.
+The current repository source tree contains **62 Rust functions annotated with `#[test]`**. This is a source-tree inventory, not a claim that all 62 tests were freshly executed for this release. Historical command results retain their original execution context.

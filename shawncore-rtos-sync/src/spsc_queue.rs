@@ -258,8 +258,8 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
         }
 
         // SPSC Queue Memory Reordering Fix
-        // Execute Acquire fence *before* reading the item to prevent speculative reads of stale data.
-        // This pairs with the producer's Release fence.
+        // The acquire operations establish the producer-to-consumer ordering required by the Rust memory model before payload access.
+        // This maintains the intended producer-to-consumer ordering under the Rust memory model.
         fence(Ordering::Acquire);
 
         let index = tail % N;
@@ -288,18 +288,20 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
                 core::mem::size_of::<T>(),
             );
             let item = core::ptr::read_volatile((*slot_ptr).data.get());
-            // FIX: AArch64 Weak Memory Model Barrier
-            // Provides a SeqCst ordering barrier between the payload access and sequence validation under the Rust atomic memory model.
+            // Establish an explicit ordering point between the payload access and
+            // the second sequence validation under the Rust atomic memory model.
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
-            // FIX: Data Remanence Prevention
-            // Zeroize the queue slot immediately after extraction so secret material doesn't linger in RAM.
-            let dst = (*slot_ptr).data.get() as *mut u8;
-            for i in 0..core::mem::size_of_val(&item) {
-                core::ptr::write_volatile(dst.add(i), 0);
-            }
             let second_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
             if first_sequence != second_sequence || second_sequence & 1 != 0 {
                 return None;
+            }
+
+            // The slot has now been validated as stable. Only after successful
+            // validation do we destructively clear the consumed payload, avoiding
+            // the previous failure-path behavior of zeroizing before validation.
+            let dst = (*slot_ptr).data.get() as *mut u8;
+            for i in 0..core::mem::size_of_val(&item) {
+                core::ptr::write_volatile(dst.add(i), 0);
             }
             item
         };
@@ -429,5 +431,53 @@ mod tests {
             (*storage_ptr).sequence_counter.store(2, Ordering::Release);
         }
         assert_eq!(unsafe { queue.pop() }, Some(42));
+    }
+
+    #[test]
+    fn post_read_sequence_change_is_rejected_without_advancing_tail() {
+        // The invalidate callback runs after the first sequence read and before
+        // the payload read, allowing this test to model a sequence change during
+        // the validation window. The queue must reject the item and must not
+        // advance `tail` on the failure path.
+        static TEST_SEQUENCE_PTR: core::sync::atomic::AtomicPtr<core::sync::atomic::AtomicUsize> =
+            core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
+
+        extern "C" fn invalidate_and_corrupt(_: *const u8, _: usize) {
+            let ptr = TEST_SEQUENCE_PTR.load(core::sync::atomic::Ordering::Acquire);
+            if !ptr.is_null() {
+                unsafe {
+                    (*ptr).store(1, core::sync::atomic::Ordering::Release);
+                }
+            }
+        }
+
+        extern "C" fn flush_noop(_: *const u8, _: usize) {}
+
+        unsafe {
+            shawncore_rtos_register_cache_flush(Some(flush_noop));
+            shawncore_rtos_register_cache_invalidate(Some(invalidate_and_corrupt));
+        }
+
+        let queue = SpscQueue::<u32, 4>::new();
+        let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
+        let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
+        let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
+
+        unsafe { queue.init(storage_ptr, storage_size) }.unwrap();
+        unsafe { queue.push(99) }.unwrap();
+        let sequence_ptr = unsafe { core::ptr::addr_of_mut!((*storage_ptr).sequence_counter) };
+        TEST_SEQUENCE_PTR.store(sequence_ptr, core::sync::atomic::Ordering::Release);
+
+        assert_eq!(unsafe { queue.pop() }, None);
+        // `tail` must remain at zero because the unstable item was not consumed.
+        assert_eq!(queue.tail.0.load(core::sync::atomic::Ordering::Acquire), 0);
+
+        TEST_SEQUENCE_PTR.store(core::ptr::null_mut(), core::sync::atomic::Ordering::Release);
+        unsafe {
+            // Restore the normal callbacks used by the other queue tests.
+            install_test_callbacks();
+            (*sequence_ptr).store(2, Ordering::Release);
+        }
+        assert_eq!(unsafe { queue.pop() }, Some(99));
     }
 }
