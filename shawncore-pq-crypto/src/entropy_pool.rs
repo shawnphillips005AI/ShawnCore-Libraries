@@ -14,6 +14,12 @@
 //! entropy. Input entropy quality remains a host and hardware responsibility.
 
 use crate::entropy_queue::{EntropyQueue, ENTROPY_CHUNK_SIZE};
+
+/// Upper bound on entropy chunks mixed by one invocation. Keeping this bounded
+/// prevents an unexpectedly full queue from turning one host/ISR call into an
+/// unbounded amount of hashing work. Remaining chunks are left queued for a
+/// later invocation.
+pub const MAX_MIX_CHUNKS_PER_CALL: usize = 8;
 use crate::error::CryptoError;
 use crate::ffi_callbacks::{HostInterruptContext, InterruptContext};
 use crate::zeroize::{secure_cache_flush_raw, secure_zeroize};
@@ -148,7 +154,9 @@ impl EntropyPool {
         }
     }
 
-    /// Drains the global entropy queue and mixes it into the pool.
+    /// Mixes up to eight queued entropy chunks into the pool per invocation.
+    /// Remaining chunks stay queued for subsequent invocations so queue backlog
+    /// cannot turn one call into an unbounded amount of SHA-384 work.
     ///
     /// This function is called automatically during `extract_entropy`, but can
     /// also be triggered manually by the host OS via FFI to ensure the pool
@@ -169,11 +177,17 @@ impl EntropyPool {
         let mut queue_hasher = Sha384::new();
         let mut mixed = false;
 
-        // Keep the expensive, variable-sized hash work outside the interrupt-masked lock.
-        while unsafe { GLOBAL_ENTROPY_QUEUE.pop(&mut chunk) } {
+        // Keep the expensive hash work outside the interrupt-masked lock and
+        // bound the amount of work performed by one call. Any remaining queue
+        // entries are deliberately left for a later invocation.
+        let mut mixed_chunks = 0usize;
+        while mixed_chunks < MAX_MIX_CHUNKS_PER_CALL
+            && unsafe { GLOBAL_ENTROPY_QUEUE.pop(&mut chunk) }
+        {
             queue_hasher.update(chunk);
             secure_zeroize(&mut chunk);
             mixed = true;
+            mixed_chunks += 1;
         }
 
         if mixed {
@@ -348,6 +362,24 @@ mod tests {
     }
 
     #[test]
+    #[test]
+    fn mix_entropy_is_bounded_per_invocation() {
+        let pool = EntropyPool::new();
+        let mut pushed = 0usize;
+        for value in 0u8..=8u8 {
+            let chunk = [value; ENTROPY_CHUNK_SIZE];
+            if unsafe { GLOBAL_ENTROPY_QUEUE.push(&chunk) }.is_ok() {
+                pushed += 1;
+            }
+        }
+        assert!(pushed > MAX_MIX_CHUNKS_PER_CALL);
+
+        pool.mix_entropy();
+        assert_eq!(pool.reseed_count.load(Ordering::Acquire), 1);
+        pool.mix_entropy();
+        assert_eq!(pool.reseed_count.load(Ordering::Acquire), 2);
+    }
+
     fn cache_callback_can_reenter_entropy_mixing_without_deadlocking() {
         let _entropy_test_guard = ENTROPY_TEST_SERIAL_LOCK
             .lock()

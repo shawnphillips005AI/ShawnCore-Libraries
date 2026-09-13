@@ -309,6 +309,31 @@ mod tests {
     }
 
     #[test]
+    fn rapid_reuse_rejects_every_stale_generation() {
+        install_test_callback();
+        let pool = StaticDmaPool::<u32, 1, 1>::new();
+        let mut storage = AlignedStorage::<1>(MaybeUninit::uninit());
+        let pointer = storage.0.as_mut_ptr().cast::<u32>();
+        unsafe { pool.init(pointer, core::mem::size_of::<u32>()) }.unwrap();
+
+        let (index, mut stale_generation, mut allocation) = pool.allocate().unwrap();
+        for expected_generation in 1u64..=64u64 {
+            unsafe { allocation.as_ptr().write(expected_generation as u32) };
+            pool.free(index, stale_generation).unwrap();
+            let (next_index, next_generation, next_allocation) = pool.allocate().unwrap();
+            assert_eq!(next_index, index);
+            assert_ne!(next_generation, stale_generation);
+            assert_eq!(
+                pool.free(index, stale_generation),
+                Err(AllocatorError::DoubleFree)
+            );
+            stale_generation = next_generation;
+            allocation = next_allocation;
+        }
+        pool.free(index, stale_generation).unwrap();
+    }
+
+    #[test]
     fn free_zeroizes_raw_storage_before_reuse() {
         install_test_callback();
         let pool = StaticDmaPool::<[u8; 8], 1, 1>::new();

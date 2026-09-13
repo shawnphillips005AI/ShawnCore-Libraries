@@ -519,7 +519,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encrypt_packet(
     out_nonce: *mut u8,
     out_tag: *mut u8,
 ) -> ShawncoreCryptoErr {
-    if manager.is_null()
+    if manager.is_null() || !ptr_is_aligned(manager)
         || (plaintext.is_null() && data_len > 0)
         || (ciphertext.is_null() && data_len > 0)
         || out_nonce.is_null()
@@ -576,7 +576,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_decrypt_packet(
     tag: *const u8,
     plaintext: *mut u8,
 ) -> ShawncoreCryptoErr {
-    if manager.is_null()
+    if manager.is_null() || !ptr_is_aligned(manager)
         || (ciphertext.is_null() && data_len > 0)
         || nonce.is_null()
         || tag.is_null()
@@ -2030,6 +2030,37 @@ mod wire_codec_tests {
     }
 
     #[test]
+    #[test]
+    fn aead_overlap_matrix_rejects_all_output_aliases() {
+        let mut buf = [0u8; 128];
+        let base = buf.as_mut_ptr();
+        let enc_key = base;
+        let mac_key = base.wrapping_add(32);
+        let nonce = base.wrapping_add(64);
+        let aad = base.wrapping_add(80);
+        let plaintext = base.wrapping_add(96);
+        let ciphertext = plaintext;
+        let out_mac = base.wrapping_add(16);
+
+        assert!(aead_encrypt_buffers_overlap(
+            enc_key, mac_key, nonce, aad, 4, plaintext, ciphertext, out_mac, 16
+        ));
+        assert!(aead_decrypt_buffers_overlap(
+            enc_key, mac_key, nonce, aad, 4, plaintext, ciphertext, plaintext, 16
+        ));
+    }
+
+    #[test]
+    fn ranges_overlap_zero_length_cases() {
+        let mut bytes = [0u8; 32];
+        let p = bytes.as_mut_ptr();
+        assert!(!ranges_overlap(p, 0, p, 32));
+        assert!(!ranges_overlap(p, 32, p, 0));
+        assert!(!ranges_overlap(p, 0, p.wrapping_add(16), 0));
+        assert!(ranges_overlap(p, 32, p.wrapping_add(31), 1));
+        assert!(!ranges_overlap(p, 16, p.wrapping_add(16), 16));
+    }
+
     fn ml_kem_encapsulation_rejects_output_overlapping_public_key() {
         install_callbacks();
         let (mut pk, _dk) = crate::ml_kem_wrapper::ml_kem_keygen(&[0x6A; 64]).unwrap();

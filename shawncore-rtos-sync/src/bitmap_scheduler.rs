@@ -173,16 +173,32 @@ impl PerCoreScheduler {
     }
 
     /// Records a critical task check-in for the current watchdog window.
+    ///
+    /// Check-ins from priorities that are not currently registered are ignored.
+    /// A task is considered registered once its TCB has a non-zero stack base,
+    /// which is the same registration marker used by task creation/scheduling.
     pub fn task_check_in(&mut self, priority: u8) {
-        if priority < 16 {
+        if priority < 16 && self.tasks[priority as usize].stack_base != 0 {
             self.watchdog_matrix |= 1 << priority;
         }
     }
 
     /// Configures the tasks required to check in before the watchdog is petted.
+    ///
+    /// Only currently registered task priorities are retained in the mask.
+    /// This prevents nonexistent task slots from becoming impossible watchdog
+    /// obligations and prevents a check-in from an unregistered priority from
+    /// satisfying the watchdog gate.
     pub fn set_critical_task_mask(&mut self, critical_task_mask: u16) {
-        self.critical_task_mask = critical_task_mask;
-        self.watchdog_matrix &= critical_task_mask;
+        let registered_mask = self.tasks.iter().enumerate().fold(0u16, |mask, (idx, tcb)| {
+            if tcb.stack_base != 0 {
+                mask | (1u16 << idx)
+            } else {
+                mask
+            }
+        });
+        self.critical_task_mask = critical_task_mask & registered_mask;
+        self.watchdog_matrix &= self.critical_task_mask;
     }
 
     /// The core scheduling logic (Preemptive & Cooperative).
@@ -288,7 +304,11 @@ mod tests {
         unsafe { shawncore_rtos_register_pet_watchdog(Some(count_watchdog_pet)) };
         WATCHDOG_PETS.store(0, Ordering::Relaxed);
         let mut scheduler = PerCoreScheduler::new();
-        scheduler.critical_task_mask = (1 << 2) | (1 << 5);
+        // Mark priorities 2 and 5 as registered without constructing real stacks;
+        // registration is represented by a non-zero stack_base in scheduler state.
+        scheduler.tasks[2].stack_base = 1;
+        scheduler.tasks[5].stack_base = 1;
+        scheduler.set_critical_task_mask((1 << 2) | (1 << 5));
 
         scheduler.task_check_in(2);
         let _ = unsafe { scheduler.schedule_tick(0) };
@@ -297,6 +317,17 @@ mod tests {
         scheduler.task_check_in(5);
         let _ = unsafe { scheduler.schedule_tick(0) };
         assert_eq!(WATCHDOG_PETS.load(Ordering::Relaxed), 1);
+        assert_eq!(scheduler.watchdog_matrix, 0);
+    }
+
+    #[test]
+    fn watchdog_ignores_unregistered_critical_slots_and_checkins() {
+        let mut scheduler = PerCoreScheduler::new();
+
+        scheduler.set_critical_task_mask(1 << 3);
+        assert_eq!(scheduler.critical_task_mask, 0);
+
+        scheduler.task_check_in(3);
         assert_eq!(scheduler.watchdog_matrix, 0);
     }
 

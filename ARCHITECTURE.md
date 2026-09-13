@@ -1,3 +1,10 @@
+
+### Bounded entropy mixing
+
+`EntropyPool::mix_entropy()` processes at most `MAX_MIX_CHUNKS_PER_CALL` queue entries per invocation. This keeps host or ISR-triggered mixing bounded even when the entropy queue has accumulated many chunks; remaining input stays queued for a subsequent invocation. The expensive SHA-384 work remains outside the interrupt-masked pool-state critical section.
+
+FFI buffer overlap helpers conservatively reject output/input aliasing, including checked address-range overflow. DMA stale-generation behavior is covered by repeated rapid-reuse regression tests; the generation tag protects allocation identity but does not make post-free pointer use safe.
+
 # Architecture
 
 This document explains how ShawnCore is built and, more importantly, **why the
@@ -374,9 +381,11 @@ the actual context switch**, because the register set and exception model are
 architecture-specific.
 
 Watchdog petting is gated on a critical-task check-in matrix: the watchdog is
-only petted once every task in `critical_task_mask` has checked in during the
-current window. A hung critical task therefore causes a reset instead of being
-masked by a healthy scheduler loop.
+only petted once every currently registered task in `critical_task_mask` has
+checked in during the current window. The scheduler filters the configured mask
+to registered task slots and ignores check-ins from unregistered priorities. A
+hung critical task therefore causes a reset instead of being masked by a healthy
+scheduler loop.
 
 ### 7.4 Enclave state machine
 

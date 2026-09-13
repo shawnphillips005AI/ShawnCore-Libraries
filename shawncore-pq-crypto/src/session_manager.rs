@@ -315,6 +315,10 @@ impl SessionManager {
     }
 
     /// Assigns a unique RFC 8439 nonce to the next outbound packet.
+    ///
+    /// This advances `tx_counter`. Callers using `encrypt_packet` must not
+    /// call this method first for the same packet; `encrypt_packet` consumes
+    /// its own transmit nonce only when encryption succeeds.
     pub fn get_next_tx_nonce(&mut self, nonce: &mut [u8; 12]) -> Result<(), CryptoError> {
         if self.tx_counter == u64::MAX {
             return Err(CryptoError::InvalidState);
