@@ -20,6 +20,7 @@ use crate::entropy_queue::{EntropyQueue, ENTROPY_CHUNK_SIZE};
 /// unbounded amount of hashing work. Remaining chunks are left queued for a
 /// later invocation.
 pub const MAX_MIX_CHUNKS_PER_CALL: usize = 8;
+/* PATCH: entropy operation gate unifies mix/extract transaction */
 use crate::error::CryptoError;
 use crate::ffi_callbacks::{HostInterruptContext, InterruptContext};
 use crate::zeroize::{secure_cache_flush_raw, secure_zeroize};
@@ -168,10 +169,26 @@ impl EntropyPool {
     /// Remaining chunks stay queued for subsequent invocations so queue backlog
     /// cannot turn one call into an unbounded amount of SHA-384 work.
     ///
-    /// This function is called automatically during `extract_entropy`, but can
-    /// also be triggered manually by the host OS via FFI to ensure the pool
-    /// is continuously seeded during idle periods.
+    /// The per-pool operation gate is acquired before any pool mutation. The
+    /// global queue-consumer gate separately serializes consumption of the
+    /// process-wide SPSC entropy queue.
     pub fn mix_entropy(&self) {
+        if self
+            .mixing
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
+            return;
+        }
+        let _operation_guard = EntropyOperationGuard(&self.mixing);
+        self.mix_entropy_under_gate();
+    }
+
+    /// Mixes queued entropy while the caller owns this pool's operation gate.
+    ///
+    /// This private helper is shared by `mix_entropy` and `extract_entropy` so
+    /// extraction cannot snapshot the pool while a manual mixer changes it.
+    fn mix_entropy_under_gate(&self) {
         // GLOBAL_ENTROPY_QUEUE is SPSC. Its consumer gate must therefore be
         // process-wide rather than per-EntropyPool: multiple independent pool
         // instances can otherwise enter this function concurrently.
@@ -182,7 +199,7 @@ impl EntropyPool {
             return;
         }
 
-        let _operation_guard = EntropyOperationGuard(&GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE);
+        let _queue_guard = EntropyOperationGuard(&GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE);
         let mut chunk = [0u8; ENTROPY_CHUNK_SIZE];
         let mut queue_hasher = Sha384::new();
         let mut mixed = false;
@@ -239,11 +256,9 @@ impl EntropyPool {
     /// `Ok(())` if successful, or `CryptoError::EntropyStarvation` if the pool
     /// has never been seeded by the host OS.
     pub fn extract_entropy(&self, out: &mut [u8]) -> Result<(), CryptoError> {
-        // `mixing` is a non-blocking high-level ownership gate for entropy
-        // operations. A caller that loses the gate returns a retryable error
-        // rather than spinning; this is safe even if the caller is an ISR and
-        // the current owner is a lower-priority task.
-        self.mix_entropy();
+        // `mixing` is a non-blocking high-level ownership gate for the entire
+        // extraction transaction, including any queued-entropy mixing. A caller
+        // that loses the gate returns a retryable error rather than spinning.
         if self
             .mixing
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
@@ -252,6 +267,11 @@ impl EntropyPool {
             return Err(CryptoError::EntropyBusy);
         }
         let _operation_guard = EntropyOperationGuard(&self.mixing);
+
+        // Mix only while this pool's operation gate is owned. This prevents a
+        // concurrent/manual mixer from changing pool state between snapshot and
+        // commit, while the helper's global queue gate preserves SPSC ownership.
+        self.mix_entropy_under_gate();
 
         if self.reseed_count.load(Ordering::Acquire) == 0 {
             return Err(CryptoError::EntropyStarvation);
@@ -370,6 +390,29 @@ mod tests {
         assert!(GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE.load(Ordering::Acquire));
 
         GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn extract_does_not_bypass_pool_gate_or_consume_queue() {
+        let _entropy_test_guard = ENTROPY_TEST_SERIAL_LOCK
+            .lock()
+            .expect("entropy test lock poisoned");
+        let pool = EntropyPool::new();
+        pool.mixing.store(true, Ordering::Release);
+        let mut chunk = [0x5Au8; ENTROPY_CHUNK_SIZE];
+        let pushed = unsafe { GLOBAL_ENTROPY_QUEUE.push(&chunk) }.is_ok();
+        secure_zeroize(&mut chunk);
+
+        let mut out = [0u8; 1];
+        assert_eq!(pool.extract_entropy(&mut out), Err(CryptoError::EntropyBusy));
+
+        // The busy path must not enter the global queue consumer. If we managed
+        // to push a test chunk, it should still be available to a later consumer.
+        if pushed {
+            assert!(unsafe { GLOBAL_ENTROPY_QUEUE.pop(&mut chunk) });
+            secure_zeroize(&mut chunk);
+        }
+        pool.mixing.store(false, Ordering::Release);
     }
 
     #[test]

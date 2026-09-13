@@ -218,13 +218,6 @@ impl PerCoreScheduler {
     /// Every registered task stack must continue to satisfy `create_task`'s
     /// mapped-memory, lifetime, and ownership contract until it is removed.
     pub unsafe fn schedule_tick(&mut self, current_rsp: u64) -> u64 {
-        if self.critical_task_mask != 0
-            && (self.watchdog_matrix & self.critical_task_mask) == self.critical_task_mask
-        {
-            host_pet_watchdog();
-            self.watchdog_matrix = 0;
-        }
-
         let current_idx = self.current_task;
 
         // A zero RSP means the host has no current task context to save (for example,
@@ -280,6 +273,16 @@ impl PerCoreScheduler {
             return 0;
         }
 
+        // Pet the hardware watchdog only after current-task integrity and the selected
+        // next task/context have both passed validation. A canary or scheduler-context
+        // failure must never refresh the watchdog immediately before reporting fault.
+        if self.critical_task_mask != 0
+            && (self.watchdog_matrix & self.critical_task_mask) == self.critical_task_mask
+        {
+            host_pet_watchdog();
+            self.watchdog_matrix = 0;
+        }
+
         self.current_task = next_idx;
         compiler_fence(Ordering::SeqCst);
         self.tasks[next_idx].rsp
@@ -329,6 +332,34 @@ mod tests {
 
         scheduler.task_check_in(3);
         assert_eq!(scheduler.watchdog_matrix, 0);
+    }
+
+    #[test]
+    fn watchdog_does_not_pet_after_current_task_canary_failure() {
+        unsafe { shawncore_rtos_register_pet_watchdog(Some(count_watchdog_pet)) };
+        WATCHDOG_PETS.store(0, Ordering::Relaxed);
+
+        let mut scheduler = PerCoreScheduler::new();
+        let mut stack = [0u64; 2];
+        let stack_base = stack.as_mut_ptr() as u64;
+        let stack_size = core::mem::size_of_val(&stack);
+        let rsp = stack_base + core::mem::size_of::<u64>() as u64;
+
+        unsafe {
+            scheduler
+                .create_task(Tcb::new_task(1, stack_base, stack_size, rsp, 1), 0xA5A5)
+                .unwrap();
+        }
+        scheduler.current_task = 1;
+        scheduler.set_critical_task_mask(1 << 1);
+        scheduler.task_check_in(1);
+
+        // Corrupt the canary while preserving a structurally valid task stack.
+        stack[0] = 0xDEAD_BEEF;
+
+        let result = unsafe { scheduler.schedule_tick(rsp) };
+        assert_eq!(result, 0);
+        assert_eq!(WATCHDOG_PETS.load(Ordering::Relaxed), 0);
     }
 
     #[test]

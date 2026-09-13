@@ -635,3 +635,7 @@ and lifecycle checks. The FFI contract assumes that callers do not destroy or
 reuse object storage while any ShawnCore operation still has access to it. A
 security review should therefore verify every create/use/destroy sequence,
 including concurrent C callers and backing-buffer ownership transitions.
+
+### Watchdog fail-safe ordering
+
+The scheduler validates current-task stack integrity and the selected next task/context before servicing the hardware watchdog. A detected canary or scheduler-context fault returns without refreshing the watchdog, preserving the watchdog as a fault-recovery mechanism rather than servicing it immediately before fault reporting.
