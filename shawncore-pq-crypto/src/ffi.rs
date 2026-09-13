@@ -2030,7 +2030,6 @@ mod wire_codec_tests {
     }
 
     #[test]
-    #[test]
     fn aead_overlap_matrix_rejects_all_output_aliases() {
         let mut buf = [0u8; 128];
         let base = buf.as_mut_ptr();
@@ -2061,6 +2060,7 @@ mod wire_codec_tests {
         assert!(!ranges_overlap(p, 16, p.wrapping_add(16), 16));
     }
 
+    #[test]
     fn ml_kem_encapsulation_rejects_output_overlapping_public_key() {
         install_callbacks();
         let (mut pk, _dk) = crate::ml_kem_wrapper::ml_kem_keygen(&[0x6A; 64]).unwrap();

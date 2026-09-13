@@ -55,11 +55,16 @@ impl LatencyTracker {
     /// The matching `mark_start` belongs to the same logical measurement owner.
     /// `mark_end` consumes the current active measurement exactly once.
     pub fn mark_end(&self, current_timestamp: u64) {
-        if !self.started.swap(false, Ordering::AcqRel) {
+        if !self.started.load(Ordering::Acquire) {
             return;
         }
         let start = self.start_time.load(Ordering::Acquire);
         if current_timestamp < start {
+            // A backwards/non-monotonic reading must not consume the active
+            // measurement. A later valid timestamp may still complete it.
+            return;
+        }
+        if !self.started.swap(false, Ordering::AcqRel) {
             return;
         }
 
@@ -128,6 +133,18 @@ mod tests {
             tracker.samples.load(core::sync::atomic::Ordering::Relaxed),
             1
         );
+    }
+
+    #[test]
+    fn backwards_timestamp_does_not_consume_active_measurement() {
+        let tracker = LatencyTracker::new();
+        tracker.mark_start(100);
+        tracker.mark_end(90);
+        assert_eq!(tracker.samples.load(Ordering::Relaxed), 0);
+
+        tracker.mark_end(110);
+        assert_eq!(tracker.samples.load(Ordering::Relaxed), 1);
+        assert_eq!(tracker.total_latency.load(Ordering::Relaxed), 10);
     }
 
     #[test]

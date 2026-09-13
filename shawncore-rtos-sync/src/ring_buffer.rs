@@ -273,15 +273,18 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
             // FIX: AArch64 Weak Memory Model Barrier
             // Provides a SeqCst ordering barrier between the payload access and sequence validation under the Rust atomic memory model.
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
+            let second_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
+            if first_sequence != second_sequence || second_sequence & 1 != 0 {
+                // The documented SPSC contract makes this path unreachable. Keep the
+                // failure path non-destructive: do not erase payload bytes until the
+                // defensive stability check succeeds.
+                return None;
+            }
             // FIX: Data Remanence Prevention
-            // Zeroize the queue slot immediately after extraction so secret material doesn't linger in RAM.
+            // Zeroize the queue slot only after successful sequence validation.
             let dst = (*slot_ptr).data.get() as *mut u8;
             for i in 0..core::mem::size_of_val(&item) {
                 core::ptr::write_volatile(dst.add(i), 0);
-            }
-            let second_sequence = (*slot_ptr).sequence_counter.load(Ordering::Acquire);
-            if first_sequence != second_sequence || second_sequence & 1 != 0 {
-                return None;
             }
             item
         };

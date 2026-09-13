@@ -122,6 +122,13 @@ impl Drop for EntropyOperationGuard<'_> {
 /// Global asynchronous entropy queue fed by the host OS.
 pub static GLOBAL_ENTROPY_QUEUE: EntropyQueue = EntropyQueue::new();
 
+/// Process-wide gate protecting the single-consumer side of `GLOBAL_ENTROPY_QUEUE`.
+///
+/// `EntropyPool` instances can be constructed independently, but the queue they
+/// consume is global and SPSC. Therefore its consumer ownership must also be
+/// global; a per-instance `EntropyPool::mixing` flag is insufficient.
+static GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE: AtomicBool = AtomicBool::new(false);
+
 /// Global asynchronous entropy pool.
 pub static GLOBAL_ENTROPY_POOL: EntropyPool = EntropyPool::new();
 
@@ -133,7 +140,10 @@ pub static GLOBAL_ENTROPY_POOL: EntropyPool = EntropyPool::new();
 pub struct EntropyPool {
     pool: CryptoSpinlock<[u8; 48], HostInterruptContext>,
     reseed_count: AtomicU64,
-    /// Serializes callers that drain the single-consumer global entropy queue.
+    /// Serializes mutating operations on this pool instance.
+    ///
+    /// This does not own the global queue consumer; that role is protected by
+    /// `GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE`.
     mixing: AtomicBool,
 }
 
@@ -162,17 +172,17 @@ impl EntropyPool {
     /// also be triggered manually by the host OS via FFI to ensure the pool
     /// is continuously seeded during idle periods.
     pub fn mix_entropy(&self) {
-        // GLOBAL_ENTROPY_QUEUE is SPSC. Serialize its consumer side without
-        // putting the expensive SHA-384 work back inside CryptoSpinlock.
-        if self
-            .mixing
+        // GLOBAL_ENTROPY_QUEUE is SPSC. Its consumer gate must therefore be
+        // process-wide rather than per-EntropyPool: multiple independent pool
+        // instances can otherwise enter this function concurrently.
+        if GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_err()
         {
             return;
         }
 
-        let _operation_guard = EntropyOperationGuard(&self.mixing);
+        let _operation_guard = EntropyOperationGuard(&GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE);
         let mut chunk = [0u8; ENTROPY_CHUNK_SIZE];
         let mut queue_hasher = Sha384::new();
         let mut mixed = false;
@@ -333,15 +343,33 @@ mod tests {
         let _entropy_test_guard = ENTROPY_TEST_SERIAL_LOCK
             .lock()
             .expect("entropy test lock poisoned");
-        assert!(REENTRY_TEST_POOL
-            .mixing
+        assert!(GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok());
 
         REENTRY_TEST_POOL.mix_entropy();
-        assert!(REENTRY_TEST_POOL.mixing.load(Ordering::Acquire));
+        assert!(GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE.load(Ordering::Acquire));
 
-        REENTRY_TEST_POOL.mixing.store(false, Ordering::Release);
+        GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE.store(false, Ordering::Release);
+    }
+
+    #[test]
+    fn independent_pools_share_one_global_queue_consumer_gate() {
+        let _entropy_test_guard = ENTROPY_TEST_SERIAL_LOCK
+            .lock()
+            .expect("entropy test lock poisoned");
+        let pool_a = EntropyPool::new();
+        let pool_b = EntropyPool::new();
+
+        assert!(GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok());
+
+        pool_a.mix_entropy();
+        pool_b.mix_entropy();
+        assert!(GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE.load(Ordering::Acquire));
+
+        GLOBAL_ENTROPY_QUEUE_CONSUMER_GATE.store(false, Ordering::Release);
     }
 
     #[test]
@@ -362,7 +390,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn mix_entropy_is_bounded_per_invocation() {
         let pool = EntropyPool::new();
         let mut pushed = 0usize;
@@ -380,6 +407,7 @@ mod tests {
         assert_eq!(pool.reseed_count.load(Ordering::Acquire), 2);
     }
 
+    #[test]
     fn cache_callback_can_reenter_entropy_mixing_without_deadlocking() {
         let _entropy_test_guard = ENTROPY_TEST_SERIAL_LOCK
             .lock()
