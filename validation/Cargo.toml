@@ -1,0 +1,13 @@
+[package]
+name = "shawncore-validation"
+version = "12.3.10"
+edition = "2021"
+rust-version = "1.85"
+description = "Host-side validation harness for ShawnCore"
+repository = "https://github.com/shawnphillips005AI/ShawnCore-Libraries"
+license-file = "../LICENSE"
+publish = false
+
+[dependencies]
+shawncore-pq-crypto = { path = "../shawncore-pq-crypto" }
+shawncore-rtos-sync = { path = "../shawncore-rtos-sync" }

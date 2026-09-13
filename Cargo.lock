@@ -409,6 +409,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "shawncore-validation"
+version = "12.3.10"
+dependencies = [
+ "shawncore-pq-crypto",
+ "shawncore-rtos-sync",
+]
+
+[[package]]
 name = "signature"
 version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

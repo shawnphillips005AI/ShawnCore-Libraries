@@ -3,7 +3,8 @@ members = [
     "shawncore-pq-crypto",
     "shawncore-rtos-sync",
     "shawncore-ffi",
-    "benchmarks"
+    "benchmarks",
+    "validation"
 ]
 exclude = ["fuzz"]
 resolver = "2"

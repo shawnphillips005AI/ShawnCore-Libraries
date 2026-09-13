@@ -19,7 +19,7 @@
 use crate::error::IpcError;
 use crate::ffi_callbacks::{host_cache_flush, host_cache_invalidate};
 use core::cell::UnsafeCell;
-use core::sync::atomic::{compiler_fence, fence, AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{compiler_fence, fence, AtomicBool, AtomicPtr, AtomicUsize, Ordering};
 
 /// A cache-line aligned atomic index to prevent false sharing between producer and consumer cores.
 #[repr(C, align(64))]
@@ -42,12 +42,11 @@ pub struct CacheAlignedSlot<T> {
 pub struct SpscQueue<T: Copy + Default, const N: usize> {
     /// Pointer to the host-provided buffer storing the elements.
     ///
-    /// Written exactly once during `init()`, then read directly (no atomic load)
-    /// by `push()`/`pop()`: the `Acquire` load of `is_initialized` performed by
-    /// both callers already synchronizes with the `Release` store at the end of
-    /// `init()`, so an additional atomic load here would only cost cycles on the
-    /// RTOS hot path without adding any further ordering guarantee.
-    buffer: UnsafeCell<*mut CacheAlignedSlot<T>>,
+    /// Published exactly once during `init()` with Release ordering, then read
+    /// with Acquire ordering by `push()`/`pop()`: the `Acquire` load of `is_initialized` performed by
+    /// `init()`. The pointer itself is also atomic so its publication and reads
+    /// remain race-free independently of that readiness flag.
+    buffer: AtomicPtr<CacheAlignedSlot<T>>,
     /// The atomic index representing the head (write position).
     head: CacheAlignedIndex,
     /// The atomic index representing the tail (read position).
@@ -75,7 +74,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
     pub const fn new() -> Self {
         const { assert!(N.is_power_of_two(), "Queue size must be a power of 2") };
         Self {
-            buffer: UnsafeCell::new(core::ptr::null_mut()),
+            buffer: AtomicPtr::new(core::ptr::null_mut()),
             head: CacheAlignedIndex(AtomicUsize::new(0)),
             tail: CacheAlignedIndex(AtomicUsize::new(0)),
             is_initialized: AtomicBool::new(false),
@@ -145,9 +144,6 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
         // Temporal: `is_initializing`'s compare-exchange above guarantees no other
         // caller can be inside `init()` concurrently.
         // Alignment: N/A.
-        unsafe {
-            *self.buffer.get() = base_ptr;
-        }
         for index in 0..N {
             unsafe {
                 core::ptr::write(
@@ -156,7 +152,8 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
                 );
             }
         }
-        compiler_fence(Ordering::SeqCst);
+        // Publish the fully initialized backing buffer before advertising readiness.
+        self.buffer.store(base_ptr, Ordering::Release);
         self.is_initialized.store(true, Ordering::Release);
         self.is_initializing.store(false, Ordering::Release);
 
@@ -178,6 +175,8 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
     /// * `head` is stored with `Release` to publish the preceding payload write.
     ///
     /// # Safety
+    /// Exactly one producer and one consumer may call queue operations for the
+    /// initialized lifetime. This is a hard ownership requirement.
     /// The caller must be the queue's sole producer for its full initialized
     /// lifetime. The host must complete any device ownership transition before
     /// calling this method.
@@ -203,7 +202,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
         // Temporal: The `Acquire` load of `is_initialized` above synchronizes with
         // the `Release` store at the end of `init()`, so this plain read is
         // guaranteed to observe the initialized buffer pointer.
-        let base_ptr = unsafe { *self.buffer.get() };
+        let base_ptr = self.buffer.load(Ordering::Acquire);
 
         // # Safety
         // Spatial: `index` is masked by `N`, ensuring it is strictly within bounds.
@@ -271,7 +270,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
         // Temporal: The `Acquire` load of `is_initialized` above synchronizes with
         // the `Release` store at the end of `init()`, so this plain read is
         // guaranteed to observe the initialized buffer pointer.
-        let base_ptr = unsafe { *self.buffer.get() };
+        let base_ptr = self.buffer.load(Ordering::Acquire);
 
         // # Safety
         // Spatial: `index` is masked by `N`, ensuring it is strictly within bounds.
