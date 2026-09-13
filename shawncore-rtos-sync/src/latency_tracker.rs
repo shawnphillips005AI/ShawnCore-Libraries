@@ -110,6 +110,7 @@ impl LatencyTracker {
 #[cfg(test)]
 mod tests {
     use super::LatencyTracker;
+    use std::sync::atomic::Ordering;
 
     #[test]
     fn timestamp_zero_is_a_valid_start_and_end_is_single_use() {

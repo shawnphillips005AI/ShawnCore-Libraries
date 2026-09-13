@@ -355,6 +355,9 @@ mod tests {
         {
             return;
         }
+        // Re-entry is intentionally non-blocking: the outer mix owns the
+        // per-pool operation gate, so the recursive call is rejected rather
+        // than waiting on itself.
         REENTRY_TEST_POOL.mix_entropy();
     }
 
@@ -404,7 +407,10 @@ mod tests {
         secure_zeroize(&mut chunk);
 
         let mut out = [0u8; 1];
-        assert_eq!(pool.extract_entropy(&mut out), Err(CryptoError::EntropyBusy));
+        assert_eq!(
+            pool.extract_entropy(&mut out),
+            Err(CryptoError::EntropyBusy)
+        );
 
         // The busy path must not enter the global queue consumer. If we managed
         // to push a test chunk, it should still be available to a later consumer.

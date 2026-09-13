@@ -17,7 +17,11 @@
 //! executing core or interrupt context can still hold or enter the old callback.
 //! Acquire/Release ordering makes the published function pointer observable; it
 //! does not keep the underlying callback implementation alive or coordinate its
-//! teardown. Callbacks must also remain non-reentrant with respect to ShawnCore.
+//! teardown. Callbacks may re-enter ShawnCore only where the called operation
+//! explicitly supports non-blocking re-entry; re-entrant calls may be rejected
+//! and must not be relied upon for progress. Callers must not assume that an
+//! operation invoked from a callback will succeed merely because the outer
+//! operation is active.
 
 use crate::ffi_error::invoke_panic_hook;
 use crate::interrupt_spinlock::InterruptContext;
@@ -121,6 +125,7 @@ pub unsafe extern "C" fn shawncore_rtos_register_cache_invalidate(cb: Option<Cac
 /// Registers the host OS callback for flushing a cache range.
 /// It is invoked after the CPU-side producer writes a slot that a device may read.
 ///
+/// Re-entrant calls are only supported where the called operation explicitly supports non-blocking re-entry; a re-entrant call may be rejected and must not be relied upon for progress. The callback must not depend on recursive ShawnCore progress to complete the outer operation.
 /// # Safety
 /// `cb` must be a valid C-ABI compatible function pointer. Registration is
 /// intended for integration-time setup; replacement or removal requires external

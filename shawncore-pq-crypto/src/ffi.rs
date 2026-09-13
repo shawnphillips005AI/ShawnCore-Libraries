@@ -519,7 +519,8 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encrypt_packet(
     out_nonce: *mut u8,
     out_tag: *mut u8,
 ) -> ShawncoreCryptoErr {
-    if manager.is_null() || !ptr_is_aligned(manager)
+    if manager.is_null()
+        || !ptr_is_aligned(manager)
         || (plaintext.is_null() && data_len > 0)
         || (ciphertext.is_null() && data_len > 0)
         || out_nonce.is_null()
@@ -576,7 +577,8 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_decrypt_packet(
     tag: *const u8,
     plaintext: *mut u8,
 ) -> ShawncoreCryptoErr {
-    if manager.is_null() || !ptr_is_aligned(manager)
+    if manager.is_null()
+        || !ptr_is_aligned(manager)
         || (ciphertext.is_null() && data_len > 0)
         || nonce.is_null()
         || tag.is_null()

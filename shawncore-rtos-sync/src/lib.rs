@@ -60,29 +60,28 @@ mod tests {
         let first_stack_base = stacks[0].as_mut_ptr() as u64;
         let second_stack_base = stacks[1].as_mut_ptr() as u64;
         let stack_size = core::mem::size_of_val(&stacks[0]);
+        let first_rsp = first_stack_base + core::mem::size_of::<u64>() as u64;
+        let second_rsp = second_stack_base + core::mem::size_of::<u64>() as u64;
         unsafe {
             scheduler
                 .create_task(
-                    Tcb::new_task(1, first_stack_base, stack_size, first_stack_base, 5),
+                    Tcb::new_task(1, first_stack_base, stack_size, first_rsp, 5),
                     0xAA55,
                 )
                 .unwrap();
             scheduler
                 .create_task(
-                    Tcb::new_task(2, second_stack_base, stack_size, second_stack_base, 2),
+                    Tcb::new_task(2, second_stack_base, stack_size, second_rsp, 2),
                     0x55AA,
                 )
                 .unwrap();
         }
 
-        assert_eq!(unsafe { scheduler.schedule_tick(0) }, second_stack_base);
+        assert_eq!(unsafe { scheduler.schedule_tick(0) }, second_rsp);
         scheduler.clear_ready(2);
-        assert_eq!(
-            unsafe { scheduler.schedule_tick(second_stack_base) },
-            first_stack_base
-        );
+        assert_eq!(unsafe { scheduler.schedule_tick(second_rsp) }, first_rsp);
         scheduler.clear_ready(5);
-        assert_eq!(unsafe { scheduler.schedule_tick(first_stack_base) }, 0);
+        assert_eq!(unsafe { scheduler.schedule_tick(first_rsp) }, 0);
     }
 
     #[test]

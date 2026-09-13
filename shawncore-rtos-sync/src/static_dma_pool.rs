@@ -7,9 +7,13 @@
 //! Statically allocated, cache-aligned DMA memory pool.
 //!
 //! The free list is an ABA-tagged Treiber stack. Push and pop are lock-free and
-//! have O(1) expected work. The ABA tag is 32 bits and can wrap after $2^{32}$
-//! free-list mutations; target deployments must bound the pool's operational
-//! lifetime below that limit or provide external reinitialization.
+//! have O(1) expected work. The free-list ABA tag is 32 bits and can wrap after
+//! $2^{32}$ free-list mutations; target deployments must bound operational lifetime
+//! below that limit or provide external reinitialization. Per-slot ownership uses
+//! one atomic 64-bit word: the high bit records allocation and the low 63 bits
+//! form the ownership generation, making generation validation and release one
+//! atomic compare-exchange operation. Ownership generation wraps only after
+//! $2^{63}$ allocations of the same slot.
 
 use crate::error::AllocatorError;
 use crate::ffi_callbacks::host_cache_flush;
@@ -17,6 +21,8 @@ use core::ptr::NonNull;
 use core::sync::atomic::{compiler_fence, AtomicBool, AtomicPtr, AtomicU64, AtomicUsize, Ordering};
 
 const FREE_LIST_EMPTY: u32 = u32::MAX;
+const OWNERSHIP_ALLOCATED_BIT: u64 = 1u64 << 63;
+const OWNERSHIP_GENERATION_MASK: u64 = OWNERSHIP_ALLOCATED_BIT - 1;
 
 /// A lock-free, generic, statically allocated DMA memory pool.
 #[repr(C, align(64))]
@@ -27,10 +33,11 @@ pub struct StaticDmaPool<T, const N: usize, const BITMAP_WORDS: usize> {
     free_list_head: AtomicUsize,
     /// Packed next index and reserved generation field for each free-list node.
     next: [AtomicUsize; N],
-    /// Per-slot ownership generation returned to callers as a free token.
-    generations: [AtomicU64; N],
-    /// Per-slot allocation state used to reject duplicate and stale frees.
-    allocated: [AtomicBool; N],
+    /// Per-slot ownership state: high bit is allocated, low 63 bits are the
+    /// generation returned to callers as a free token. Ownership validation and
+    /// release use one atomic compare-exchange so a stale free cannot clear a
+    /// newer allocation after the generation check.
+    ownership: [AtomicU64; N],
     /// Initialization flag.
     is_initialized: AtomicBool,
     /// Prevents concurrent initialization attempts.
@@ -70,8 +77,7 @@ impl<T: Copy, const N: usize, const BITMAP_WORDS: usize> StaticDmaPool<T, N, BIT
             memory: AtomicPtr::new(core::ptr::null_mut()),
             free_list_head: AtomicUsize::new(pack_head(0, 0)),
             next: [const { AtomicUsize::new(FREE_LIST_EMPTY as usize) }; N],
-            generations: [const { AtomicU64::new(0) }; N],
-            allocated: [const { AtomicBool::new(false) }; N],
+            ownership: [const { AtomicU64::new(0) }; N],
             is_initialized: AtomicBool::new(false),
             is_initializing: AtomicBool::new(false),
         }
@@ -129,8 +135,7 @@ impl<T: Copy, const N: usize, const BITMAP_WORDS: usize> StaticDmaPool<T, N, BIT
                 FREE_LIST_EMPTY as usize
             };
             self.next[index].store(next_index, Ordering::Relaxed);
-            self.generations[index].store(0, Ordering::Relaxed);
-            self.allocated[index].store(false, Ordering::Relaxed);
+            self.ownership[index].store(0, Ordering::Relaxed);
         }
         self.free_list_head
             .store(pack_head(0, 0), Ordering::Release);
@@ -161,10 +166,28 @@ impl<T: Copy, const N: usize, const BITMAP_WORDS: usize> StaticDmaPool<T, N, BIT
             ) {
                 Ok(_) => {
                     let slot = index as usize;
-                    let token = self.generations[slot]
-                        .fetch_add(1, Ordering::AcqRel)
-                        .wrapping_add(1);
-                    self.allocated[slot].store(true, Ordering::Release);
+                    let observed_state = self.ownership[slot].load(Ordering::Acquire);
+                    debug_assert_eq!(observed_state & OWNERSHIP_ALLOCATED_BIT, 0);
+                    let next_generation = (observed_state & OWNERSHIP_GENERATION_MASK)
+                        .wrapping_add(1)
+                        & OWNERSHIP_GENERATION_MASK;
+                    let claimed_state = OWNERSHIP_ALLOCATED_BIT | next_generation;
+                    if self.ownership[slot]
+                        .compare_exchange(
+                            observed_state,
+                            claimed_state,
+                            Ordering::AcqRel,
+                            Ordering::Acquire,
+                        )
+                        .is_err()
+                    {
+                        // A slot removed from the free list must not be concurrently
+                        // owned by another caller. Treat an unexpected state change
+                        // as allocator corruption instead of publishing an untracked
+                        // allocation.
+                        return Err(AllocatorError::DoubleFree);
+                    }
+                    let token = next_generation;
                     let pointer = unsafe { NonNull::new_unchecked(base_ptr.add(slot)) };
                     return Ok((slot, token, pointer));
                 }
@@ -181,11 +204,17 @@ impl<T: Copy, const N: usize, const BITMAP_WORDS: usize> StaticDmaPool<T, N, BIT
         if buffer_idx >= N {
             return Err(AllocatorError::AddressOutOfBounds);
         }
-        if self.generations[buffer_idx].load(Ordering::Acquire) != generation {
+        if generation > OWNERSHIP_GENERATION_MASK {
             return Err(AllocatorError::DoubleFree);
         }
-        if self.allocated[buffer_idx]
-            .compare_exchange(true, false, Ordering::AcqRel, Ordering::Acquire)
+        let expected_state = OWNERSHIP_ALLOCATED_BIT | generation;
+        if self.ownership[buffer_idx]
+            .compare_exchange(
+                expected_state,
+                generation,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            )
             .is_err()
         {
             return Err(AllocatorError::DoubleFree);
@@ -194,9 +223,10 @@ impl<T: Copy, const N: usize, const BITMAP_WORDS: usize> StaticDmaPool<T, N, BIT
         let base_ptr = self.memory.load(Ordering::Acquire);
         // # Safety
         // Spatial: `buffer_idx` is bounds-checked and `T` has nonzero size after `init`.
-        // Temporal: `allocated[buffer_idx]` was just transitioned from true to false;
-        // allocation cannot republish this slot until zeroization completes and the
-        // free-list head is updated below.
+        // Temporal: ownership was atomically transitioned from this exact allocation
+        // token to the free state. A stale token cannot clear a newer allocation.
+        // The slot is not reachable from the free-list until zeroization and
+        // cache publication complete below.
         // Alignment: byte writes require no alignment and do not assume initialized `T` data.
         unsafe {
             let pointer = base_ptr.add(buffer_idx).cast::<u8>();
@@ -305,6 +335,30 @@ mod tests {
             Err(AllocatorError::DoubleFree)
         );
         assert_eq!(unsafe { second_pointer.as_ptr().read() }, 0x5A5A_5A5A);
+        pool.free(index, second_generation).unwrap();
+    }
+
+    #[test]
+    fn stale_free_never_clears_a_newer_atomic_ownership_state() {
+        install_test_callback();
+        let pool = StaticDmaPool::<u32, 1, 1>::new();
+        let mut storage = AlignedStorage::<1>(MaybeUninit::uninit());
+        let pointer = storage.0.as_mut_ptr().cast::<u32>();
+        unsafe { pool.init(pointer, core::mem::size_of::<u32>()) }.unwrap();
+
+        let (index, first_generation, first_allocation) = pool.allocate().unwrap();
+        unsafe { first_allocation.as_ptr().write(0x1111_2222) };
+        pool.free(index, first_generation).unwrap();
+
+        let (index, second_generation, second_allocation) = pool.allocate().unwrap();
+        assert_ne!(first_generation, second_generation);
+        unsafe { second_allocation.as_ptr().write(0x3333_4444) };
+
+        assert_eq!(
+            pool.free(index, first_generation),
+            Err(AllocatorError::DoubleFree)
+        );
+        assert_eq!(unsafe { second_allocation.as_ptr().read() }, 0x3333_4444);
         pool.free(index, second_generation).unwrap();
     }
 

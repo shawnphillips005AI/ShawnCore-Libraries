@@ -68,6 +68,7 @@ pub unsafe extern "C" fn shawncore_crypto_register_restore_interrupts(
 
 /// Registers the host OS callback for cache flushing.
 ///
+/// Re-entrant calls are only supported where the called operation explicitly supports non-blocking re-entry; a re-entrant call may be rejected and must not be relied upon for progress. The callback must not depend on recursive ShawnCore progress to complete the outer operation.
 /// # Safety
 /// When present, `cb` must be a valid C-ABI function for every possible call.
 /// Registration is intended for integration-time setup. Callback replacement or

@@ -324,7 +324,8 @@ impl SessionManager {
     /// `encrypt_packet` allocates and advances its own nonce internally. Do not
     /// call this method for a packet that will also be passed to `encrypt_packet`,
     /// or the transmit counter will advance twice.
-pub fn get_next_tx_nonce(&mut self, nonce: &mut [u8; 12]) -> Result<(), CryptoError> {        if self.tx_counter == u64::MAX {
+    pub fn get_next_tx_nonce(&mut self, nonce: &mut [u8; 12]) -> Result<(), CryptoError> {
+        if self.tx_counter == u64::MAX {
             return Err(CryptoError::InvalidState);
         }
         nonce[..8].copy_from_slice(&self.tx_counter.to_le_bytes());

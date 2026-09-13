@@ -270,13 +270,17 @@ mod tests {
 
     #[test]
     fn keygen_ffi_rejects_overlapping_outputs() {
+        #[repr(C, align(64))]
+        struct AlignedStorage([u8; 64]);
+
         let entropy = [0x42; 32];
-        let mut public_key = [0u8; core::mem::size_of::<super::x25519_wrapper::X25519Public>()];
+        let mut storage = AlignedStorage([0u8; 64]);
+        let base = storage.0.as_mut_ptr();
         let result = unsafe {
             shawncore_crypto_x25519_keygen(
                 entropy.as_ptr(),
-                public_key.as_mut_ptr().cast(),
-                public_key.as_mut_ptr().cast(),
+                base.cast::<super::x25519_wrapper::X25519Public>(),
+                base.cast::<super::x25519_wrapper::X25519Secret>(),
             )
         };
         assert_eq!(result, ShawncoreCryptoErr::InvalidLength);

@@ -57,10 +57,16 @@ fn valid_stack_pointer(tcb: &Tcb, rsp: u64) -> bool {
     let Some(stack_end) = tcb.stack_base.checked_add(tcb.stack_size as u64) else {
         return false;
     };
+    let Some(first_usable_rsp) = tcb
+        .stack_base
+        .checked_add(core::mem::size_of::<u64>() as u64)
+    else {
+        return false;
+    };
     tcb.stack_base != 0
         && tcb.stack_base % core::mem::align_of::<u64>() as u64 == 0
         && tcb.stack_size >= core::mem::size_of::<u64>()
-        && rsp >= tcb.stack_base + core::mem::size_of::<u64>() as u64
+        && rsp >= first_usable_rsp
         && rsp <= stack_end
 }
 
@@ -190,13 +196,17 @@ impl PerCoreScheduler {
     /// obligations and prevents a check-in from an unregistered priority from
     /// satisfying the watchdog gate.
     pub fn set_critical_task_mask(&mut self, critical_task_mask: u16) {
-        let registered_mask = self.tasks.iter().enumerate().fold(0u16, |mask, (idx, tcb)| {
-            if tcb.stack_base != 0 {
-                mask | (1u16 << idx)
-            } else {
-                mask
-            }
-        });
+        let registered_mask = self
+            .tasks
+            .iter()
+            .enumerate()
+            .fold(0u16, |mask, (idx, tcb)| {
+                if tcb.stack_base != 0 {
+                    mask | (1u16 << idx)
+                } else {
+                    mask
+                }
+            });
         self.critical_task_mask = critical_task_mask & registered_mask;
         self.watchdog_matrix &= self.critical_task_mask;
     }
@@ -219,6 +229,12 @@ impl PerCoreScheduler {
     /// mapped-memory, lifetime, and ownership contract until it is removed.
     pub unsafe fn schedule_tick(&mut self, current_rsp: u64) -> u64 {
         let current_idx = self.current_task;
+
+        // The scheduler state itself must be structurally valid before any current-task
+        // dependent work or watchdog servicing. A corrupted task index must fail closed.
+        if current_idx >= MAX_TASKS {
+            return 0;
+        }
 
         // A zero RSP means the host has no current task context to save (for example,
         // scheduler entry from an idle/boot path). Preserve that established behavior.
@@ -405,13 +421,7 @@ mod tests {
         let canary = 0xAA55u64;
 
         // The first u64 at stack_base is reserved for the canary.
-        let overlaps_canary = Tcb::new_task(
-            1,
-            stack_base,
-            stack_size,
-            stack_base,
-            1,
-        );
+        let overlaps_canary = Tcb::new_task(1, stack_base, stack_size, stack_base, 1);
         assert!(unsafe { scheduler.create_task(overlaps_canary, canary) }.is_err());
 
         // The first stack address after the canary is valid.
@@ -439,17 +449,52 @@ mod tests {
         unsafe {
             scheduler
                 .create_task(
-                    Tcb::new_task(1, stack_base, stack_size, stack_base + core::mem::size_of::<u64>() as u64, 1),
+                    Tcb::new_task(
+                        1,
+                        stack_base,
+                        stack_size,
+                        stack_base + core::mem::size_of::<u64>() as u64,
+                        1,
+                    ),
                     0xAA55,
                 )
                 .unwrap();
         }
         assert!(unsafe {
             scheduler.create_task(
-                Tcb::new_task(2, stack_base, stack_size, stack_base + core::mem::size_of::<u64>() as u64, 1),
+                Tcb::new_task(
+                    2,
+                    stack_base,
+                    stack_size,
+                    stack_base + core::mem::size_of::<u64>() as u64,
+                    1,
+                ),
                 0x55AA,
             )
         }
         .is_err());
+    }
+
+    #[test]
+    fn corrupted_current_task_index_fails_closed_without_watchdog_pet() {
+        unsafe { shawncore_rtos_register_pet_watchdog(Some(count_watchdog_pet)) };
+        WATCHDOG_PETS.store(0, Ordering::Relaxed);
+
+        let mut scheduler = PerCoreScheduler::new();
+        scheduler.current_task = 16;
+        scheduler.critical_task_mask = 0;
+
+        let result = unsafe { scheduler.schedule_tick(0) };
+        assert_eq!(result, 0);
+        assert_eq!(scheduler.current_task, 16);
+        assert_eq!(WATCHDOG_PETS.load(Ordering::Relaxed), 0);
+    }
+
+    #[test]
+    fn stack_lower_bound_overflow_is_rejected() {
+        let mut scheduler = PerCoreScheduler::new();
+        let bogus_base = u64::MAX - 3;
+        let tcb = Tcb::new_task(1, bogus_base, u64::MAX as usize, bogus_base, 1);
+        assert!(unsafe { scheduler.create_task(tcb, 0xA5A5) }.is_err());
     }
 }
