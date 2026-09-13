@@ -41,12 +41,19 @@ impl LatencyTracker {
     }
 
     /// Marks the beginning of a timed execution block.
+    ///
+    /// One tracker represents one active measurement at a time. The host must ensure
+    /// that only one logical owner performs a `mark_start`/`mark_end` pair on a given
+    /// tracker; concurrent or interleaved measurements on the same tracker are unsupported.
     pub fn mark_start(&self, current_timestamp: u64) {
         self.start_time.store(current_timestamp, Ordering::Release);
         self.started.store(true, Ordering::Release);
     }
 
     /// Marks the end of a timed execution block, updating maximums and averages.
+    ///
+    /// The matching `mark_start` belongs to the same logical measurement owner.
+    /// `mark_end` consumes the current active measurement exactly once.
     pub fn mark_end(&self, current_timestamp: u64) {
         if !self.started.swap(false, Ordering::AcqRel) {
             return;

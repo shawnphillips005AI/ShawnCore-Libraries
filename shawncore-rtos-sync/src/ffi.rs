@@ -229,6 +229,11 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_destroy(
 /// `out_tcb` must point to valid, properly aligned, **UNINITIALIZED** storage for a `Tcb`.
 /// Do not overwrite an initialized TCB; reclaim its storage according to its lifecycle before reuse.
 #[no_mangle]
+///
+/// # Safety
+/// `out_tcb` must point to valid, properly aligned, **UNINITIALIZED** storage for a `Tcb`.
+/// `entry_point` must be non-zero. A previously initialized TCB in the destination
+/// storage must be destroyed before this function is called again.
 pub unsafe extern "C" fn shawncore_rtos_tcb_new(
     entry_point: u64,
     stack_base: u64,
@@ -266,7 +271,7 @@ pub unsafe extern "C" fn shawncore_rtos_tcb_get_rsp(tcb: *const Tcb) -> u64 {
         return 0;
     }
     if !ptr_is_aligned(tcb) {
-        return ShawncoreRtosErr::InvalidMemory;
+        return 0;
     }
 
     let tcb_ref = unsafe { &*tcb };
@@ -339,7 +344,7 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_tick(
         return current_rsp; // Fallback to current if invalid
     }
     if !ptr_is_aligned(scheduler) {
-        return ShawncoreRtosErr::InvalidMemory;
+        return current_rsp;
     }
 
     let scheduler_ref = unsafe { &mut *scheduler };

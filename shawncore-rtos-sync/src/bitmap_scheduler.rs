@@ -60,7 +60,7 @@ fn valid_stack_pointer(tcb: &Tcb, rsp: u64) -> bool {
     tcb.stack_base != 0
         && tcb.stack_base % core::mem::align_of::<u64>() as u64 == 0
         && tcb.stack_size >= core::mem::size_of::<u64>()
-        && rsp >= tcb.stack_base
+        && rsp >= tcb.stack_base + core::mem::size_of::<u64>() as u64
         && rsp <= stack_end
 }
 
@@ -318,6 +318,52 @@ mod tests {
     }
 
     #[test]
+    fn zero_entry_point_is_rejected() {
+        let mut scheduler = PerCoreScheduler::new();
+        let mut stack = [0u64; 2];
+        let stack_base = stack.as_mut_ptr() as u64;
+        let stack_size = core::mem::size_of_val(&stack);
+
+        let result = unsafe {
+            scheduler.create_task(
+                Tcb::new_task(0, stack_base, stack_size, stack_base, 1),
+                0xA5A5,
+            )
+        };
+
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rsp_cannot_overlap_stack_canary() {
+        let mut scheduler = PerCoreScheduler::new();
+        let mut stack = [0u64; 2];
+        let stack_base = stack.as_mut_ptr() as u64;
+        let stack_size = core::mem::size_of_val(&stack);
+        let canary = 0xAA55u64;
+
+        // The first u64 at stack_base is reserved for the canary.
+        let overlaps_canary = Tcb::new_task(
+            1,
+            stack_base,
+            stack_size,
+            stack_base,
+            1,
+        );
+        assert!(unsafe { scheduler.create_task(overlaps_canary, canary) }.is_err());
+
+        // The first stack address after the canary is valid.
+        let after_canary = Tcb::new_task(
+            2,
+            stack_base,
+            stack_size,
+            stack_base + core::mem::size_of::<u64>() as u64,
+            2,
+        );
+        assert!(unsafe { scheduler.create_task(after_canary, canary) }.is_ok());
+    }
+
+    #[test]
     fn duplicate_priority_and_zero_stack_base_are_rejected() {
         let mut scheduler = PerCoreScheduler::new();
         let mut stack = [0u64; 2];
@@ -331,14 +377,14 @@ mod tests {
         unsafe {
             scheduler
                 .create_task(
-                    Tcb::new_task(1, stack_base, stack_size, stack_base, 1),
+                    Tcb::new_task(1, stack_base, stack_size, stack_base + core::mem::size_of::<u64>() as u64, 1),
                     0xAA55,
                 )
                 .unwrap();
         }
         assert!(unsafe {
             scheduler.create_task(
-                Tcb::new_task(2, stack_base, stack_size, stack_base, 1),
+                Tcb::new_task(2, stack_base, stack_size, stack_base + core::mem::size_of::<u64>() as u64, 1),
                 0x55AA,
             )
         }

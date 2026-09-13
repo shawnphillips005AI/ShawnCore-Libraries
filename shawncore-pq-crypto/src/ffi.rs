@@ -7,6 +7,10 @@
 //! Foreign Function Interface (FFI) for the Cryptographic Stack.
 //! Defines opaque C-callable boundaries for the Target host OS. The host must
 //! uphold each exported function's documented pointer, lifetime, alignment,
+//!
+//! Session objects are not internally serialized. The host must provide exclusive ownership
+//! while invoking operations that mutate a `SessionManager`, including handshake state,
+//! replay counters, packet encryption/decryption state, and explicit zeroization.
 //! ownership, and concurrency preconditions.
 
 use crate::aead_wrapper::{aead_decrypt, aead_encrypt, hkdf_expand_sha384, hmac_sha384};
@@ -167,6 +171,10 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_destroy(
 /// All pointers must be valid and non-null. `entropy` must point to exactly 96 bytes.
 /// Output regions must be distinct and must not overlap `manager` or `entropy`.
 #[no_mangle]
+/// **Concurrency contract:** one initialized `SessionManager` requires exclusive access while state-mutating work is in progress. The C ABI does not serialize concurrent callers; the host RTOS must provide the required mutex, critical section, or task ownership.
+///
+/// In particular, callers must not concurrently invoke handshake, encrypt/decrypt, or zeroize operations on the same manager.
+///
 pub unsafe extern "C" fn shawncore_crypto_session_manager_initiate_handshake(
     manager: *mut SessionManager,
     entropy: *const u8,
@@ -233,6 +241,10 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_initiate_handshake(
 /// # Safety
 /// All pointers must be valid and non-null. `salt` and `info` must be valid for their respective lengths.
 #[no_mangle]
+/// **Concurrency contract:** one initialized `SessionManager` requires exclusive access while state-mutating work is in progress. The C ABI does not serialize concurrent callers; the host RTOS must provide the required mutex, critical section, or task ownership.
+///
+/// In particular, callers must not concurrently invoke handshake, encrypt/decrypt, or zeroize operations on the same manager.
+///
 pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_handshake(
     manager: *mut SessionManager,
     peer_x25519_pk: *const X25519Public,
@@ -303,6 +315,10 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_handshake(
 /// All pointers must be valid and non-null. `entropy` must point to exactly 64 bytes.
 /// Output regions must be distinct and must not overlap any input object.
 #[no_mangle]
+/// **Concurrency contract:** one initialized `SessionManager` requires exclusive access while state-mutating work is in progress. The C ABI does not serialize concurrent callers; the host RTOS must provide the required mutex, critical section, or task ownership.
+///
+/// In particular, callers must not concurrently invoke handshake, encrypt/decrypt, or zeroize operations on the same manager.
+///
 pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
     manager: *mut SessionManager,
     peer_ml_kem_pk: *const PublicKey1024,
@@ -462,6 +478,10 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
 /// # Safety
 /// `manager` must be a valid, non-null pointer.
 #[no_mangle]
+/// **Concurrency contract:** one initialized `SessionManager` requires exclusive access while state-mutating work is in progress. The C ABI does not serialize concurrent callers; the host RTOS must provide the required mutex, critical section, or task ownership.
+///
+/// In particular, callers must not concurrently invoke handshake, encrypt/decrypt, or zeroize operations on the same manager.
+///
 pub unsafe extern "C" fn shawncore_crypto_session_manager_zeroize(
     manager: *mut SessionManager,
 ) -> ShawncoreCryptoErr {
@@ -485,6 +505,10 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_zeroize(
 /// `manager`, `plaintext`, `ciphertext`, `out_nonce`, and `out_tag` must be valid.
 /// `aad` may be null only when `aad_len` is zero. Output regions must not overlap inputs.
 #[no_mangle]
+/// **Concurrency contract:** one initialized `SessionManager` requires exclusive access while state-mutating work is in progress. The C ABI does not serialize concurrent callers; the host RTOS must provide the required mutex, critical section, or task ownership.
+///
+/// In particular, callers must not concurrently invoke handshake, encrypt/decrypt, or zeroize operations on the same manager.
+///
 pub unsafe extern "C" fn shawncore_crypto_session_manager_encrypt_packet(
     manager: *mut SessionManager,
     aad: *const u8,
@@ -538,6 +562,10 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encrypt_packet(
 /// `manager`, `ciphertext`, `nonce`, `tag`, and `plaintext` must be valid.
 /// `aad` may be null only when `aad_len` is zero. Output must not overlap inputs.
 #[no_mangle]
+/// **Concurrency contract:** one initialized `SessionManager` requires exclusive access while state-mutating work is in progress. The C ABI does not serialize concurrent callers; the host RTOS must provide the required mutex, critical section, or task ownership.
+///
+/// In particular, callers must not concurrently invoke handshake, encrypt/decrypt, or zeroize operations on the same manager.
+///
 pub unsafe extern "C" fn shawncore_crypto_session_manager_decrypt_packet(
     manager: *mut SessionManager,
     aad: *const u8,
