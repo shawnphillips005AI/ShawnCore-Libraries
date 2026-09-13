@@ -269,7 +269,7 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
                 (*slot_ptr).data.get().cast::<u8>(),
                 core::mem::size_of::<T>(),
             );
-            let item = core::ptr::read((*slot_ptr).data.get());
+            let item = core::ptr::read_volatile((*slot_ptr).data.get());
             // FIX: AArch64 Weak Memory Model Barrier
             // Provides a SeqCst ordering barrier between the payload access and sequence validation under the Rust atomic memory model.
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
@@ -356,7 +356,7 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
                 (*slot_ptr).data.get().cast::<u8>(),
                 core::mem::size_of::<T>(),
             );
-            let item = core::ptr::read((*slot_ptr).data.get());
+            let item = core::ptr::read_volatile((*slot_ptr).data.get());
             // FIX: AArch64 Weak Memory Model Barrier
             // Provides a SeqCst ordering barrier between the payload access and sequence validation under the Rust atomic memory model.
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
@@ -432,14 +432,5 @@ mod tests {
         assert_eq!(unsafe { buffer.pop() }, None);
         assert_eq!(FLUSH_COUNT.load(Ordering::Relaxed), 1);
         assert_eq!(INVALIDATE_COUNT.load(Ordering::Relaxed), 2);
-    }
-}
-
-#[cfg(test)]
-mod race_hardening_r2_tests {
-    #[test]
-    fn ring_payload_paths_are_expected_to_use_atomic_ownership() {
-        assert!(8usize.is_power_of_two());
-        assert!(8usize <= usize::MAX / 2);
     }
 }

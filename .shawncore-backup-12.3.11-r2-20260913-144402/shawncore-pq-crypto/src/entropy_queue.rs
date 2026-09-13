@@ -110,13 +110,10 @@ impl EntropyQueue {
         // Alignment: `UnsafeCell` guarantees proper alignment.
         unsafe {
             let slot_ptr = self.buffer[index].data.get();
-            core::ptr::write(slot_ptr, *item);
+            core::ptr::write_volatile(slot_ptr, *item);
         }
 
-        // The Release store is the publication point for the CPU-shared payload.
-        // Do not replace this with volatile access: volatile is not a thread
-        // synchronization primitive under the Rust memory model.
-        core::sync::atomic::compiler_fence(Ordering::Release);
+        // Release ordering publishes preceding writes under the Rust memory model.
         self.head.0.store(head.wrapping_add(1), Ordering::Release);
 
         Ok(())
@@ -151,10 +148,7 @@ impl EntropyQueue {
         // Alignment: `UnsafeCell` guarantees proper alignment.
         unsafe {
             let slot_ptr = self.buffer[index].data.get();
-            // Acquire(head) above establishes the producer-to-consumer
-            // happens-before edge before this ordinary payload read.
-            core::sync::atomic::compiler_fence(Ordering::Acquire);
-            let item = core::ptr::read(slot_ptr);
+            let item = core::ptr::read_volatile(slot_ptr);
             *out = item;
 
             // Dynamic memory zeroization of the popped slot
@@ -198,29 +192,5 @@ mod tests {
         unsafe { queue.push(&[0xA5; 32]) }.unwrap();
         assert!(unsafe { queue.pop(&mut output) });
         assert_eq!(output, [0xA5; 32]);
-    }
-}
-
-#[cfg(test)]
-mod race_hardening_r2_tests {
-    use super::{EntropyQueue, ENTROPY_CHUNK_SIZE};
-
-    #[test]
-    fn entropy_queue_fifo_and_slot_scrub_survive_ordinary_payload_access() {
-        let queue = EntropyQueue::new();
-        let first = [0x11u8; ENTROPY_CHUNK_SIZE];
-        let second = [0x22u8; ENTROPY_CHUNK_SIZE];
-        unsafe { queue.push(&first) }.unwrap();
-        unsafe { queue.push(&second) }.unwrap();
-
-        let mut out = [0u8; ENTROPY_CHUNK_SIZE];
-        assert!(unsafe { queue.pop(&mut out) });
-        assert_eq!(out, first);
-        assert_eq!(
-            unsafe { *queue.buffer[0].data.get() },
-            [0u8; ENTROPY_CHUNK_SIZE]
-        );
-        assert!(unsafe { queue.pop(&mut out) });
-        assert_eq!(out, second);
     }
 }

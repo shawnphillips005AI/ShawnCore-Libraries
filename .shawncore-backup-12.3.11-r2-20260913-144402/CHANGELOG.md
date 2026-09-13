@@ -1,11 +1,3 @@
-## 12.3.11-r2
-
-### Concurrency hardening continuation
-- Hardened both ring-buffer consumer payload read paths.
-- Completed entropy SPSC ordinary-memory payload access.
-- Preserved volatile access only for explicit secret zeroization.
-- Added regression coverage for FIFO ordering and slot scrubbing.
-
 # Changelog
 
 All notable changes to this project are documented here. This project is a

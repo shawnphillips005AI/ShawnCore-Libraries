@@ -72,7 +72,10 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
     /// Creates a new, uninitialized `SpscQueue`.
     #[must_use]
     pub const fn new() -> Self {
-        const { assert!(N.is_power_of_two(), "Queue size must be a power of 2") };
+        const {
+            assert!(N.is_power_of_two(), "Queue size must be a power of 2");
+            assert!(N <= (usize::MAX / 2), "Queue size is too large");
+        };
         Self {
             buffer: AtomicPtr::new(core::ptr::null_mut()),
             head: CacheAlignedIndex(AtomicUsize::new(0)),
@@ -214,7 +217,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
             (*slot_ptr)
                 .sequence_counter
                 .store(sequence.wrapping_add(1) | 1, Ordering::Release);
-            core::ptr::write_volatile((*slot_ptr).data.get(), item);
+            core::ptr::write((*slot_ptr).data.get(), item);
             host_cache_flush(
                 (*slot_ptr).data.get().cast::<u8>(),
                 core::mem::size_of::<T>(),
@@ -286,7 +289,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
                 (*slot_ptr).data.get().cast::<u8>(),
                 core::mem::size_of::<T>(),
             );
-            let item = core::ptr::read_volatile((*slot_ptr).data.get());
+            let item = core::ptr::read((*slot_ptr).data.get());
             // Establish an explicit ordering point between the payload access and
             // the second sequence validation under the Rust atomic memory model.
             core::sync::atomic::fence(core::sync::atomic::Ordering::SeqCst);
