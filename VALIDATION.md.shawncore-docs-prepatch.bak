@@ -134,22 +134,3 @@ Miri: PASS (maintainer-reported) — `cargo +nightly miri test --workspace --all
 ## Current Source Inventory
 
 The current repository source tree contains **62 Rust functions annotated with `#[test]`**. This is a source-tree inventory, not a claim that all 62 tests were freshly executed for this release. Historical command results retain their original execution context.
-
-## Lite Validation Matrix
-
-Lite and full configurations must be validated independently.
-
-| Area | Full | Lite |
-| --- | --- | --- |
-| ML-KEM | enabled | enabled |
-| X25519 | enabled | enabled |
-| AEAD/session machinery | enabled | enabled |
-| ML-DSA | enabled | omitted |
-| RTOS synchronization | enabled | enabled |
-| Entropy infrastructure | enabled | enabled |
-| C FFI | enabled | reduced DSA surface |
-
-For a Lite deployment, measure the final target artifact rather than assuming
-that a Rust library archive size equals deployed firmware size. Record flash,
-static RAM, stack high-water marks, transient cryptographic memory, interrupt
-latency, watchdog margin, and DMA/cache behavior on the actual target.

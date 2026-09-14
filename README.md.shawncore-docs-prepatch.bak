@@ -279,29 +279,3 @@ If you are an Engineering Director or Principal Architect looking to integrate P
 ### Validation-count note
 
 `patch.py` detects `61` Rust functions annotated with `#[test]`. This is a source-tree count, not a claim that all tests have been executed on hardware. Runtime, hardware, interoperability, and independent security validation remain distinct gates.
-
-## Lite MCU Build
-
-ShawnCore provides a constrained-MCU build configuration in addition to the
-full/default configuration.
-
-The full/default configuration keeps ML-DSA enabled. The Lite configuration
-omits ML-DSA at compile/link time while retaining ML-KEM, X25519, authenticated
-encryption, session management, entropy handling, and RTOS synchronization.
-
-Build the Lite crypto crate:
-
-```text
-cargo build -p shawncore-pq-crypto --no-default-features --features lite --profile lite
-```
-
-Build the Lite C facade:
-
-```text
-cargo build -p shawncore-ffi --no-default-features --features lite --profile lite
-```
-
-Lite is a constrained deployment profile, not a security-certification or
-hardware-readiness claim. The integrating system remains responsible for
-providing an appropriate device identity/authentication mechanism when ML-DSA
-signatures are not available on the target.

@@ -70,12 +70,9 @@ typedef struct shawncore_crypto_ml_kem_publickey shawncore_crypto_ml_kem_publick
 typedef struct shawncore_crypto_ml_kem_decapskey shawncore_crypto_ml_kem_decapskey;
 typedef struct shawncore_crypto_ml_kem_sharedkey shawncore_crypto_ml_kem_sharedkey;
 typedef struct shawncore_crypto_ml_kem_ciphertext shawncore_crypto_ml_kem_ciphertext;
-#ifndef SHAWNCORE_LITE
-/* ML-DSA opaque types omitted from the Lite ABI. */
 typedef struct shawncore_crypto_ml_dsa_publickey shawncore_crypto_ml_dsa_publickey;
 typedef struct shawncore_crypto_ml_dsa_signingkey shawncore_crypto_ml_dsa_signingkey;
 typedef struct shawncore_crypto_ml_dsa_signature shawncore_crypto_ml_dsa_signature;
-#endif /* SHAWNCORE_LITE */
 typedef struct shawncore_crypto_x25519_publickey shawncore_crypto_x25519_publickey;
 typedef struct shawncore_crypto_x25519_secret shawncore_crypto_x25519_secret;
 typedef struct shawncore_crypto_x25519_sharedsecret shawncore_crypto_x25519_sharedsecret;
@@ -169,8 +166,6 @@ shawncore_crypto_err shawncore_crypto_ml_kem_decapsulate(
     shawncore_crypto_ml_kem_sharedkey *out_shared);
 shawncore_crypto_err shawncore_crypto_ml_kem_sharedkey_destroy(shawncore_crypto_ml_kem_sharedkey *shared);
 
-#ifndef SHAWNCORE_LITE
-/* ML-DSA primary C API: omitted from Lite ABI. */
 size_t shawncore_crypto_ml_dsa_publickey_sizeof(void);
 size_t shawncore_crypto_ml_dsa_publickey_alignof(void);
 size_t shawncore_crypto_ml_dsa_signingkey_sizeof(void);
@@ -193,7 +188,6 @@ shawncore_crypto_err shawncore_crypto_ml_dsa_verify(
     size_t msg_len,
     const shawncore_crypto_ml_dsa_signature *sig);
 
-#endif /* SHAWNCORE_LITE */
 size_t shawncore_crypto_x25519_publickey_sizeof(void);
 size_t shawncore_crypto_x25519_publickey_alignof(void);
 size_t shawncore_crypto_x25519_secret_sizeof(void);
@@ -253,8 +247,6 @@ shawncore_crypto_err shawncore_crypto_x25519_publickey_from_bytes(
     size_t len,
     shawncore_crypto_x25519_publickey *out);
 
-#ifndef SHAWNCORE_LITE
-/* ML-DSA wire C API: omitted from Lite ABI. */
 size_t shawncore_crypto_ml_dsa_publickey_encoded_len(void);   /* 2592 */
 shawncore_crypto_err shawncore_crypto_ml_dsa_publickey_to_bytes(
     const shawncore_crypto_ml_dsa_publickey *value,
@@ -275,7 +267,6 @@ shawncore_crypto_err shawncore_crypto_ml_dsa_signature_from_bytes(
     size_t len,
     shawncore_crypto_ml_dsa_signature *out);
 
-#endif /* SHAWNCORE_LITE */
 shawncore_crypto_err shawncore_crypto_hmac_sha384(
     const uint8_t key[static 32],
     const uint8_t *data,

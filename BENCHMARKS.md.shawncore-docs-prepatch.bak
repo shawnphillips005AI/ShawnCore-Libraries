@@ -29,17 +29,3 @@ Results depend on CPU, OS, compiler, optimization level, cache state, and the se
 ## Embedded Footprint
 
 The benchmark harness intentionally does not invent flash/RAM/stack numbers for a target that has not been measured. Target-specific footprint should be collected from the buyer's actual architecture/toolchain using its normal linker/map-file tooling.
-
-## Lite Footprint Measurements
-
-The Lite configuration exists primarily for constrained flash/RAM targets.
-Benchmark reports should compare like-for-like artifacts:
-
-```text
-cargo build -p shawncore-ffi --release
-cargo build -p shawncore-ffi --no-default-features --features lite --profile lite
-```
-
-Record final static-library/firmware size together with execution timing and
-stack/RAM measurements. Size reduction alone is not sufficient evidence that
-a target MCU is suitable.

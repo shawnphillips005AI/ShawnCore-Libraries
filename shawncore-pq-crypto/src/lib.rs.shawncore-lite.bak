@@ -18,7 +18,6 @@ pub mod ffi;
 pub mod ffi_callbacks;
 pub mod ffi_error;
 pub mod hybrid_kdf;
-#[cfg(feature = "ml-dsa")]
 pub mod ml_dsa_wrapper;
 pub mod ml_kem_wrapper;
 pub mod session_manager;
@@ -46,7 +45,6 @@ mod tests {
     use super::ffi_callbacks::shawncore_crypto_register_cache_flush;
     use super::ffi_error::ShawncoreCryptoErr;
     use super::hybrid_kdf::derive_hybrid_key;
-    #[cfg(feature = "ml-dsa")]
     use super::ml_dsa_wrapper::{ml_dsa_keygen, ml_dsa_sign, ml_dsa_verify};
     use super::ml_kem_wrapper::{ml_kem_decapsulate, ml_kem_encapsulate, ml_kem_keygen};
     use super::session_manager::SessionManager;
@@ -369,7 +367,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ml-dsa")]
     fn ml_dsa_ffi_accepts_null_for_zero_length_message() {
         std::thread::Builder::new()
             .name("ml-dsa-empty-message-test".into())
@@ -455,7 +452,6 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "ml-dsa")]
     fn ml_dsa_verifies_and_rejects_modified_messages() {
         std::thread::Builder::new()
             .name("ml-dsa-test".into())

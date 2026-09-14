@@ -439,7 +439,6 @@ mod race_hardening_r2_tests {
     #[test]
     fn ring_payload_paths_are_expected_to_use_atomic_ownership() {
         assert!(8usize.is_power_of_two());
-        let half_range = usize::MAX / 2;
-        assert!(8usize <= half_range);
+        assert!(8usize <= usize::MAX / 2);
     }
 }

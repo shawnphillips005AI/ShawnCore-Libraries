@@ -12,10 +12,5 @@ publish = false
 crate-type = ["staticlib"]
 
 [dependencies]
-shawncore-pq-crypto = { default-features = false, version = "12.3.10", path = "../shawncore-pq-crypto" }
+shawncore-pq-crypto = { version = "12.3.10", path = "../shawncore-pq-crypto" }
 shawncore-rtos-sync = { version = "12.3.10", path = "../shawncore-rtos-sync" }
-
-[features]
-default = ["ml-dsa"]
-ml-dsa = ["shawncore-pq-crypto/ml-dsa"]
-lite = ["shawncore-pq-crypto/lite"]

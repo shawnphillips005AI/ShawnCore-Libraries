@@ -26,9 +26,3 @@ strip = "symbols"
 [profile.usv]
 inherits = "release"
 opt-level = "z"
-
-[profile.lite]
-inherits = "release"
-opt-level = "z"
-debug = false
-strip = "symbols"

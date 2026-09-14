@@ -40,7 +40,7 @@ export TSAN_OPTIONS="halt_on_error=1:exitcode=66:report_signal_unsafe=0${TSAN_OP
 printf '%s\n' "[+] ThreadSanitizer validation"
 printf '%s\n' "[+] target: $HOST_TRIPLE"
 printf '%s\n' "[+] clean cargo target: $CARGO_TARGET_DIR"
-printf '%s\n' "[+] standalone binary: shawncore-validation/bin/tsan-host-validation"
+printf '%s\n' "[+] standalone binary: shawncore-validation/bin/tsan_host_validation"
 printf '%s\n' "[+] libtest harness is NOT used"
 
 # Standalone executable on purpose. Do not replace this with `cargo test`:
@@ -51,6 +51,6 @@ cargo +nightly run \
     --manifest-path "$ROOT/Cargo.toml" \
     --locked \
     -p shawncore-validation \
-    --bin tsan-host-validation
+    --bin tsan_host_validation
 
 printf '%s\n' "[+] ThreadSanitizer completed with no reported data race."

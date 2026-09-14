@@ -130,16 +130,3 @@ independent security review is claimed. Target hardware behavior, real DMA/cache
 coherency, interrupts, watchdog behavior, hardware entropy, KATs, external
 interoperability, and independent security review remain required before
 deployment. See [VALIDATION.md](VALIDATION.md) for each gate's exact status.
-
-## Lite Review Guidance
-
-Reviewers should treat Lite as a separate supported configuration with a
-different exposed cryptographic API.
-
-Do not infer that a successful Lite compile proves hardware readiness. The
-important evidence is that the Lite dependency graph excludes ML-DSA, the Lite
-FFI surface excludes ML-DSA declarations/functions, and the remaining security
-and synchronization tests continue to pass.
-
-The full configuration should remain the default reference build so that
-existing ML-DSA functionality and compatibility are preserved.

@@ -17,7 +17,6 @@ use crate::aead_wrapper::{aead_decrypt, aead_encrypt, hkdf_expand_sha384, hmac_s
 use crate::entropy_pool::{GLOBAL_ENTROPY_POOL, GLOBAL_ENTROPY_QUEUE};
 use crate::error::CryptoError;
 use crate::ffi_error::ShawncoreCryptoErr;
-#[cfg(feature = "ml-dsa")]
 use crate::ml_dsa_wrapper::{
     ml_dsa_keygen, ml_dsa_sign, ml_dsa_verify, PublicKey87, Signature87, SigningKey87,
     ML_DSA_PUBLICKEY_BYTES, ML_DSA_SIGNATURE_BYTES,
@@ -68,19 +67,16 @@ opaque_type_layout!(
     shawncore_crypto_ml_kem_ciphertext_sizeof,
     shawncore_crypto_ml_kem_ciphertext_alignof
 );
-#[cfg(feature = "ml-dsa")]
 opaque_type_layout!(
     PublicKey87,
     shawncore_crypto_ml_dsa_publickey_sizeof,
     shawncore_crypto_ml_dsa_publickey_alignof
 );
-#[cfg(feature = "ml-dsa")]
 opaque_type_layout!(
     SigningKey87,
     shawncore_crypto_ml_dsa_signingkey_sizeof,
     shawncore_crypto_ml_dsa_signingkey_alignof
 );
-#[cfg(feature = "ml-dsa")]
 opaque_type_layout!(
     Signature87,
     shawncore_crypto_ml_dsa_signature_sizeof,
@@ -834,7 +830,6 @@ pub unsafe extern "C" fn shawncore_crypto_ml_kem_sharedkey_destroy(
 /// properly aligned, **UNINITIALIZED** storage. Previously initialized output objects must
 /// be destroyed with their matching `*_destroy` function before their storage is reused.
 #[no_mangle]
-#[cfg(feature = "ml-dsa")]
 pub unsafe extern "C" fn shawncore_crypto_ml_dsa_keygen(
     seed: *const u8,
     out_pk: *mut PublicKey87,
@@ -877,7 +872,6 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_keygen(
 /// # Safety
 /// `sk` must point to a valid, initialized `SigningKey87`.
 #[no_mangle]
-#[cfg(feature = "ml-dsa")]
 pub unsafe extern "C" fn shawncore_crypto_ml_dsa_signingkey_destroy(
     sk: *mut SigningKey87,
 ) -> ShawncoreCryptoErr {
@@ -902,7 +896,6 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_signingkey_destroy(
 /// value must be reclaimed before its storage is reused. `msg` must be valid for `msg_len`
 /// and may be null when `msg_len` is zero.
 #[no_mangle]
-#[cfg(feature = "ml-dsa")]
 pub unsafe extern "C" fn shawncore_crypto_ml_dsa_sign(
     sk: *const SigningKey87,
     msg: *const u8,
@@ -950,7 +943,6 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_sign(
 /// `pk` and `sig` must be valid and non-null. `msg` must be valid for `msg_len`
 /// and may be null when `msg_len` is zero.
 #[no_mangle]
-#[cfg(feature = "ml-dsa")]
 pub unsafe extern "C" fn shawncore_crypto_ml_dsa_verify(
     pk: *const PublicKey87,
     msg: *const u8,
@@ -1140,12 +1132,10 @@ fn x25519_publickey_decode(
     Ok(X25519Public(*bytes))
 }
 
-#[cfg(feature = "ml-dsa")]
 fn ml_dsa_signature_encode(value: &Signature87) -> [u8; ML_DSA_SIGNATURE_BYTES] {
     value.0
 }
 
-#[cfg(feature = "ml-dsa")]
 fn ml_dsa_signature_decode(
     bytes: &[u8; ML_DSA_SIGNATURE_BYTES],
 ) -> Result<Signature87, CryptoError> {
@@ -1263,7 +1253,6 @@ wire_codec!(
     x25519_publickey_encode,
     x25519_publickey_decode
 );
-#[cfg(feature = "ml-dsa")]
 wire_codec!(
     PublicKey87,
     ML_DSA_PUBLICKEY_BYTES,
@@ -1273,7 +1262,6 @@ wire_codec!(
     PublicKey87::to_bytes,
     PublicKey87::from_bytes
 );
-#[cfg(feature = "ml-dsa")]
 wire_codec!(
     Signature87,
     ML_DSA_SIGNATURE_BYTES,
@@ -1872,7 +1860,6 @@ mod wire_codec_tests {
     /// Runs on an explicit large stack: an ML-DSA-87 verifying key is 73,856 bytes and a
     /// signing key is 104,640 bytes in memory, and an unoptimized build copies them on move.
     #[test]
-    #[cfg(feature = "ml-dsa")]
     fn ml_dsa_publickey_and_signature_survive_a_wire_round_trip() {
         std::thread::Builder::new()
             .stack_size(16 * 1024 * 1024)
@@ -1882,7 +1869,6 @@ mod wire_codec_tests {
             .expect("test thread must not panic");
     }
 
-    #[cfg(feature = "ml-dsa")]
     fn ml_dsa_wire_round_trip() {
         install_callbacks();
         let (pk, sk) = crate::ml_dsa_wrapper::ml_dsa_keygen(&[0x3C; 32]).unwrap();

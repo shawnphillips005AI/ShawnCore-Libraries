@@ -721,25 +721,3 @@ Lite is a footprint configuration, not a hardware-readiness or certification
 claim. Measure flash/RAM, stack high-water marks, interrupt timing, DMA/cache
 behavior, entropy behavior, and target-specific interoperability before use.
 
-## Lite MCU Architecture
-
-Lite mode is implemented as a real Cargo feature boundary rather than merely
-an optimization flag. ML-DSA is optional and enabled by default; Lite disables
-that component so its implementation and FFI surfaces are not linked.
-
-The security model changes accordingly:
-
-- Full/default: ML-KEM + X25519 + authenticated encryption/session machinery,
-  with ML-DSA available for post-quantum signatures.
-- Lite: ML-KEM + X25519 + authenticated encryption/session machinery, without
-  ML-DSA signatures.
-
-X25519 is a key-agreement primitive and is not a substitute for a digital
-signature. On Lite targets, peer/device authentication must therefore be
-provided by the surrounding system, such as provisioned credentials,
-secure-element-backed identity, an authenticated gateway, or another
-explicit deployment trust mechanism.
-
-The `lite` Cargo profile additionally uses size-oriented compilation settings.
-It does not change the semantics of the remaining cryptographic and RTOS
-components.
