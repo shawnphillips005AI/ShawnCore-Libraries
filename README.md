@@ -44,7 +44,7 @@ Every claim below is reproducible from a clean checkout with the commands in
 | **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
 | **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
 | **134 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
-| **61 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. |
+| **86 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. |
 | **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
 | **Fuzzed** | `ffi_aead_fuzz` with an 87-input regression corpus; CI runs 10,000 executions. |
 | **Bare-metal clean** | `cargo check --target aarch64-unknown-none` with `clippy -D warnings`. |
@@ -203,7 +203,7 @@ and the `aarch64-unknown-none` target.
 **IMPLEMENTED** — AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF and
 directional session keys, wire codecs, FFI surfaces, RTOS primitives, C HAL stubs.
 
-**TESTED** — 61 Rust #[test] functions covering crypto round trips and tampering, wire
+**TESTED** — 86 Rust #[test] functions covering crypto round trips and tampering, wire
 round trips proving semantic equivalence after decode, FFI null/zero-length and
 overlap handling, session re-establishment and replay paths, queue reuse and
 corruption paths, DMA-pool exhaustion and stale-generation rejection, scheduler
@@ -278,7 +278,7 @@ If you are an Engineering Director or Principal Architect looking to integrate P
 
 ### Validation-count note
 
-`patch.py` detects `61` Rust functions annotated with `#[test]`. This is a source-tree count, not a claim that all tests have been executed on hardware. Runtime, hardware, interoperability, and independent security validation remain distinct gates.
+`patch.py` detects `86` Rust functions annotated with `#[test]`. This is a source-tree count, not a claim that all tests have been executed on hardware. Runtime, hardware, interoperability, and independent security validation remain distinct gates.
 
 ## Lite MCU Build
 

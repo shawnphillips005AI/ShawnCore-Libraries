@@ -11,7 +11,7 @@ cargo: cargo 1.85.0 (d73d2caf9 2024-12-31)
 
 Repository inventory
 --------------------
-Rust #[test] functions (source inventory): 62
+Rust #[test] functions (source inventory): 86
 
 Locally verifiable release hygiene
 ----------------------------------

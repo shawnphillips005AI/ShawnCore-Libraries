@@ -26,7 +26,7 @@ hardware behavior, certification, production approval, or independent review.
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets` | PASS | Historical 12.3.10 execution evidence: 56 unit tests (31 crypto, 25 RTOS); the FFI facade had no unit tests. The current source tree contains 61 #[test] functions; a fresh 12.3.10 execution is not claimed by this record.  [historical execution evidence]|
+| `cargo test --workspace --all-targets` | PASS | Historical 12.3.10 execution evidence: 56 unit tests (31 crypto, 25 RTOS); the FFI facade had no unit tests. The current source tree contains 86 #[test] functions; a fresh 12.3.10 execution is not claimed by this record.  [historical execution evidence]|
 
 The executed tests cover AEAD and in-place round trips, authentication failure,
 FFI null/zero-length/overlap handling, session re-establishment, replay,
@@ -133,7 +133,7 @@ Miri: PASS (maintainer-reported) — `cargo +nightly miri test --workspace --all
 
 ## Current Source Inventory
 
-The current repository source tree contains **62 Rust functions annotated with `#[test]`**. This is a source-tree inventory, not a claim that all 62 tests were freshly executed for this release. Historical command results retain their original execution context.
+The current repository source tree contains **86 Rust functions annotated with `#[test]`**. This is a source-tree inventory, not a claim that all 62 tests were freshly executed for this release. Historical command results retain their original execution context.
 
 ## Lite Validation Matrix
 

@@ -1,9 +1,18 @@
+# Changelog
+
+All notable changes to this project are documented here. This project is a
+prototype under external technical evaluation; version numbers track the
+internal release-candidate line and do not imply certification, hardware
+qualification, or production readiness.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
+
+## [Unreleased]
+
 ### Lite MCU footprint profile
 - Added and documented a constrained-MCU Lite configuration.
 - ML-DSA remains enabled in the full/default build but is omitted from Lite.
 - Documented the resulting authentication/security boundary and validation requirements.
-
-## 12.3.11-r2
 
 ### Concurrency hardening continuation
 - Hardened both ring-buffer consumer payload read paths.
@@ -11,7 +20,8 @@
 - Preserved volatile access only for explicit secret zeroization.
 - Added regression coverage for FIFO ordering and slot scrubbing.
 
-# Changelog
+## [12.3.10] — 2026-09-11
+
 
 All notable changes to this project are documented here. This project is a
 prototype under external technical evaluation; version numbers track the
