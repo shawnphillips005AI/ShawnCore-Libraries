@@ -22,7 +22,7 @@ mod bare_metal {
 #[cfg(not(target_os = "none"))]
 use std::hint::black_box;
 #[cfg(not(target_os = "none"))]
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 #[cfg(not(target_os = "none"))]
 use shawncore_pq_crypto::aead_wrapper::{
@@ -58,24 +58,46 @@ fn iterations(default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+/// Per-batch means in ns/op; the median resists neighbour noise, the best approximates an idle machine.
 #[cfg(not(target_os = "none"))]
-fn measure<F>(mut f: F, iters: u64) -> Duration
+struct Stats {
+    median: f64,
+    best: f64,
+}
+
+#[cfg(not(target_os = "none"))]
+const BATCHES: u64 = 9;
+
+#[cfg(not(target_os = "none"))]
+fn measure<F>(mut f: F, iters: u64) -> Stats
 where
     F: FnMut(),
 {
     f();
-    let start = Instant::now();
-    for _ in 0..iters {
-        f();
+    let per_batch = (iters / BATCHES).max(1);
+    let mut means: Vec<f64> = (0..BATCHES)
+        .map(|_| {
+            let start = Instant::now();
+            for _ in 0..per_batch {
+                f();
+            }
+            start.elapsed().as_nanos() as f64 / per_batch as f64
+        })
+        .collect();
+    means.sort_by(f64::total_cmp);
+    Stats {
+        median: means[means.len() / 2],
+        best: means[0],
     }
-    start.elapsed()
 }
 
 #[cfg(not(target_os = "none"))]
-fn report(name: &str, iters: u64, total: Duration) {
-    let nanos = total.as_nanos() as f64 / iters as f64;
-    let ops = 1_000_000_000.0 / nanos;
-    println!("| {name} | {iters} | {:.3} | {:.2} |", nanos, ops);
+fn report(name: &str, iters: u64, stats: Stats) {
+    let ops = 1_000_000_000.0 / stats.median;
+    println!(
+        "| {name} | {iters} | {:.0} | {:.0} | {:.0} |",
+        stats.median, stats.best, ops
+    );
 }
 
 #[cfg(not(target_os = "none"))]
@@ -114,12 +136,12 @@ fn main() {
     );
     println!("Benchmark payload: 1024 bytes");
     println!(
-        "Timing source: std::time::Instant; one warm-up iteration; fixed deterministic inputs"
+        "Timing source: std::time::Instant; one warm-up call; {BATCHES} batches per operation; fixed deterministic inputs"
     );
     println!("Numbers are machine/toolchain dependent and are not certification evidence.");
     println!();
-    println!("| Operation | Iterations | Mean ns/op | Ops/sec |");
-    println!("|---|---:|---:|---:|");
+    println!("| Operation | Iterations | Median ns/op | Best ns/op | Ops/sec (median) |");
+    println!("|---|---:|---:|---:|---:|");
 
     let n = iterations(100);
     let dsa_n = iterations(10);
