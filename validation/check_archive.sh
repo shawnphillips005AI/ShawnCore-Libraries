@@ -3,6 +3,7 @@
 #   1. Header function declarations and exported archive symbols match exactly.
 #   2. The aarch64-unknown-none archive resolves every undefined symbol internally
 #      and references no allocator, libc I/O, or threading symbols.
+#   3. The Lite archive excludes ML-DSA and the X25519 precomputed tables.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,3 +43,20 @@ if [[ -n "$FORBIDDEN" ]]; then
     exit 1
 fi
 printf '%s\n' "[archive] aarch64-unknown-none archive is self-contained"
+
+# The Lite archive must not carry ML-DSA, its signature ABI, or the X25519 precomputed tables.
+cargo build -p shawncore-ffi --release --no-default-features --features lite --locked \
+    --target-dir "$TMP/lite-target"
+LITE_ARCHIVE="$TMP/lite-target/release/libshawncore_ffi.a"
+nm -g --defined-only "$LITE_ARCHIVE" | awk 'NF==3 {print $3}' | sort -u > "$TMP/lite-defined"
+if grep -Ei 'ml_dsa|mldsa' "$TMP/lite-defined"; then
+    printf '%s\n' "[archive][FAIL] Lite archive exports ML-DSA symbols" >&2
+    exit 1
+fi
+if nm "$LITE_ARCHIVE" 2>/dev/null | grep -Ei 'ml_dsa|mldsa|ED25519_BASEPOINT_TABLE|basepoint_table' >/dev/null; then
+    printf '%s\n' "[archive][FAIL] Lite archive contains ML-DSA or precomputed-table symbols" >&2
+    exit 1
+fi
+grep -q '^shawncore_crypto_ml_kem_keygen$' "$TMP/lite-defined" \
+    || { printf '%s\n' "[archive][FAIL] Lite archive lost ML-KEM" >&2; exit 1; }
+printf '%s\n' "[archive] Lite archive excludes ML-DSA and X25519 tables, retains ML-KEM"

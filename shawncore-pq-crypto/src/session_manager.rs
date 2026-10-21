@@ -593,6 +593,61 @@ mod tests {
         assert_eq!(nonce, [0xA5; 12]);
     }
 
+    /// The handshake has no peer authentication or key confirmation: tampering is only
+    /// detected when the first packet fails authentication.
+    #[test]
+    fn tampered_or_mismatched_handshake_inputs_fail_the_first_packet() {
+        use crate::ml_kem_wrapper::Ciphertext1024;
+        use crate::x25519_wrapper::X25519Public;
+
+        crate::test_support::install_callbacks();
+
+        let run = |tamper_ct: bool, responder_info: &[u8]| -> bool {
+            let mut responder = SessionManager::new();
+            let mut initiator = SessionManager::new();
+            let (pk, x_pk) = responder.initiate_handshake(&[0x31; 96]).unwrap();
+            let mut ct = Ciphertext1024([0; 1568]);
+            let mut my_pk = X25519Public([0; 32]);
+            initiator
+                .encapsulate_for_peer(
+                    &pk,
+                    &x_pk,
+                    &[0x42; 64],
+                    b"salt",
+                    b"info",
+                    &mut ct,
+                    &mut my_pk,
+                )
+                .unwrap();
+            if tamper_ct {
+                ct.0[0] ^= 1;
+            }
+            responder
+                .finalize_handshake(&my_pk, &ct, b"salt", responder_info)
+                .unwrap();
+
+            let mut wire = [0u8; 5];
+            let mut nonce = [0u8; 12];
+            let mut tag = [0u8; 48];
+            initiator
+                .encrypt_packet(b"aad", b"hello", &mut wire, &mut nonce, &mut tag)
+                .unwrap();
+            let mut plain = [0u8; 5];
+            let accepted = responder
+                .decrypt_packet(b"aad", &wire, &nonce, &tag, &mut plain)
+                .is_ok();
+            assert!(!accepted || &plain == b"hello");
+            accepted
+        };
+
+        assert!(
+            run(false, b"info"),
+            "untampered handshake must interoperate"
+        );
+        assert!(!run(true, b"info"), "tampered ciphertext must be detected");
+        assert!(!run(false, b"other"), "mismatched info must be detected");
+    }
+
     #[test]
     fn commit_leaves_replay_state_intact_for_sequences_below_the_window() {
         let mut manager = SessionManager::new();

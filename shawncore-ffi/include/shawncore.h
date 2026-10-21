@@ -109,7 +109,9 @@ void shawncore_crypto_register_disable_interrupts(shawncore_disable_interrupts_c
 void shawncore_crypto_register_restore_interrupts(shawncore_restore_interrupts_callback callback);
 void shawncore_crypto_register_cache_flush(shawncore_cache_callback callback);
 
-/* SHA-384 software known-answer self-test. This is not FIPS 140-3 certification or a hardware POST. */
+/* Software known-answer self-test: SHA-384, HMAC-SHA384, HKDF-Expand-SHA384, X25519, ChaCha20 keystream.
+ * Register the cache-flush callback first: the HMAC/HKDF/AEAD paths call it, and an unregistered callback halts.
+ * No ML-KEM or ML-DSA vector is included. This is not FIPS 140-3 certification or a hardware POST. */
 shawncore_crypto_err shawncore_crypto_self_test(void);
 
 /* Session input buffers and mutable session/output objects must not overlap. */

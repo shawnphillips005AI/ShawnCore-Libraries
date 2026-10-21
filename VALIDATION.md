@@ -24,19 +24,19 @@ hardware behavior, certification, production approval, or independent review.
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | PASS | Executed and passed. |
 | `cargo check --target aarch64-unknown-none --workspace --locked` | PASS | Executed and passed; compile check only, not target execution. |
 | `cargo audit` and `cargo audit --file fuzz/Cargo.lock` | PASS | cargo-audit 0.22.2 against 1,348 advisories: no advisories for either lockfile (54 and 52 crates). |
-| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 111 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
+| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 114 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
 
 ## TEST VALIDATION
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 111 #[test] functions passed in both profiles: 53 in `shawncore-pq-crypto` (42 unit, 8 known-answer, 3 regression-vector), 37 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 20 in the validation harness (host traces, layout contracts, version-drift guards and the 11-test spec-sheet suite). |
-| `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 49 tests (39 unit, 8 known-answer, 2 regression-vector); the ML-DSA tests are feature-gated out. |
+| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 114 #[test] functions passed in both profiles: 56 in `shawncore-pq-crypto` (45 unit, 8 known-answer, 3 regression-vector), 37 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 20 in the validation harness (host traces, layout contracts, version-drift guards and the 11-test spec-sheet suite). |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 52 tests (42 unit, 8 known-answer, 2 regression-vector); the ML-DSA tests are feature-gated out. |
 | `cargo test -p shawncore-validation --test spec_sheet --locked` | PASS | 11 tests: crypto and wire sizes, replay window (offset 63 accepted, 64 rejected), nonce format, uniform-entropy rejection, entropy queue capacity and mix bound, scheduler/state machine/TCB, DMA pool alignment, token and zeroization behavior, object sizes, the C header surface (function, type and callback counts, no secret-key serialization), and drift checks that the README, ARCHITECTURE, VALIDATION, RELEASE_MANIFEST, CI workflow and BENCHMARKS record state the same numbers. It found a mis-rounded ops/sec figure in the README on its first run. |
-| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (53 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (56 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
 | Repeated lib-test runs | PASS | The `shawncore-pq-crypto` unit-test binary ran 300 consecutive times with a 20 s hang timeout: 0 failures, 0 hangs. Before the test-callback fix the same loop hung in roughly 1 run in 17. |
 | `validation/run_tsan.sh` (nightly ThreadSanitizer) | PASS | Standalone workload of 3 rounds x 100,000 SPSC and ring-buffer transfers completed with no reported data race. |
-| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (53) and `shawncore-rtos-sync` (37) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
+| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (56) and `shawncore-rtos-sync` (37) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
 | `cargo +nightly miri test -p shawncore-rtos-sync` with `-Zmiri-symbolic-alignment-check` | PASS | 37 tests passed. With `-Zmiri-strict-provenance` the run stops at the first scheduler test: the scheduler API takes stack addresses as integers (`u64`) and casts them to pointers, which strict provenance rejects by design. Miri was not run on the lattice-heavy `shawncore-pq-crypto` tests; it ran on `shawncore-rtos-sync` (37 tests) and on the crypto crate's entropy-pool, entropy-queue and session-state unit tests (12), all with `-Zmiri-symbolic-alignment-check`. That run caught undefined behavior in the test-only cache-flush dispatcher (an integer-to-function-pointer transmute), which is fixed. |
 
 Known-answer tests (`shawncore-pq-crypto/tests/known_answers.rs`) check HMAC-SHA384
@@ -78,6 +78,7 @@ before dispatching cache maintenance.
 | C wire handshake | PASS | The smoke binary drives two session managers through a complete hybrid handshake with every public value passed through its wire codec, then an authenticated packet exchange and a replay rejection. |
 | Public-symbol check | PASS | Header declarations and archive exports were compared and matched exactly: 135 symbols, empty diff. |
 | Self-contained archive check | PASS | `validation/check_archive.sh`: for `aarch64-unknown-none`, the set of undefined symbols minus the set of archive-defined symbols is empty, and `nm` shows no `malloc`, `free`, `__rust_alloc`, libc I/O, or pthread references. |
+| Lite archive exclusions | PASS | `validation/check_archive.sh` builds the Lite archive in a scratch target directory and fails if it exports or contains any ML-DSA symbol or the `ED25519_BASEPOINT_TABLE` precomputed table, or if it loses ML-KEM. The same patterns are confirmed present in the full archive, so the check is not vacuous. |
 | AddressSanitizer C smoke | PASS | `make -C integration asan` built with `-fsanitize=address` and executed with `ASAN_OPTIONS=detect_leaks=1`; no findings. |
 | Valgrind C smoke | PASS | `make -C integration valgrind` reported `ERROR SUMMARY: 0 errors from 0 contexts` and `in use at exit: 0 bytes in 0 blocks`. |
 | Rust-instrumented AddressSanitizer | PASS | See `validation/run_asan.sh` above. The earlier `zeroize_derive` (`E0463`) failure came from sanitizing proc-macros; an explicit `--target` avoids it. |
@@ -107,11 +108,12 @@ evidence only for its harness and duration; it is not proof of security.
 | Area | Result | Scope |
 | --- | --- | --- |
 | Unsafe code | REVIEWED | Raw pointers, FFI storage, callback conversion, stack canaries, queue payload access, and DMA byte zeroization were inspected. |
-| FFI | REVIEWED | Null and zero-length conventions, input/output/control/backing overlap checks, opaque lifecycle, alignment, callback ABI, and session-manager aliasing were inspected. |
+| FFI | REVIEWED | Null and zero-length conventions, input/output/control/backing overlap checks, opaque lifecycle, alignment, callback ABI, and session-manager aliasing were inspected. The 12.3.11 audit of every `extern "C"` entry point found one missing alignment check (`encapsulate_for_peer`) and one reference-ordering hazard (`scheduler_create_task`); both are fixed with regression coverage for the former. No allocator use exists in library code (only test modules use `Box`). |
 | Concurrency | MODEL PASS | SPSC ownership and Acquire/Release publication were reasoned about under the Rust memory model. No formal model checker was run. |
 | DMA/cache | REVIEWED | Cache callback transitions and the limits of page alignment/atomics were inspected; hardware coherency was not tested. |
 | Crypto | REVIEWED | AEAD lengths/authentication, X25519 checks, 128-byte hybrid KDF, directional key assignment, and cleanup paths were inspected. |
 | Session/replay | REVIEWED | Authentication precedes replay-state commitment; re-establishment resets state before replacement keys are installed. |
+| Handshake | REVIEWED | Unauthenticated by design: no peer identity, key confirmation, or full transcript binding. A test shows tampered ciphertext or mismatched `info` is detected only at the first packet. See SECURITY.md section 10. |
 | Package hygiene | PASS | `cargo package --list` for all three crates listed 45 source/metadata files with no generated artifact paths. |
 
 ## TARGET/HARDWARE VALIDATION
@@ -155,7 +157,7 @@ addresses, and `shawncore-pq-crypto` has only been run under Miri on its entropy
 
 ## Current Source Inventory
 
-The repository contains **111 Rust functions annotated with `#[test]`**. All 111 were
+The repository contains **114 Rust functions annotated with `#[test]`**. All 114 were
 executed and passed in the `cargo test --workspace --all-targets` runs recorded
 above.
 

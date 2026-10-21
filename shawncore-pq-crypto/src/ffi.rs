@@ -344,6 +344,14 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
     {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !ptr_is_aligned(manager)
+        || !ptr_is_aligned(peer_ml_kem_pk)
+        || !ptr_is_aligned(peer_x25519_pk)
+        || !ptr_is_aligned(out_ct)
+        || !ptr_is_aligned(out_my_x25519_pk)
+    {
+        return ShawncoreCryptoErr::InvalidState;
+    }
     if (salt.is_null() && salt_len > 0) || (info.is_null() && info_len > 0) {
         return ShawncoreCryptoErr::InvalidLength;
     }
@@ -1671,9 +1679,11 @@ pub unsafe extern "C" fn shawncore_crypto_entropy_mix() -> ShawncoreCryptoErr {
 
 /// Software cryptographic self-test suite.
 ///
-/// Executes known-answer tests for SHA-384, HMAC-SHA384, HKDF-SHA384, and
-/// X25519. This validates the linked software cryptographic paths; it does not
-/// claim FIPS certification, a formal power-on test, or physical-silicon verification.
+/// Executes known-answer tests for SHA-384, HMAC-SHA384, HKDF-SHA384, X25519, and the
+/// ChaCha20 keystream. The cache-flush callback must be registered first because the
+/// HMAC/HKDF/AEAD paths invoke it. ML-KEM and ML-DSA are not covered. This validates the
+/// linked software cryptographic paths; it does not claim FIPS certification, a formal
+/// power-on test, or physical-silicon verification.
 #[no_mangle]
 pub extern "C" fn shawncore_crypto_self_test() -> ShawncoreCryptoErr {
     use sha2::{Digest, Sha384};
@@ -1743,6 +1753,33 @@ pub extern "C" fn shawncore_crypto_self_test() -> ShawncoreCryptoErr {
     }
 
     let _ = alice_public;
+
+    // 5. ChaCha20 keystream through the AEAD cipher path (RFC 8439 A.1 test vector #1:
+    // zero key, zero nonce, block counter 0; cross-checked with OpenSSL).
+    let chacha_expected: [u8; 64] = [
+        0x76, 0xb8, 0xe0, 0xad, 0xa0, 0xf1, 0x3d, 0x90, 0x40, 0x5d, 0x6a, 0xe5, 0x53, 0x86, 0xbd,
+        0x28, 0xbd, 0xd2, 0x19, 0xb8, 0xa0, 0x8d, 0xed, 0x1a, 0xa8, 0x36, 0xef, 0xcc, 0x8b, 0x77,
+        0x0d, 0xc7, 0xda, 0x41, 0x59, 0x7c, 0x51, 0x57, 0x48, 0x8d, 0x77, 0x24, 0xe0, 0x3f, 0xb8,
+        0xd8, 0x4a, 0x37, 0x6a, 0x43, 0xb8, 0xf4, 0x15, 0x18, 0xa1, 0x1c, 0xc3, 0x87, 0xb6, 0x69,
+        0xb2, 0xee, 0x65, 0x86,
+    ];
+    let mut keystream = [0u8; 64];
+    let mut unused_tag = [0u8; 48];
+    if aead_encrypt(
+        &[0u8; 32],
+        &[0u8; 32],
+        &[0u8; 12],
+        &[],
+        &[0u8; 64],
+        &mut keystream,
+        &mut unused_tag,
+    )
+    .is_err()
+        || keystream.ct_eq(&chacha_expected).unwrap_u8() != 1
+    {
+        return ShawncoreCryptoErr::VerificationFailed;
+    }
+
     ShawncoreCryptoErr::Success
 }
 
@@ -2043,6 +2080,56 @@ mod wire_codec_tests {
             unsafe { shawncore_crypto_session_manager_init(misaligned) },
             ShawncoreCryptoErr::InvalidState
         );
+    }
+
+    #[test]
+    fn self_test_passes_with_cache_callback_registered() {
+        install_callbacks();
+        assert_eq!(shawncore_crypto_self_test(), ShawncoreCryptoErr::Success);
+    }
+
+    #[test]
+    fn encapsulate_for_peer_rejects_misaligned_typed_pointers() {
+        assert!(core::mem::align_of::<SessionManager>() > 1);
+        assert!(core::mem::align_of::<PublicKey1024>() > 1);
+
+        let mut manager_raw = [0u8; core::mem::size_of::<SessionManager>() + 64];
+        let pk_raw = [0u8; core::mem::size_of::<PublicKey1024>() + 64];
+        let mut manager = MaybeUninit::<SessionManager>::uninit();
+        let pk = MaybeUninit::<PublicKey1024>::uninit();
+        let x25519_pk = X25519Public([0x11; 32]);
+        let entropy = [0x22u8; 64];
+        let mut out_ct = Ciphertext1024([0; 1568]);
+        let mut out_pk = X25519Public([0; 32]);
+
+        let mut call = |manager: *mut SessionManager, peer_pk: *const PublicKey1024| unsafe {
+            shawncore_crypto_session_manager_encapsulate_for_peer(
+                manager,
+                peer_pk,
+                &x25519_pk,
+                entropy.as_ptr(),
+                core::ptr::null(),
+                0,
+                core::ptr::null(),
+                0,
+                &mut out_ct,
+                &mut out_pk,
+            )
+        };
+
+        let misaligned_manager =
+            unsafe { manager_raw.as_mut_ptr().add(1).cast::<SessionManager>() };
+        assert_eq!(
+            call(misaligned_manager, pk.as_ptr()),
+            ShawncoreCryptoErr::InvalidState
+        );
+
+        let misaligned_pk = unsafe { pk_raw.as_ptr().add(1).cast::<PublicKey1024>() };
+        assert_eq!(
+            call(manager.as_mut_ptr(), misaligned_pk),
+            ShawncoreCryptoErr::InvalidState
+        );
+        assert_eq!(out_ct.0, [0; 1568]);
     }
 
     #[test]

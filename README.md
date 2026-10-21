@@ -58,7 +58,7 @@ Every claim below is reproducible from a clean checkout with
 | **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
 | **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
 | **135 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
-| **111 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 49-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
+| **114 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 52-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
 | **Known-answer tests for the classical primitives** | HMAC-SHA384 (RFC 4231), X25519 (RFC 7748 section 6.1), HKDF-SHA384, the hybrid KDF, and the AEAD framing, with vectors produced by independent implementations. ML-KEM/ML-DSA have regression vectors only; see the open gates below. |
 | **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
 | **Fuzzed** | Three harnesses (`ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz`) with retained regression corpora; CI runs 10,000 executions of each. |
@@ -277,6 +277,11 @@ transmit and replay state before installing replacements. Sensitive material is
 explicitly zeroized on every return path, success or error. Secret keys have no
 serialization entry point and cannot be exported through the ABI.
 
+**The handshake is not authenticated.** It performs hybrid key agreement only: no
+peer identity, no key confirmation, and no full-transcript binding. An active
+man-in-the-middle is not defended against until an integrator adds an
+authenticated layer; SECURITY.md section 10 lists the required properties.
+
 Full trust boundaries, in-scope and out-of-scope threats, known limitations, and
 the host integration contract: **[SECURITY.md](SECURITY.md)**.
 
@@ -387,7 +392,7 @@ The evidence behind each line is in [VALIDATION.md](VALIDATION.md).
 **IMPLEMENTED** — AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF and
 directional session keys, wire codecs, FFI surfaces, RTOS primitives, C HAL stubs.
 
-**TESTED** — 111 Rust #[test] functions covering crypto round trips and tampering,
+**TESTED** — 114 Rust #[test] functions covering crypto round trips and tampering,
 known-answer vectors for the classical primitives, wire round trips proving
 semantic equivalence after decode, FFI null/zero-length and overlap handling,
 session re-establishment and replay paths, queue reuse and corruption paths,
@@ -416,7 +421,7 @@ model cache-coherent DMA hardware.
 
 **NOT YET VALIDATED** — target ABI interoperability, cache coherency, DMA
 visibility, ISR/NMI/FIQ behavior, watchdog behavior, entropy-source quality,
-Rust-instrumented sanitizer tests, ML-KEM/ML-DSA known-answer and external
+ML-KEM/ML-DSA known-answer and external
 interoperability tests, free-list ABA-tag wraparound, and independent security
 review.
 
@@ -428,7 +433,7 @@ This is a prototype for technical evaluation. It is not a claim of FIPS
 certification, CNSA approval, operational USV readiness, or comprehensive
 security assurance. The 32-bit DMA-pool free-list ABA tag can wrap after $2^{32}$
 free-list mutations; deployments must bound that operational lifetime or
-reinitialize the pool. No peer identity, PKI, trust-anchor, or revocation model
+reinitialize the pool. The session handshake is unauthenticated, and no peer identity, PKI, trust-anchor, or revocation model
 is defined here; that protocol layer belongs to the integrator. Retained
 regression tests do not establish target timing, cache, or physical-memory
 behavior.

@@ -110,8 +110,7 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
             return Err(IpcError::InvalidMemory);
         }
 
-        // Ordering::SeqCst ensures that the initialization state is globally visible
-        // before any producer or consumer attempts to access the queue.
+        // Acquire/Release on the init flags orders initialization before any push/pop.
         if self.is_initialized.load(Ordering::Acquire)
             || self
                 .is_initializing

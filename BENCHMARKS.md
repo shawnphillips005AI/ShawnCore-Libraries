@@ -68,11 +68,11 @@ README footprint table).
 
 ## Interpreting Results
 
-Results depend on CPU, OS, compiler, optimization level, cache state, and the selected dependency implementations. They should not be represented as certification evidence, constant-time proof, or target-hardware performance. For acquisition diligence, record the exact machine, Rust toolchain, commit, and command alongside any quoted numbers.
+Results depend on CPU, OS, compiler, optimization level, cache state, and the selected dependency implementations. They should not be represented as certification evidence, constant-time proof, or target-hardware performance. For evaluation, record the exact machine, Rust toolchain, commit, and command alongside any quoted numbers.
 
 ## Embedded Footprint
 
-The benchmark harness intentionally does not invent flash/RAM/stack numbers for a target that has not been measured. Target-specific footprint should be collected from the buyer's actual architecture/toolchain using its normal linker/map-file tooling.
+The benchmark harness intentionally does not invent flash/RAM/stack numbers for a target that has not been measured. Target-specific footprint should be collected from the integrator's actual architecture/toolchain using its normal linker/map-file tooling.
 
 ## Lite Footprint Measurements
 

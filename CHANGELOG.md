@@ -9,6 +9,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [12.3.11] — 2026-10-21
 
+### Security hardening audit
+- **Fixed:** `shawncore_crypto_session_manager_encapsulate_for_peer` now rejects
+  misaligned `manager`, peer-key and output pointers (`InvalidState`) before forming
+  Rust references, matching every other typed-pointer entry point.
+- **Fixed:** `shawncore_rtos_scheduler_create_task` copies the TCB before forming the
+  `&mut` scheduler reference, so a pointer into scheduler storage cannot alias it.
+- `shawncore_crypto_self_test()` now also checks the RFC 8439 A.1 ChaCha20 keystream
+  (matches OpenSSL). Its HMAC-SHA384, HKDF and X25519 expected values are not
+  official vectors; they were independently re-verified with Python. The self-test requires the cache-flush
+  callback to be registered; this is now stated in the header and SECURITY.md.
+- `validation/check_archive.sh` now builds the Lite archive and fails if it contains
+  ML-DSA or X25519 precomputed-table symbols or loses ML-KEM.
+- New regression tests: misaligned `encapsulate_for_peer` pointers, self-test, and
+  tampered/mismatched handshake inputs failing the first packet.
+- Documentation: SECURITY.md now records the handshake assessment (no peer
+  authentication, no key confirmation, partial transcript, entropy reuse) with the
+  properties an authenticated handshake must have, the limits of the panic guard,
+  the self-test scope, and the sanitizer status. Misleading SPSC ordering comments
+  were corrected. No protocol was redesigned and no ABI changed.
+
 ### Changed
 - Upgraded the pinned Rust toolchain from 1.85.0 to 1.99.1 (`rust-toolchain.toml`,
   CI workflow, and documentation). The minimum supported Rust version is 1.88, the
@@ -128,7 +148,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Security & Performance
 - **CAS Bus Starvation (Hardware Livelock):** Injected `core::hint::spin_loop()` into the `compare_exchange_weak` failure branches of the State Machine and Latency Tracker. This emits hardware `YIELD` instructions, preventing tight CAS loops from flooding the memory controller and starving concurrent cores.
-- **Double-Panic Abort Prevention:** Wrapped the `no_std` FFI panic handler in an `AtomicBool` reentrancy guard. If the host C-callback triggers a secondary Rust panic, the system now safely halts via a spin loop rather than triggering an uncatchable hardware `ud2` illegal instruction abort.
+- **Double-Panic Abort Prevention:** Wrapped the `no_std` FFI panic handler in an `AtomicBool` reentrancy guard. If the host C-callback triggers a secondary Rust panic, the system now spins in the hook-then-halt path rather than recursing. The guard only limits recursion; it cannot recover system state or guarantee a safe stop on every target.
 
 ## [12.3.7] — 2026-09-10
 

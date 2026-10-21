@@ -320,8 +320,9 @@ pub unsafe extern "C" fn shawncore_rtos_scheduler_create_task(
         return ShawncoreRtosErr::InvalidMemory;
     }
 
-    let scheduler_ref = unsafe { &mut *scheduler };
+    // Copy the TCB before forming `&mut` so a caller-supplied pointer into scheduler storage cannot alias it.
     let tcb_val = unsafe { *tcb };
+    let scheduler_ref = unsafe { &mut *scheduler };
 
     match unsafe { scheduler_ref.create_task(tcb_val, canary_value) } {
         Ok(_) => ShawncoreRtosErr::Success,

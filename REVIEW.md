@@ -30,6 +30,9 @@ uses the complementary assignment.
 
 ## Important Boundaries
 
+- The handshake is unauthenticated (no peer identity, key confirmation, or full
+  transcript binding) and is the highest-priority review item; see SECURITY.md
+  section 10 for the assessment and the properties an authenticated layer needs.
 - Session decryption verifies authentication before committing replay-window
   state. Session re-establishment clears existing directional keys and replay
   state before replacing them.

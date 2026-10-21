@@ -106,8 +106,21 @@ in portable `no_std` Rust at all.
   `ml-kem`/`ml-dsa` output; the latter detect dependency drift and are not
   conformance evidence. Algorithm identifiers refer to the FIPS 203 and FIPS 204
   standards by name only; they are not certification claims.
-- No Rust-instrumented AddressSanitizer result exists; the sanitizer build was
-  blocked by a dependency resolution failure. See [VALIDATION.md](VALIDATION.md).
+- Rust-instrumented AddressSanitizer and ThreadSanitizer runs are part of the
+  release gate (see [VALIDATION.md](VALIDATION.md)); they detect only what the
+  executed tests exercise and are not a proof of absence of memory errors.
+- Miri has not been run on the lattice-heavy ML-KEM/ML-DSA tests.
+- The panic handler's reentrancy guard only limits recursion: a panic raised
+  while the hook is already running spins instead of recursing. It cannot
+  recover system state, and a panic with a lock held or interrupts disabled
+  leaves them that way once the hook returns and the handler spins.
+- The `shawncore-ffi` staticlib exports the single `#[panic_handler]` and
+  `rust_eh_personality`. A Rust program that links this staticlib alongside its
+  own `no_std` runtime will see duplicate-symbol errors.
+- `shawncore_crypto_self_test()` covers SHA-384, HMAC-SHA384, HKDF-Expand-SHA384,
+  X25519 and the ChaCha20 keystream only. It requires the cache-flush callback
+  to be registered first, includes no ML-KEM/ML-DSA vector, and is not a FIPS
+  power-on self-test.
 - No formal model checking of the concurrency design has been performed.
 
 ## Host Integration Requirements
@@ -129,6 +142,9 @@ shawncore_crypto_register_disable_interrupts(host_disable_irq);
 shawncore_crypto_register_restore_interrupts(host_restore_irq);
 shawncore_crypto_register_cache_flush(host_cache_flush);
 ```
+
+An unregistered cache-flush callback halts the caller by design, so register it
+before the first call to any HMAC, HKDF, AEAD, session, or self-test function.
 
 RTOS:
 
@@ -235,6 +251,39 @@ none of the decoders authenticates a peer. Binding a public key to a peer identi
 ML-DSA signatures over a transcript, a pre-provisioned trust anchor, or an
 out-of-band channel — is your protocol layer's responsibility. Without it the
 handshake is unauthenticated and open to an active man-in-the-middle.
+
+### 10. The handshake is unauthenticated; required properties of an authenticated one
+
+The session handshake performs hybrid key agreement only. Assessment of the
+current implementation:
+
+- **No peer identity.** Nothing binds either public key to an identity. ML-DSA-87
+  primitives exist but are not connected to the handshake. An active attacker can
+  substitute keys and terminate a session with each side separately.
+- **No key confirmation.** Neither side proves possession of the derived keys, so
+  a mismatched or tampered handshake is detected only when the first packet fails
+  authentication.
+- **Partial transcript.** The KDF input covers the ML-KEM ciphertext, the
+  encapsulating peer's X25519 public key and caller `info`. It does not cover the
+  key-generating peer's ML-KEM or X25519 public keys, roles, a protocol version or
+  algorithm identifiers. Put these into `info` until a defined protocol exists.
+- **Entropy reuse reuses nonces.** Starting or completing a handshake resets the
+  packet counters. If both peers reuse the entropy they supplied earlier, the
+  derived keys and the nonce sequence repeat, which breaks confidentiality and
+  authenticity. The host must never supply the same entropy twice.
+- **No negotiation.** The library has a single fixed suite, so it exposes no
+  in-library downgrade surface; an integrator-added negotiation must be covered
+  by the signed transcript.
+
+This repository does not define the replacement protocol. A design for expert
+review should include: pre-provisioned ML-DSA trust anchors; a signature over the
+full transcript (both parties' public keys and ciphertext, roles, version, suite
+identifier, a fresh nonce from each side); key-confirmation MACs under keys
+derived from the transcript; and a rekey policy that bounds the packet counter.
+The `info` and `salt` parameters are bound into the KDF, so a protocol layer can
+add its transcript without changing the ABI. Do not describe the library as
+resistant to active man-in-the-middle attacks until that layer exists and is
+reviewed.
 
 ## Build and Link
 

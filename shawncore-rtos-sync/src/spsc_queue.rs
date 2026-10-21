@@ -30,7 +30,8 @@ pub struct CacheAlignedIndex(pub AtomicUsize);
 pub struct CacheAlignedSlot<T> {
     /// The underlying data cell.
     pub data: UnsafeCell<T>,
-    /// Even while stable, odd while a producer is modifying the slot.
+    /// Defensive diagnostic: even while stable, odd while the producer writes the slot.
+    /// Correct SPSC use is synchronized by `head`/`tail` Acquire/Release, not by this counter.
     pub sequence_counter: AtomicUsize,
 }
 
@@ -128,8 +129,7 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
             return Err(IpcError::InvalidMemory);
         }
 
-        // Ordering::SeqCst ensures that the initialization state is globally visible
-        // before any producer or consumer attempts to access the queue.
+        // Acquire/Release on the init flags orders initialization before any push/pop.
         if self.is_initialized.load(Ordering::Acquire)
             || self
                 .is_initializing
