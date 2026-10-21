@@ -37,6 +37,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   self-containment). Its `fail()` helper printed a literal `%s` and is fixed.
 
 ### Added
+- README "Specifications" sheet (cryptographic suite, session behavior, entropy, RTOS
+  primitives, C interface, object sizes, build/platform) and measured host reference
+  results, also recorded with machine, toolchain, commit and command in `BENCHMARKS.md`.
 - `LICENSES/AGPL-3.0-or-later.txt`: the unmodified AGPLv3 text that `LICENSE` offers
   by reference, so recipients receive a copy with the source.
 - `shawncore.h` is now valid C++ (it declared `extern "C"` but did not parse as

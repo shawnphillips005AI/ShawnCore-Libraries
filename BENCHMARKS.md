@@ -22,6 +22,34 @@ The harness performs one warm-up operation and then reports mean nanoseconds per
 
 The harness reports ML-KEM-1024 key generation/encapsulation/decapsulation, ML-DSA-87 key generation/sign/verify, X25519 key generation/Diffie-Hellman, HKDF-SHA384, HMAC-SHA384, the hybrid KDF, and 1 KiB AEAD encryption/decryption.
 
+## Reference Results
+
+Recorded for release 12.3.11, source commit `f32bcf6`.
+
+- **Machine:** AMD EPYC 7763, 2 vCPU development container, x86-64 Linux
+- **Toolchain:** Rust 1.99.1, `release` profile (`lto = "fat"`, `codegen-units = 1`)
+- **Command:** `SHAWNCORE_BENCH_ITERS=500 cargo run -p shawncore-benchmarks --release --locked`
+
+| Operation | Iterations | Mean ns/op | Ops/sec |
+|---|---:|---:|---:|
+| ML-KEM-1024 keygen | 500 | 162,888 | 6,139 |
+| ML-KEM-1024 encapsulate | 500 | 104,483 | 9,571 |
+| ML-KEM-1024 decapsulate | 500 | 125,856 | 7,946 |
+| ML-DSA-87 keygen | 500 | 1,206,640 | 829 |
+| ML-DSA-87 sign (1 KiB) | 500 | 883,870 | 1,131 |
+| ML-DSA-87 verify (1 KiB) | 500 | 387,234 | 2,582 |
+| X25519 keygen | 500 | 120,950 | 8,268 |
+| X25519 Diffie-Hellman | 500 | 286,805 | 3,487 |
+| HKDF-SHA384 (128 B) | 500 | 3,332 | 300,136 |
+| HMAC-SHA384 (1 KiB) | 500 | 5,319 | 188,004 |
+| Hybrid KDF (128 B) | 500 | 7,012 | 142,606 |
+| AEAD encrypt (1 KiB) | 500 | 5,607 | 178,353 |
+| AEAD decrypt (1 KiB) | 500 | 5,962 | 167,716 |
+
+The container is shared and the harness is single-threaded with one warm-up
+iteration, so expect run-to-run variation of several percent. Treat these as a
+relative comparison between operations on one machine.
+
 ## Interpreting Results
 
 Results depend on CPU, OS, compiler, optimization level, cache state, and the selected dependency implementations. They should not be represented as certification evidence, constant-time proof, or target-hardware performance. For acquisition diligence, record the exact machine, Rust toolchain, commit, and command alongside any quoted numbers.

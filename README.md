@@ -68,6 +68,103 @@ Every claim below is reproducible from a clean checkout with
 
 ---
 
+## Specifications
+
+### Cryptographic suite
+
+| Function | Algorithm | Sizes |
+|---|---|---|
+| Post-quantum key establishment | ML-KEM-1024 (FIPS 203) | Public key and ciphertext 1,568 B on the wire; 32 B shared secret; 64 B keygen seed; 32 B encapsulation entropy |
+| Classical key agreement | X25519 (RFC 7748) | 32 B public key, secret and shared secret; low-order and all-zero peer points rejected |
+| Hybrid derivation | HKDF-SHA384 over `ML-KEM secret ‖ X25519 secret` | 128 B output, split into two independent 64 B directional keys |
+| Digital signatures (optional) | ML-DSA-87 (FIPS 204) | Public key 2,592 B, signature 4,627 B on the wire; 32 B keygen seed |
+| Packet protection | ChaCha20 (RFC 8439, 96-bit nonce) + HMAC-SHA384, Encrypt-then-MAC | 32 B cipher key, 32 B MAC key, 48 B tag; MAC covers `len(aad) ‖ len(ct) ‖ nonce ‖ aad ‖ ct` |
+| Handshake transcript | SHA-384 over protocol label, ciphertext, sender X25519 key and caller info | 48 B, passed to HKDF as `info` |
+
+### Session behavior
+
+| Property | Value |
+|---|---|
+| Handshake entropy | 96 B for the responder (64 ML-KEM seed + 32 X25519), 64 B for the initiator (32 encapsulation + 32 X25519); uniform all-zero or all-`0xFF` input is rejected |
+| Nonce | 12 B: 64-bit little-endian counter plus four zero bytes, one counter per direction |
+| Sequence space | $2^{64}-1$ packets per direction; exhaustion is rejected before wraparound, and a failed encryption never consumes a nonce |
+| Replay window | 64 packets; authentication precedes any window update; sequences below the window are rejected |
+| Largest packet per nonce | $2^{38}-64$ bytes (ChaCha20 32-bit block-counter limit) |
+| Re-establishment | Zeroizes prior keys, counters and window before installing new keys |
+| Key material | No serialization entry point for secret keys; zeroized on every return path |
+
+### Entropy
+
+| Property | Value |
+|---|---|
+| Host interface | `shawncore_crypto_entropy_push`: 32 B chunks into a 64-slot lock-free SPSC queue |
+| Accumulator | 48 B SHA-384 state; at most 8 queued chunks mixed per call so ISR-triggered mixing stays bounded |
+| Output | Domain-separated SHA-384 (`0x00` output, `0x01` state evolution) with forward-secret state update |
+| Starvation | Typed error (`ENTROPY_STARVATION`), never a silent weak key |
+
+### RTOS primitives
+
+| Primitive | Specification |
+|---|---|
+| Scheduler | 16 priority levels, 16-bit ready bitmap, O(1) selection (`trailing_zeros`), stack canary per task, watchdog petted only after every critical task checks in; 1,088 B per core |
+| Task control block | 64 B, 64 B aligned |
+| Queues | Lock-free SPSC queue and ring buffer, 64 B cache-line slots, sequence-validated reads, slot scrub on consume |
+| DMA pool | Lock-free ABA-tagged free list (32-bit index + 32-bit generation), 63-bit per-slot generation token rejects stale frees, 4,096 B backing alignment, slot zeroized and cache-flushed on free |
+| State machine | 5 states (`Init`, `Bootstrapping`, `Operational`, `Degraded`, `Terminal`), lock-free CAS, `Terminal` is absorbing |
+| Interrupt-aware spinlock, latency tracker, telemetry queue | Included; all host interaction through registered callbacks |
+
+### C interface
+
+| Property | Value |
+|---|---|
+| Header | One file, [`shawncore.h`](shawncore-ffi/include/shawncore.h): C99/C11 and C++11 or later, `SHAWNCORE_VERSION_*` macros |
+| Surface | 135 exported functions, 24 sized types each with `_sizeof()` / `_alignof()` (all 64 B aligned) |
+| Errors | Typed status enums for crypto and RTOS; nothing is signalled out of band |
+| Host callbacks | Seven: `panic`, `disable_interrupts`, `restore_interrupts`, `cache_flush`, `cache_invalidate`, `monotonic_clock`, `pet_watchdog` |
+| Linking | One static archive; no libc, no allocator, no unwinding |
+
+### Object sizes (bytes, reference build)
+
+| Object | Size | Object | Size |
+|---|---:|---|---:|
+| Session manager | 4,608 | ML-DSA verifying key | 73,856 |
+| ML-KEM public key | 2,112 | ML-DSA signing key | 104,640 |
+| ML-KEM decapsulation key | 4,288 | ML-DSA signature | 4,672 |
+| ML-KEM ciphertext | 1,600 | Scheduler | 1,088 |
+| X25519 key or secret | 64 | DMA pool control object | 4,160 |
+
+In-memory sizes are larger than the wire sizes above; the full table is in
+[ARCHITECTURE.md](ARCHITECTURE.md#92-caller-allocated-opaque-objects).
+
+### Host reference performance
+
+Single thread, `release` profile, 1 KiB payload, 500 iterations, AMD EPYC 7763
+(2 vCPU container), Rust 1.99.1. These are host numbers for comparing
+operations against each other, not target-hardware performance, a constant-time
+claim, or certification evidence. Method and exact command:
+[BENCHMARKS.md](BENCHMARKS.md).
+
+| Operation | Mean time | Ops/sec |
+|---|---:|---:|
+| ML-KEM-1024 keygen / encapsulate / decapsulate | 163 / 104 / 126 µs | 6,139 / 9,571 / 7,946 |
+| X25519 keygen / Diffie-Hellman | 121 / 287 µs | 8,268 / 3,487 |
+| ML-DSA-87 keygen / sign / verify | 1,207 / 884 / 387 µs | 829 / 1,131 / 2,582 |
+| HKDF-SHA384 (128 B) / hybrid KDF (128 B) | 3.3 / 7.0 µs | 300,136 / 142,606 |
+| HMAC-SHA384 (1 KiB) | 5.3 µs | 188,004 |
+| AEAD encrypt / decrypt (1 KiB) | 5.6 / 6.0 µs | 178,353 / 167,716 |
+
+### Build and platform
+
+| Property | Value |
+|---|---|
+| Targets built and checked | x86-64 Linux host, `aarch64-unknown-none` |
+| Language | `no_std` Rust, edition 2021, `panic = "abort"` |
+| Toolchain | Minimum Rust 1.88, developed on 1.99.1 |
+| Configurations | Full (ML-DSA enabled), `usv` (size-optimized), `lite` (no ML-DSA); footprint figures below |
+| License | AGPLv3 or commercial; see [License](#license) |
+
+---
+
 ## Architecture at a glance
 
 ```mermaid
