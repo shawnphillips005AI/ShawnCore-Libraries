@@ -58,7 +58,7 @@ Every claim below is reproducible from a clean checkout with
 | **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
 | **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
 | **135 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
-| **100 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 49-test suite. |
+| **111 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 49-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
 | **Known-answer tests for the classical primitives** | HMAC-SHA384 (RFC 4231), X25519 (RFC 7748 section 6.1), HKDF-SHA384, the hybrid KDF, and the AEAD framing, with vectors produced by independent implementations. ML-KEM/ML-DSA have regression vectors only; see the open gates below. |
 | **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
 | **Fuzzed** | Three harnesses (`ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz`) with retained regression corpora; CI runs 10,000 executions of each. |
@@ -151,7 +151,7 @@ performance, a constant-time claim, or certification evidence.
 | ML-KEM-1024 keygen / encapsulate / decapsulate | 52 / 51 / 63 µs | 19,331 / 19,526 / 15,903 |
 | X25519 keygen / Diffie-Hellman | 17 / 57 µs | 57,382 / 17,430 |
 | ML-DSA-87 keygen / sign / verify | 410 / 229 / 102 µs | 2,440 / 4,368 / 9,821 |
-| HKDF-SHA384 (128 B) / hybrid KDF (128 B) | 2.2 / 3.2 µs | 463,392 / 308,546 |
+| HKDF-SHA384 (128 B) / hybrid KDF (128 B) | 2.2 / 3.2 µs | 463,392 / 308,547 |
 | HMAC-SHA384 (1 KiB) | 3.0 µs | 335,683 |
 | AEAD encrypt / decrypt (1 KiB) | 3.5 / 3.6 µs | 283,849 / 275,028 |
 
@@ -369,6 +369,7 @@ cargo build --workspace --release --locked
 cargo doc --workspace --no-deps --locked
 cargo check --target aarch64-unknown-none --workspace --locked
 cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked
+cargo test -p shawncore-validation --test spec_sheet --locked
 cargo audit && cargo audit --file fuzz/Cargo.lock
 bash validation/check_archive.sh
 make -C integration syntax run cxx asan valgrind
@@ -386,12 +387,14 @@ The evidence behind each line is in [VALIDATION.md](VALIDATION.md).
 **IMPLEMENTED** — AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF and
 directional session keys, wire codecs, FFI surfaces, RTOS primitives, C HAL stubs.
 
-**TESTED** — 100 Rust #[test] functions covering crypto round trips and tampering,
+**TESTED** — 111 Rust #[test] functions covering crypto round trips and tampering,
 known-answer vectors for the classical primitives, wire round trips proving
 semantic equivalence after decode, FFI null/zero-length and overlap handling,
 session re-establishment and replay paths, queue reuse and corruption paths,
 DMA-pool exhaustion and stale-generation rejection, scheduler boundaries, state
-transitions, and the FFT one-cache-line ABI. A C11 integration binary and a C++17
+transitions, the FFT one-cache-line ABI, and a spec-sheet suite that fails if the
+specifications, object sizes, test counts or performance table drift from the
+code. A C11 integration binary and a C++17
 smoke binary compile,
 links, and executes a full wire handshake against the release archive, clean
 under AddressSanitizer and Valgrind.

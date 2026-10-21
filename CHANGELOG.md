@@ -37,6 +37,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   self-containment). Its `fail()` helper printed a literal `%s` and is fixed.
 
 ### Added
+- `validation/tests/spec_sheet.rs`: an 11-test spec-sheet conformance suite. It checks
+  the README Specifications against the code (wire and object sizes, replay window,
+  nonce format, entropy queue, scheduler, state machine, DMA pool behavior), parses
+  the C header for the function, type and callback counts and for the absence of
+  secret-key serialization, and fails if the README, ARCHITECTURE, VALIDATION,
+  RELEASE_MANIFEST, CI workflow or the benchmark record disagree with each other or
+  with the code. On its first run it caught a mis-rounded ops/sec figure in the README.
 - `fast-x25519` feature (default on, off in Lite): enables `x25519-dalek`'s precomputed
   basepoint tables. Measured back to back it makes X25519 key generation about 1.75x
   faster (31 to 17 µs on the reference machine) for about 30 KB more code and rodata

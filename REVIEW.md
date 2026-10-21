@@ -77,6 +77,7 @@ cargo build --workspace --release --locked
 cargo doc --workspace --no-deps --locked
 cargo check --target aarch64-unknown-none --workspace --locked
 cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked
+cargo test -p shawncore-validation --test spec_sheet --locked
 cargo audit && cargo audit --file fuzz/Cargo.lock
 ```
 

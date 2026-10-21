@@ -2,7 +2,7 @@ ShawnCore-Libraries Release Manifest
 ====================================
 
 Release: 12.3.11
-Generated UTC: 2026-10-21T14:17:03+00:00
+Generated UTC: 2026-10-21T17:45:21+00:00
 
 Toolchain
 ---------
@@ -11,7 +11,7 @@ cargo: cargo 1.99.1 (5f94df478 2026-08-27)
 
 Repository inventory
 --------------------
-Rust #[test] functions (source inventory): 100
+Rust #[test] functions (source inventory): 111
 Exported C symbols (header/archive parity): 135
 
 Locally verifiable release hygiene
@@ -23,8 +23,9 @@ Dependency advisories (cargo audit, root and fuzz lockfiles): PASS (none reporte
 
 Validation evidence
 -------------------
-Tests: EXECUTED — 100 tests pass in debug and release; 49 in the Lite configuration.
+Tests: EXECUTED — 111 tests pass in debug and release; 49 in the Lite configuration.
 Known-answer tests: EXECUTED — HMAC-SHA384, HKDF-SHA384, hybrid KDF, AEAD framing, X25519 (RFC 4231 / RFC 7748 and independently computed vectors). ML-KEM/ML-DSA have regression vectors only.
+Spec sheet: EXECUTED — 11-test conformance suite checks the README Specifications, object sizes, header surface, test counts and performance table against the code and benchmark record.
 ThreadSanitizer: EXECUTED — standalone SPSC/ring-buffer workload, no reported race.
 Rust AddressSanitizer: EXECUTED — shawncore-pq-crypto and shawncore-rtos-sync test targets, no report.
 Miri: PARTIAL — shawncore-rtos-sync passes with symbolic-alignment checks; strict provenance is rejected by the scheduler's integer stack addresses; shawncore-pq-crypto entropy/session-state tests pass too; the lattice-heavy tests were not run under Miri.

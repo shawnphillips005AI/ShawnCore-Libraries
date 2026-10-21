@@ -754,3 +754,15 @@ explicit deployment trust mechanism.
 The `lite` Cargo profile additionally uses size-oriented compilation settings.
 It does not change the semantics of the remaining cryptographic and RTOS
 components.
+
+## Build-time Options
+
+| Feature | Default | Effect |
+|---|---|---|
+| `ml-dsa` | on | Links ML-DSA-87 and its C declarations. Off in Lite. |
+| `fast-x25519` | on | Enables `x25519-dalek`'s precomputed basepoint tables: X25519 key generation about 1.75x faster, Diffie-Hellman unchanged, about 30 KB more code and rodata on `aarch64-unknown-none`. Off in Lite. The tables are fixed-base only; they do not change how a peer's point is multiplied. |
+| `lite` | off | Constrained-MCU configuration: no ML-DSA and no X25519 tables. |
+
+Builds that care about flash more than handshake latency can disable
+`fast-x25519` with `--no-default-features --features ml-dsa`. Measured figures
+are in the README footprint table and in [BENCHMARKS.md](BENCHMARKS.md).

@@ -96,6 +96,10 @@ in portable `no_std` Rust at all.
 - The 32-bit DMA-pool free-list ABA tag wraps after $2^{32}$ free-list
   mutations. Deployments must bound the operational lifetime between
   reinitializations or re-initialize the pool.
+- The `fast-x25519` feature replaces fixed-base X25519 multiplication with the
+  dependency's precomputed-table path. Table selection timing is a property of
+  `curve25519-dalek` and the target compiler output and has not been measured
+  here, the same as every other constant-time property in this repository.
 - ML-KEM and ML-DSA external known-answer tests (NIST ACVP) and interoperability
   testing have not been run. The repository carries RFC-derived known-answer
   tests for the classical primitives and regression vectors that pin the current
