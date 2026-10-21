@@ -16,7 +16,7 @@ For a longer run, set the iteration count explicitly:
 SHAWNCORE_BENCH_ITERS=1000 cargo run -p shawncore-benchmarks --release
 ```
 
-The harness performs one warm-up operation and then reports mean nanoseconds per operation and operations per second using `std::time::Instant`. Inputs are deterministic so repeated runs are comparable on the same machine/toolchain.
+The harness makes one warm-up call, then splits the requested iterations into 25 batches and reports, per operation, the **median** and **best** batch mean in nanoseconds per operation plus operations per second at the median, using `std::time::Instant`. On a shared host a single mean varied about 2x between sessions; the best batch agrees across runs to about 1%, so quote that and keep the median alongside it. Inputs are deterministic so repeated runs are comparable on the same machine/toolchain.
 
 ## Measurements
 
@@ -24,31 +24,47 @@ The harness reports ML-KEM-1024 key generation/encapsulation/decapsulation, ML-D
 
 ## Reference Results
 
-Recorded for release 12.3.11, source commit `f32bcf6`.
+Recorded for release 12.3.11, source commit `5de2c29`, default features
+(`ml-dsa` and `fast-x25519` enabled).
 
-- **Machine:** AMD EPYC 7763, 2 vCPU development container, x86-64 Linux
+- **Machine:** AMD EPYC 7763, 2 vCPU shared development container, x86-64 Linux
 - **Toolchain:** Rust 1.99.1, `release` profile (`lto = "fat"`, `codegen-units = 1`)
-- **Command:** `SHAWNCORE_BENCH_ITERS=500 cargo run -p shawncore-benchmarks --release --locked`
+- **Command:** `SHAWNCORE_BENCH_ITERS=2500 cargo run -p shawncore-benchmarks --release --locked`
 
-| Operation | Iterations | Mean ns/op | Ops/sec |
-|---|---:|---:|---:|
-| ML-KEM-1024 keygen | 500 | 162,888 | 6,139 |
-| ML-KEM-1024 encapsulate | 500 | 104,483 | 9,571 |
-| ML-KEM-1024 decapsulate | 500 | 125,856 | 7,946 |
-| ML-DSA-87 keygen | 500 | 1,206,640 | 829 |
-| ML-DSA-87 sign (1 KiB) | 500 | 883,870 | 1,131 |
-| ML-DSA-87 verify (1 KiB) | 500 | 387,234 | 2,582 |
-| X25519 keygen | 500 | 120,950 | 8,268 |
-| X25519 Diffie-Hellman | 500 | 286,805 | 3,487 |
-| HKDF-SHA384 (128 B) | 500 | 3,332 | 300,136 |
-| HMAC-SHA384 (1 KiB) | 500 | 5,319 | 188,004 |
-| Hybrid KDF (128 B) | 500 | 7,012 | 142,606 |
-| AEAD encrypt (1 KiB) | 500 | 5,607 | 178,353 |
-| AEAD decrypt (1 KiB) | 500 | 5,962 | 167,716 |
+| Operation | Iterations | Median ns/op | Best ns/op | Ops/sec (median) |
+|---|---:|---:|---:|---:|
+| ML-KEM-1024 keygen | 2500 | 53737 | 51730 | 18609 |
+| ML-KEM-1024 encapsulate | 2500 | 53244 | 51213 | 18781 |
+| ML-KEM-1024 decapsulate | 2500 | 63946 | 62883 | 15638 |
+| ML-DSA-87 keygen | 2500 | 455126 | 409792 | 2197 |
+| ML-DSA-87 sign (1 KiB) | 2500 | 241575 | 228948 | 4140 |
+| ML-DSA-87 verify (1 KiB) | 2500 | 102888 | 101821 | 9719 |
+| X25519 keygen | 2500 | 17571 | 17427 | 56911 |
+| X25519 Diffie-Hellman | 2500 | 57793 | 57373 | 17303 |
+| HKDF-SHA384 (128 B) | 2500 | 2171 | 2158 | 460713 |
+| HMAC-SHA384 (1 KiB) | 2500 | 2981 | 2979 | 335405 |
+| Hybrid KDF (128 B) | 2500 | 3251 | 3241 | 307563 |
+| AEAD encrypt (1 KiB) | 2500 | 3536 | 3523 | 282797 |
+| AEAD decrypt (1 KiB) | 2500 | 3917 | 3636 | 255297 |
 
-The container is shared and the harness is single-threaded with one warm-up
-iteration, so expect run-to-run variation of several percent. Treat these as a
-relative comparison between operations on one machine.
+Three consecutive runs gave best-batch times within about 1% of each other for
+every operation. The README quotes the best batch; the median is within about
+11% of it here.
+
+### Effect of `fast-x25519`
+
+Measured back to back on the same machine, 2,700 iterations, best of 9 batches
+(an earlier build of this harness):
+
+| Operation | Without `fast-x25519` | With `fast-x25519` |
+|---|---:|---:|
+| X25519 keygen | 30,975 ns | 17,640 ns |
+| X25519 Diffie-Hellman | 58,464 ns | 57,618 ns |
+
+The precomputed tables only accelerate multiplication of the fixed basepoint, so
+key generation speeds up about 1.75x and Diffie-Hellman does not change. The
+feature adds about 30 KB of code and rodata on `aarch64-unknown-none` (see the
+README footprint table).
 
 ## Interpreting Results
 

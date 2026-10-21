@@ -138,20 +138,26 @@ In-memory sizes are larger than the wire sizes above; the full table is in
 
 ### Host reference performance
 
-Single thread, `release` profile, 1 KiB payload, 500 iterations, AMD EPYC 7763
-(2 vCPU container), Rust 1.99.1. These are host numbers for comparing
-operations against each other, not target-hardware performance, a constant-time
-claim, or certification evidence. Method and exact command:
-[BENCHMARKS.md](BENCHMARKS.md).
+Single thread, `release` profile, 1 KiB payload, 2,500 iterations per operation
+in 25 batches, AMD EPYC 7763 (2 vCPU shared container), Rust 1.99.1, default
+features (`fast-x25519` on). Times are the **best batch**: on a shared host it
+agrees across runs to about 1%, while the median is within about 11% of it and
+is listed in [BENCHMARKS.md](BENCHMARKS.md) with the exact command. These are
+host numbers for comparing operations against each other, not target-hardware
+performance, a constant-time claim, or certification evidence.
 
-| Operation | Mean time | Ops/sec |
+| Operation | Time | Ops/sec |
 |---|---:|---:|
-| ML-KEM-1024 keygen / encapsulate / decapsulate | 163 / 104 / 126 µs | 6,139 / 9,571 / 7,946 |
-| X25519 keygen / Diffie-Hellman | 121 / 287 µs | 8,268 / 3,487 |
-| ML-DSA-87 keygen / sign / verify | 1,207 / 884 / 387 µs | 829 / 1,131 / 2,582 |
-| HKDF-SHA384 (128 B) / hybrid KDF (128 B) | 3.3 / 7.0 µs | 300,136 / 142,606 |
-| HMAC-SHA384 (1 KiB) | 5.3 µs | 188,004 |
-| AEAD encrypt / decrypt (1 KiB) | 5.6 / 6.0 µs | 178,353 / 167,716 |
+| ML-KEM-1024 keygen / encapsulate / decapsulate | 52 / 51 / 63 µs | 19,331 / 19,526 / 15,903 |
+| X25519 keygen / Diffie-Hellman | 17 / 57 µs | 57,382 / 17,430 |
+| ML-DSA-87 keygen / sign / verify | 410 / 229 / 102 µs | 2,440 / 4,368 / 9,821 |
+| HKDF-SHA384 (128 B) / hybrid KDF (128 B) | 2.2 / 3.2 µs | 463,392 / 308,546 |
+| HMAC-SHA384 (1 KiB) | 3.0 µs | 335,683 |
+| AEAD encrypt / decrypt (1 KiB) | 3.5 / 3.6 µs | 283,849 / 275,028 |
+
+A full hybrid handshake costs one ML-KEM keygen, one encapsulation, one
+decapsulation, two X25519 keygens, two Diffie-Hellmans and two hybrid KDFs across
+the two peers: roughly 0.32 ms of CPU on this machine.
 
 ### Build and platform
 
@@ -160,7 +166,8 @@ claim, or certification evidence. Method and exact command:
 | Targets built and checked | x86-64 Linux host, `aarch64-unknown-none` |
 | Language | `no_std` Rust, edition 2021, `panic = "abort"` |
 | Toolchain | Minimum Rust 1.88, developed on 1.99.1 |
-| Configurations | Full (ML-DSA enabled), `usv` (size-optimized), `lite` (no ML-DSA); footprint figures below |
+| Configurations | Full (ML-DSA and `fast-x25519` enabled), `usv` (size-optimized), `lite` (no ML-DSA, no X25519 tables); footprint figures below |
+| Feature flags | `ml-dsa` (default), `fast-x25519` (default; precomputed basepoint tables for faster X25519 keygen, about 30 KB more code and rodata), `lite` |
 | License | AGPLv3 or commercial; see [License](#license) |
 
 ---
@@ -306,7 +313,7 @@ length/overlap validation, and the FFI boundary.
 |---|---|---|
 | ML-KEM-1024 (FIPS 203) | `ml-kem` (`hazmat` for seed-based keygen and deterministic encapsulation) | 0.3.3 |
 | ML-DSA-87 (FIPS 204) | `ml-dsa` (optional) | 0.1.1 |
-| X25519 | `x25519-dalek` | 3.0 |
+| X25519 | `x25519-dalek` (`precomputed-tables` through the `fast-x25519` feature) | 3.0 |
 | ChaCha20 | `chacha20` | 0.10 |
 | SHA-384, HMAC, HKDF | `sha2`, `hmac`, `hkdf` | 0.11, 0.13, 0.13 |
 | Constant-time compare, zeroize | `subtle`, `zeroize` | 2.6, 1.9 |
@@ -324,9 +331,17 @@ artifact on your target.
 
 | Profile | Archive bytes | Code + rodata bytes |
 |---|---:|---:|
-| `release` (full, ML-DSA enabled) | 6,839,704 | 623,457 |
-| `usv` (full, `opt-level = "z"`) | 6,670,662 | 282,497 |
-| `lite` (no ML-DSA, `opt-level = "z"`) | 6,522,042 | 251,154 |
+| `release` (full, `fast-x25519`) | 6,868,960 | 653,433 |
+| `usv` (full, `fast-x25519`, `opt-level = "z"`) | 6,699,960 | 312,493 |
+| `usv` without `fast-x25519` | 6,670,664 | 282,497 |
+| `lite` (no ML-DSA, no X25519 tables, `opt-level = "z"`) | 6,522,042 | 251,154 |
+
+`fast-x25519` trades about 30 KB of code and rodata for about 1.75x faster X25519
+key generation (31 to 17 µs on the reference machine). It uses precomputed
+basepoint tables, so Diffie-Hellman, which multiplies an arbitrary point, is
+unchanged at about 57 µs. Per handshake that saves roughly 27 µs of about
+350 µs. Disable it (`--no-default-features --features ml-dsa`) when flash is
+tighter than handshake latency.
 
 Static RAM in the archive is 4,489 bytes of `.bss`. Opaque object sizes are
 listed in [ARCHITECTURE.md](ARCHITECTURE.md#92-caller-allocated-opaque-objects).
@@ -457,8 +472,8 @@ independent review is implied by either license.
 ShawnCore provides a constrained-MCU build configuration in addition to the
 full/default configuration.
 
-The full/default configuration keeps ML-DSA enabled. The Lite configuration
-omits ML-DSA at compile/link time while retaining ML-KEM, X25519, authenticated
+The full/default configuration keeps ML-DSA and the `fast-x25519` tables enabled.
+The Lite configuration omits ML-DSA and the X25519 tables at compile/link time while retaining ML-KEM, X25519, authenticated
 encryption, session management, entropy handling, and RTOS synchronization.
 The C header hides the ML-DSA declarations when `SHAWNCORE_LITE` is defined.
 

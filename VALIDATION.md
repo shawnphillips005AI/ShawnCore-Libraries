@@ -32,6 +32,7 @@ hardware behavior, certification, production approval, or independent review.
 | --- | --- | --- |
 | `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 100 #[test] functions passed in both profiles: 53 in `shawncore-pq-crypto` (42 unit, 8 known-answer, 3 regression-vector), 37 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 9 in the validation harness (including the version-drift guards). |
 | `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 49 tests (39 unit, 8 known-answer, 2 regression-vector); the ML-DSA tests are feature-gated out. |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (53 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
 | Repeated lib-test runs | PASS | The `shawncore-pq-crypto` unit-test binary ran 300 consecutive times with a 20 s hang timeout: 0 failures, 0 hangs. Before the test-callback fix the same loop hung in roughly 1 run in 17. |
 | `validation/run_tsan.sh` (nightly ThreadSanitizer) | PASS | Standalone workload of 3 rounds x 100,000 SPSC and ring-buffer transfers completed with no reported data race. |
 | `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (53) and `shawncore-rtos-sync` (37) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |

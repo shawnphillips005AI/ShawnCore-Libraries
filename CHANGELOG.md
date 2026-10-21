@@ -37,6 +37,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   self-containment). Its `fail()` helper printed a literal `%s` and is fixed.
 
 ### Added
+- `fast-x25519` feature (default on, off in Lite): enables `x25519-dalek`'s precomputed
+  basepoint tables. Measured back to back it makes X25519 key generation about 1.75x
+  faster (31 to 17 µs on the reference machine) for about 30 KB more code and rodata
+  on `aarch64-unknown-none`; Diffie-Hellman multiplies an arbitrary point and is
+  unchanged. The release gate now expects the `default, fast-x25519, lite, ml-dsa`
+  feature set.
+- The benchmark harness reports the median and the best of 25 batches per operation
+  instead of one mean, because a single mean varied about 2x between sessions on a
+  shared host. Reference results are re-recorded in `BENCHMARKS.md` and the README.
 - README "Specifications" sheet (cryptographic suite, session behavior, entropy, RTOS
   primitives, C interface, object sizes, build/platform) and measured host reference
   results, also recorded with machine, toolchain, commit and command in `BENCHMARKS.md`.
