@@ -454,6 +454,7 @@ mod tests {
 
     #[test]
     fn cache_callback_can_reenter_entropy_mixing_without_deadlocking() {
+        let _hook_guard = test_support::hook_guard();
         let _entropy_test_guard = ENTROPY_TEST_SERIAL_LOCK
             .lock()
             .expect("entropy test lock poisoned");

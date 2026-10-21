@@ -649,6 +649,145 @@ mod tests {
     }
 
     #[test]
+    fn last_usable_counter_encrypts_once_then_refuses_without_wrapping() {
+        crate::test_support::install_callbacks();
+        let mut manager = SessionManager {
+            ml_kem_dk: None,
+            x25519_sk: None,
+            tx_key: Some([0x11; 64]),
+            rx_key: Some([0x22; 64]),
+            tx_key_checksum: key_checksum(&[0x11; 64]),
+            rx_key_checksum: key_checksum(&[0x22; 64]),
+            is_established: true,
+            tx_counter: u64::MAX - 1,
+            rx_counter: 0,
+            rx_window: 0,
+        };
+        let mut ciphertext = [0u8; 2];
+        let mut nonce = [0u8; 12];
+        let mut tag = [0u8; 48];
+
+        manager
+            .encrypt_packet(b"", b"ok", &mut ciphertext, &mut nonce, &mut tag)
+            .unwrap();
+        assert_eq!(&nonce[..8], &(u64::MAX - 1).to_le_bytes());
+        assert_eq!(manager.tx_counter, u64::MAX);
+
+        let before = (ciphertext, nonce, tag);
+        assert_eq!(
+            manager.encrypt_packet(b"", b"no", &mut ciphertext, &mut nonce, &mut tag),
+            Err(CryptoError::InvalidState)
+        );
+        assert_eq!((ciphertext, nonce, tag), before);
+        assert_eq!(manager.tx_counter, u64::MAX);
+    }
+
+    #[test]
+    fn replay_window_handles_extreme_sequence_numbers() {
+        let nonce = |sequence: u64| {
+            let mut n = [0u8; 12];
+            n[..8].copy_from_slice(&sequence.to_le_bytes());
+            n
+        };
+        let mut manager = SessionManager::new();
+
+        manager.commit_rx_nonce(&nonce(u64::MAX));
+        assert_eq!(manager.rx_counter, u64::MAX);
+        assert_eq!(manager.rx_window, 1);
+        assert_eq!(
+            manager.check_rx_nonce(&nonce(u64::MAX)),
+            Err(CryptoError::InvalidState)
+        );
+        assert_eq!(manager.check_rx_nonce(&nonce(u64::MAX - 1)), Ok(()));
+        assert_eq!(manager.check_rx_nonce(&nonce(u64::MAX - 63)), Ok(()));
+        assert_eq!(
+            manager.check_rx_nonce(&nonce(u64::MAX - 64)),
+            Err(CryptoError::InvalidState)
+        );
+        assert_eq!(
+            manager.check_rx_nonce(&nonce(0)),
+            Err(CryptoError::InvalidState)
+        );
+
+        manager.commit_rx_nonce(&nonce(u64::MAX - 63));
+        assert_eq!(manager.rx_window, 1 | (1 << 63));
+        assert_eq!(
+            manager.check_rx_nonce(&nonce(u64::MAX - 63)),
+            Err(CryptoError::InvalidState)
+        );
+    }
+
+    #[test]
+    fn zeroize_session_wipes_each_key_before_it_is_flushed() {
+        use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering as O};
+        static TX: AtomicUsize = AtomicUsize::new(0);
+        static RX: AtomicUsize = AtomicUsize::new(0);
+        static WIPED: AtomicUsize = AtomicUsize::new(0);
+        static DIRTY: AtomicBool = AtomicBool::new(false);
+
+        // Identified by address, so flushes from concurrent tests are ignored.
+        fn hook(ptr: *const u8, len: usize) {
+            let bit = if ptr as usize == TX.load(O::SeqCst) {
+                1
+            } else if ptr as usize == RX.load(O::SeqCst) {
+                2
+            } else {
+                return;
+            };
+            let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+            if len == 64 && bytes.iter().all(|&b| b == 0) {
+                WIPED.fetch_or(bit, O::SeqCst);
+            } else {
+                DIRTY.store(true, O::SeqCst);
+            }
+        }
+
+        let _hook_guard = crate::test_support::hook_guard();
+        crate::test_support::install_callbacks();
+        let mut manager = SessionManager {
+            ml_kem_dk: None,
+            x25519_sk: None,
+            tx_key: Some([0xC3; 64]),
+            rx_key: Some([0x3C; 64]),
+            tx_key_checksum: key_checksum(&[0xC3; 64]),
+            rx_key_checksum: key_checksum(&[0x3C; 64]),
+            is_established: true,
+            tx_counter: 5,
+            rx_counter: 9,
+            rx_window: 3,
+        };
+        TX.store(
+            manager.tx_key.as_ref().unwrap().as_ptr() as usize,
+            O::SeqCst,
+        );
+        RX.store(
+            manager.rx_key.as_ref().unwrap().as_ptr() as usize,
+            O::SeqCst,
+        );
+        WIPED.store(0, O::SeqCst);
+        DIRTY.store(false, O::SeqCst);
+
+        crate::test_support::set_cache_flush_hook(Some(hook));
+        manager.zeroize_session();
+        crate::test_support::set_cache_flush_hook(None);
+
+        assert_eq!(
+            WIPED.load(O::SeqCst),
+            3,
+            "both keys must be flushed as zeros"
+        );
+        assert!(
+            !DIRTY.load(O::SeqCst),
+            "key bytes reached the flush callback unwiped"
+        );
+        assert!(!manager.is_established);
+        assert_eq!(
+            (manager.tx_counter, manager.rx_counter, manager.rx_window),
+            (0, 0, 0)
+        );
+    }
+
+    #[test]
     fn commit_leaves_replay_state_intact_for_sequences_below_the_window() {
         let mut manager = SessionManager::new();
         manager.rx_counter = 100;

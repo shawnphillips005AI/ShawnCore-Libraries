@@ -10,6 +10,12 @@
 //! Hardware-agnostic hybrid cryptographic building blocks for autonomous surface vehicles.
 //! Designed for seamless C/C++ host OS integration via FFI.
 
+#[cfg(not(all(target_pointer_width = "64", target_has_atomic = "64")))]
+compile_error!(
+    "shawncore-pq-crypto requires a 64-bit target with native 64-bit atomics (for example aarch64); \
+     32-bit targets such as Cortex-M are not supported."
+);
+
 pub mod aead_wrapper;
 pub mod entropy_pool;
 pub mod entropy_queue;
@@ -67,6 +73,13 @@ pub(crate) mod test_support {
 
     pub(crate) fn set_cache_flush_hook(hook: Option<FlushHook>) {
         *CACHE_FLUSH_HOOK.lock().unwrap_or_else(|e| e.into_inner()) = hook;
+    }
+
+    static HOOK_OWNER: Mutex<()> = Mutex::new(());
+
+    /// The hook is process-global; a test that installs one holds this until it finishes.
+    pub(crate) fn hook_guard() -> std::sync::MutexGuard<'static, ()> {
+        HOOK_OWNER.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 

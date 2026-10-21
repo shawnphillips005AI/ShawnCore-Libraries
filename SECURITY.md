@@ -100,16 +100,40 @@ in portable `no_std` Rust at all.
   dependency's precomputed-table path. Table selection timing is a property of
   `curve25519-dalek` and the target compiler output and has not been measured
   here, the same as every other constant-time property in this repository.
-- ML-KEM and ML-DSA external known-answer tests (NIST ACVP) and interoperability
-  testing have not been run. The repository carries RFC-derived known-answer
-  tests for the classical primitives and regression vectors that pin the current
-  `ml-kem`/`ml-dsa` output; the latter detect dependency drift and are not
-  conformance evidence. Algorithm identifiers refer to the FIPS 203 and FIPS 204
-  standards by name only; they are not certification claims.
+- NIST ACVP known-answer tests for ML-KEM and ML-DSA have not been run. What
+  exists instead: byte-for-byte agreement with OpenSSL 3.5.8 (an independent
+  implementation) for ML-KEM-1024 key generation, deterministic encapsulation,
+  decapsulation and implicit rejection, ML-DSA-87 key generation, deterministic
+  signing and verification, and one complete session derivation re-implemented in
+  Python (`validation/gen_openssl_vectors.sh`); RFC known-answer tests for the
+  classical primitives; and regression vectors that pin the current
+  `ml-kem`/`ml-dsa` output. Cross-implementation agreement on these inputs is not
+  conformance evidence, and regression vectors only detect dependency drift.
+  Algorithm identifiers refer to the FIPS 203 and FIPS 204 standards by name only;
+  they are not certification claims.
+- ML-DSA signing is deterministic (it matches OpenSSL's deterministic mode byte
+  for byte) and signs the raw message with an empty context. Exposure of
+  deterministic signing to fault injection has not been evaluated, and an
+  integrator must add its own domain separation to signed messages.
+- A 64-bit target with native 64-bit atomics is required. Both crates fail with a
+  `compile_error!` otherwise; `thumbv7em-none-eabihf` (Cortex-M4) was confirmed
+  not to build because the entropy pool, latency tracker and DMA pool use
+  `AtomicU64` and a 64-bit packed free-list head.
+- The `lite` feature does not by itself remove anything. Build Lite with
+  `--no-default-features --features lite`; `validation/check_archive.sh` asserts
+  the resulting archive has no ML-DSA or X25519 table symbols.
+- `SessionManager` has no internal synchronization. Concurrent calls on one
+  manager are a data race; the host must serialize them.
+- "Bounded" means algorithmically bounded (for example at most 8 entropy chunks
+  mixed per call, one 16-slot scan for the watchdog mask, no unbounded loop in
+  scheduler selection). No worst-case execution time has been measured on target
+  hardware, and the interrupt-disabled spinlock can wait indefinitely if its
+  owner stalls.
 - Rust-instrumented AddressSanitizer and ThreadSanitizer runs are part of the
   release gate (see [VALIDATION.md](VALIDATION.md)); they detect only what the
   executed tests exercise and are not a proof of absence of memory errors.
-- Miri has not been run on the lattice-heavy ML-KEM/ML-DSA tests.
+- Miri has not been run on the lattice-heavy ML-KEM/ML-DSA tests; it has been run
+  on the RTOS crate and on the pointer-validation and session-state tests.
 - The panic handler's reentrancy guard only limits recursion: a panic raised
   while the hook is already running spins instead of recursing. It cannot
   recover system state, and a panic with a lock held or interrupts disabled
@@ -274,6 +298,25 @@ current implementation:
 - **No negotiation.** The library has a single fixed suite, so it exposes no
   in-library downgrade surface; an integrator-added negotiation must be covered
   by the signed transcript.
+- **Failed handshakes fail closed.** A response that fails (for example a
+  low-order X25519 point) consumes the pending handshake, so an on-path attacker
+  can force the key-generating side to restart. A forged ML-KEM ciphertext does
+  not fail: ML-KEM implicit rejection yields an unrelated secret and the failure
+  surfaces only at the first packet.
+
+**Demonstrated attacker capability** (test
+`unauthenticated_handshake_lets_an_active_intermediary_relay_and_rewrite_traffic`):
+an active intermediary who can intercept the key exchange establishes one session
+with each endpoint, reads and rewrites every packet, and both endpoints see valid
+sessions.
+
+**Smallest mitigation available without an ABI change.** Pass a secret that was
+provisioned out of band as `salt` on both sides. HKDF-Extract is HMAC keyed by the
+salt, so an intermediary without it derives keys unrelated to its victim's (test
+`an_intermediary_without_the_preshared_salt_cannot_read_the_session`). This is a
+mitigation, not a reviewed protocol: it gives symmetric, not per-device,
+authentication, requires secure provisioning and rotation, and reveals mismatch
+only at the first packet.
 
 This repository does not define the replacement protocol. A design for expert
 review should include: pre-provisioned ML-DSA trust anchors; a signature over the

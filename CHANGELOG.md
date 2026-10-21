@@ -9,6 +9,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [12.3.11] — 2026-10-21
 
+### Adversarial verification (second pass)
+- **Findings:** no new defect in exported behavior was found. Confirmed issues were
+  a 32-bit build that failed with unclear errors (now a clear `compile_error!`; no
+  32-bit support is claimed), an unobserved key wipe and an unpinned handshake
+  transcript in the test suite, a test that asserted only constants, and unsynchronized
+  tests sharing process-global callbacks. The unauthenticated handshake is now
+  demonstrated rather than only asserted.
+- **Platform guard:** `shawncore-pq-crypto` and `shawncore-rtos-sync` stop with a
+  clear `compile_error!` on targets without 64-bit pointers and native 64-bit
+  atomics. `thumbv7em-none-eabihf` previously failed with scattered `AtomicU64` and
+  shift-overflow errors.
+- **Evidence added:** 22 active-attacker protocol tests; cross-implementation
+  vectors against OpenSSL 3.5.8 (ML-KEM-1024, ML-DSA-87 and a complete session
+  re-derived in Python) with reproducible generators; wraparound, boundary and
+  fail-closed tests for the SPSC queue, ring buffer and DMA pool (including
+  usize-index and generation-counter rollover); a key-wipe observation test; FFI
+  tests for absurd lengths, oversized HKDF output, and null pointers on every
+  session entry point.
+- **Test hygiene:** the rtos-sync tests that register the process-global cache
+  callbacks (and the ring buffer test that counts them) now serialize through one
+  lock instead of racing; a pq-crypto test hook lock does the same. A test that only
+  asserted constants was replaced with real ring-buffer tests.
+- **Release gate:** `check_archive.sh` also checks that the header seen with
+  `SHAWNCORE_LITE` equals the Lite archive's exports; `release_gate.sh` adds
+  optional steps for 32-bit rejection and OpenSSL vector reproducibility.
+- **Docs:** SECURITY.md records the demonstrated man-in-the-middle capability, the
+  `salt`-based mitigation available without an ABI change, deterministic ML-DSA
+  signing, the `lite` feature footgun, and what "bounded" does and does not mean.
+  No wire format, public API, feature default or ownership contract changed.
+
 ### Security hardening audit
 - **Fixed:** `shawncore_crypto_session_manager_encapsulate_for_peer` now rejects
   misaligned `manager`, peer-key and output pointers (`InvalidState`) before forming
@@ -57,7 +87,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   self-containment). Its `fail()` helper printed a literal `%s` and is fixed.
 
 ### Added
-- `validation/tests/spec_sheet.rs`: an 11-test spec-sheet conformance suite. It checks
+- `validation/tests/spec_sheet.rs`: a 12-test spec-sheet conformance suite. It checks
   the README Specifications against the code (wire and object sizes, replay window,
   nonce format, entropy queue, scheduler, state machine, DMA pool behavior), parses
   the C header for the function, type and callback counts and for the absence of

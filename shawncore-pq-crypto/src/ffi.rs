@@ -2200,3 +2200,323 @@ mod wire_codec_tests {
         assert_eq!(pk.to_bytes(), expected_pk);
     }
 }
+
+#[cfg(test)]
+mod adversarial_ffi_tests {
+    use super::*;
+    use core::mem::MaybeUninit;
+
+    /// A non-null, aligned address that is never dereferenced because the call must fail first.
+    const BOGUS: usize = 8;
+
+    #[test]
+    fn absurd_lengths_are_rejected_before_any_dereference() {
+        crate::test_support::install_callbacks();
+        let bogus = BOGUS as *const u8;
+        let bogus_mut = BOGUS as *mut u8;
+        let key = [1u8; 32];
+        let mac_key = [2u8; 32];
+        let nonce = [3u8; 12];
+        let mut tag = [0u8; 48];
+        let mut manager = MaybeUninit::<SessionManager>::uninit();
+
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_aead_encrypt(
+                    key.as_ptr(),
+                    mac_key.as_ptr(),
+                    nonce.as_ptr(),
+                    bogus,
+                    usize::MAX,
+                    bogus,
+                    bogus_mut,
+                    usize::MAX,
+                    tag.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::InvalidLength
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_aead_decrypt(
+                    key.as_ptr(),
+                    mac_key.as_ptr(),
+                    nonce.as_ptr(),
+                    bogus,
+                    usize::MAX,
+                    bogus,
+                    tag.as_ptr(),
+                    bogus_mut,
+                    usize::MAX,
+                )
+            },
+            ShawncoreCryptoErr::InvalidLength
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_hmac_sha384(key.as_ptr(), bogus, usize::MAX, tag.as_mut_ptr())
+            },
+            ShawncoreCryptoErr::InvalidLength
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_hkdf_expand_sha384(
+                    [0u8; 48].as_ptr(),
+                    bogus,
+                    usize::MAX,
+                    bogus_mut,
+                    usize::MAX,
+                )
+            },
+            ShawncoreCryptoErr::InvalidLength
+        );
+        let mut nonce_out = [0u8; 12];
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_encrypt_packet(
+                    manager.as_mut_ptr(),
+                    bogus,
+                    usize::MAX,
+                    bogus,
+                    bogus_mut,
+                    usize::MAX,
+                    nonce_out.as_mut_ptr(),
+                    tag.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::InvalidLength
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_decrypt_packet(
+                    manager.as_mut_ptr(),
+                    bogus,
+                    usize::MAX,
+                    bogus,
+                    usize::MAX,
+                    nonce.as_ptr(),
+                    tag.as_ptr(),
+                    bogus_mut,
+                )
+            },
+            ShawncoreCryptoErr::InvalidLength
+        );
+    }
+
+    #[test]
+    fn oversized_hkdf_request_fails_and_releases_no_key_material() {
+        crate::test_support::install_callbacks();
+        let prk = [0x42u8; 48];
+        let mut out = std::vec![0xAAu8; 255 * 48 + 1];
+
+        assert_ne!(
+            unsafe {
+                shawncore_crypto_hkdf_expand_sha384(
+                    prk.as_ptr(),
+                    core::ptr::null(),
+                    0,
+                    out.as_mut_ptr(),
+                    out.len(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+        assert!(out.iter().all(|&byte| byte == 0));
+
+        let mut max = std::vec![0u8; 255 * 48];
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_hkdf_expand_sha384(
+                    prk.as_ptr(),
+                    core::ptr::null(),
+                    0,
+                    max.as_mut_ptr(),
+                    max.len(),
+                )
+            },
+            ShawncoreCryptoErr::Success
+        );
+    }
+
+    #[test]
+    fn null_pointers_are_rejected_by_every_session_entry_point() {
+        crate::test_support::install_callbacks();
+        let mut manager = MaybeUninit::<SessionManager>::uninit();
+        let m = manager.as_mut_ptr();
+        assert_eq!(
+            unsafe { shawncore_crypto_session_manager_init(m) },
+            ShawncoreCryptoErr::Success
+        );
+
+        let entropy96 = [0x11u8; 96];
+        let mut ml_kem_pk = MaybeUninit::<PublicKey1024>::uninit();
+        let mut x_pk = MaybeUninit::<X25519Public>::uninit();
+        let mut ct = MaybeUninit::<Ciphertext1024>::uninit();
+        let mut nonce = [0u8; 12];
+        let mut tag = [0u8; 48];
+        let mut buf = [0u8; 4];
+
+        let null_err = ShawncoreCryptoErr::InvalidState;
+        unsafe {
+            assert_eq!(
+                shawncore_crypto_session_manager_init(core::ptr::null_mut()),
+                null_err
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_destroy(core::ptr::null_mut()),
+                null_err
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_zeroize(core::ptr::null_mut()),
+                null_err
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_initiate_handshake(
+                    core::ptr::null_mut(),
+                    entropy96.as_ptr(),
+                    ml_kem_pk.as_mut_ptr(),
+                    x_pk.as_mut_ptr()
+                ),
+                null_err
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_initiate_handshake(
+                    m,
+                    core::ptr::null(),
+                    ml_kem_pk.as_mut_ptr(),
+                    x_pk.as_mut_ptr()
+                ),
+                null_err
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_initiate_handshake(
+                    m,
+                    entropy96.as_ptr(),
+                    core::ptr::null_mut(),
+                    x_pk.as_mut_ptr()
+                ),
+                null_err
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_initiate_handshake(
+                    m,
+                    entropy96.as_ptr(),
+                    ml_kem_pk.as_mut_ptr(),
+                    core::ptr::null_mut()
+                ),
+                null_err
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_finalize_handshake(
+                    m,
+                    core::ptr::null(),
+                    ct.as_ptr(),
+                    core::ptr::null(),
+                    0,
+                    core::ptr::null(),
+                    0
+                ),
+                null_err
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_finalize_handshake(
+                    m,
+                    x_pk.as_ptr(),
+                    core::ptr::null(),
+                    core::ptr::null(),
+                    0,
+                    core::ptr::null(),
+                    0
+                ),
+                null_err
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_finalize_handshake(
+                    m,
+                    x_pk.as_ptr(),
+                    ct.as_ptr(),
+                    core::ptr::null(),
+                    1,
+                    core::ptr::null(),
+                    0
+                ),
+                ShawncoreCryptoErr::InvalidLength
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_encapsulate_for_peer(
+                    m,
+                    ml_kem_pk.as_ptr(),
+                    x_pk.as_ptr(),
+                    core::ptr::null(),
+                    core::ptr::null(),
+                    0,
+                    core::ptr::null(),
+                    0,
+                    ct.as_mut_ptr(),
+                    x_pk.as_mut_ptr()
+                ),
+                null_err
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_encrypt_packet(
+                    m,
+                    core::ptr::null(),
+                    1,
+                    buf.as_ptr(),
+                    buf.as_mut_ptr(),
+                    0,
+                    nonce.as_mut_ptr(),
+                    tag.as_mut_ptr()
+                ),
+                ShawncoreCryptoErr::InvalidLength
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_decrypt_packet(
+                    m,
+                    core::ptr::null(),
+                    0,
+                    core::ptr::null(),
+                    1,
+                    nonce.as_ptr(),
+                    tag.as_ptr(),
+                    buf.as_mut_ptr()
+                ),
+                ShawncoreCryptoErr::InvalidLength
+            );
+            // A freshly initialized, unestablished session must refuse traffic.
+            assert_ne!(
+                shawncore_crypto_session_manager_encrypt_packet(
+                    m,
+                    core::ptr::null(),
+                    0,
+                    buf.as_ptr().add(0),
+                    buf.as_mut_ptr().add(0),
+                    0,
+                    nonce.as_mut_ptr(),
+                    tag.as_mut_ptr()
+                ),
+                ShawncoreCryptoErr::Success
+            );
+            assert_eq!(
+                shawncore_crypto_session_manager_destroy(m),
+                ShawncoreCryptoErr::Success
+            );
+        }
+    }
+
+    #[test]
+    fn entropy_push_rejects_null_and_degenerate_chunks() {
+        assert_eq!(
+            unsafe { shawncore_crypto_entropy_push(core::ptr::null()) },
+            ShawncoreCryptoErr::InvalidState
+        );
+        assert_eq!(
+            unsafe { shawncore_crypto_entropy_push([0u8; 32].as_ptr()) },
+            ShawncoreCryptoErr::InvalidState
+        );
+        assert_eq!(
+            unsafe { shawncore_crypto_entropy_push([0xFFu8; 32].as_ptr()) },
+            ShawncoreCryptoErr::InvalidState
+        );
+    }
+}

@@ -410,6 +410,7 @@ mod tests {
 
     #[test]
     fn init_is_one_shot_and_peek_does_not_remove_items() {
+        let _serial = crate::test_support::serialize();
         install_test_callbacks();
         FLUSH_COUNT.store(0, Ordering::Relaxed);
         INVALIDATE_COUNT.store(0, Ordering::Relaxed);
@@ -431,14 +432,64 @@ mod tests {
         assert_eq!(FLUSH_COUNT.load(Ordering::Relaxed), 1);
         assert_eq!(INVALIDATE_COUNT.load(Ordering::Relaxed), 2);
     }
-}
 
-#[cfg(test)]
-mod race_hardening_r2_tests {
     #[test]
-    fn ring_payload_paths_are_expected_to_use_atomic_ownership() {
-        assert!(8usize.is_power_of_two());
-        let half_range = usize::MAX / 2;
-        assert!(8usize <= half_range);
+    fn full_and_empty_boundaries_are_exact() {
+        let _serial = crate::test_support::serialize();
+        install_test_callbacks();
+        let buffer = RingBuffer::<u32, 4>::new();
+        let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
+        let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
+        let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
+        unsafe { buffer.init(storage_ptr, storage_size) }.unwrap();
+
+        assert_eq!(unsafe { buffer.pop() }, None);
+        assert_eq!(unsafe { buffer.peek() }, None);
+        for value in 1..=4 {
+            unsafe { buffer.push(value) }.unwrap();
+        }
+        for _ in 0..8 {
+            assert_eq!(unsafe { buffer.push(0xDEAD) }, Err(IpcError::QueueFull));
+        }
+        assert_eq!(unsafe { buffer.peek() }, Some(1));
+        for value in 1..=4 {
+            assert_eq!(unsafe { buffer.pop() }, Some(value));
+        }
+        assert_eq!(unsafe { buffer.pop() }, None);
+        unsafe { buffer.push(5) }.unwrap();
+        assert_eq!(unsafe { buffer.pop() }, Some(5));
+    }
+
+    #[test]
+    fn indices_wrap_past_usize_max_without_losing_order_or_capacity() {
+        let _serial = crate::test_support::serialize();
+        install_test_callbacks();
+        let buffer = RingBuffer::<u32, 4>::new();
+        let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
+        let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
+        let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
+        unsafe { buffer.init(storage_ptr, storage_size) }.unwrap();
+
+        let start = usize::MAX - 1;
+        buffer.head.0.store(start, Ordering::Relaxed);
+        buffer.tail.0.store(start, Ordering::Relaxed);
+
+        for value in 20..24 {
+            unsafe { buffer.push(value) }.unwrap();
+        }
+        assert_eq!(unsafe { buffer.push(99) }, Err(IpcError::QueueFull));
+        assert_eq!(unsafe { buffer.peek() }, Some(20));
+        for value in 20..24 {
+            assert_eq!(unsafe { buffer.pop() }, Some(value));
+        }
+        assert_eq!(unsafe { buffer.pop() }, None);
+    }
+
+    #[test]
+    fn uninitialized_buffer_fails_closed() {
+        let buffer = RingBuffer::<u32, 4>::new();
+        assert_eq!(unsafe { buffer.push(1) }, Err(IpcError::NotInitialized));
+        assert_eq!(unsafe { buffer.pop() }, None);
+        assert_eq!(unsafe { buffer.peek() }, None);
     }
 }

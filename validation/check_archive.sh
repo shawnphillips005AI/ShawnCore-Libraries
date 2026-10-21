@@ -59,4 +59,13 @@ if nm "$LITE_ARCHIVE" 2>/dev/null | grep -Ei 'ml_dsa|mldsa|ED25519_BASEPOINT_TAB
 fi
 grep -q '^shawncore_crypto_ml_kem_keygen$' "$TMP/lite-defined" \
     || { printf '%s\n' "[archive][FAIL] Lite archive lost ML-KEM" >&2; exit 1; }
+
+# The header seen with SHAWNCORE_LITE must declare exactly what the Lite archive exports.
+SYMBOL_PATTERN='^[[:space:]]*[A-Za-z_][A-Za-z0-9_[:space:]*]*[[:space:]]+shawncore_(crypto|rtos)_[A-Za-z0-9_]+[[:space:]]*\('
+cc -E -P -DSHAWNCORE_LITE "$HEADER" | grep -E "$SYMBOL_PATTERN" \
+    | sed -E 's/.*[[:space:]](shawncore_(crypto|rtos)_[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/' \
+    | sort -u > "$TMP/lite-header"
+grep -E '^shawncore_(crypto|rtos)_' "$TMP/lite-defined" | sort -u > "$TMP/lite-archive"
+diff -u "$TMP/lite-header" "$TMP/lite-archive"
+printf '%s\n' "[archive] Lite header/archive symbols match: $(wc -l < "$TMP/lite-header") symbols"
 printf '%s\n' "[archive] Lite archive excludes ML-DSA and X25519 tables, retains ML-KEM"

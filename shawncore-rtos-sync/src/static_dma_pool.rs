@@ -319,6 +319,7 @@ mod tests {
 
     #[test]
     fn stale_generation_cannot_free_reused_slot() {
+        let _serial = crate::test_support::serialize();
         install_test_callback();
         let pool = StaticDmaPool::<u32, 1, 1>::new();
         let mut storage = AlignedStorage::<1>(MaybeUninit::uninit());
@@ -341,6 +342,7 @@ mod tests {
 
     #[test]
     fn stale_free_never_clears_a_newer_atomic_ownership_state() {
+        let _serial = crate::test_support::serialize();
         install_test_callback();
         let pool = StaticDmaPool::<u32, 1, 1>::new();
         let mut storage = AlignedStorage::<1>(MaybeUninit::uninit());
@@ -365,6 +367,7 @@ mod tests {
 
     #[test]
     fn rapid_reuse_rejects_every_stale_generation() {
+        let _serial = crate::test_support::serialize();
         install_test_callback();
         let pool = StaticDmaPool::<u32, 1, 1>::new();
         let mut storage = AlignedStorage::<1>(MaybeUninit::uninit());
@@ -390,6 +393,7 @@ mod tests {
 
     #[test]
     fn free_zeroizes_raw_storage_before_reuse() {
+        let _serial = crate::test_support::serialize();
         install_test_callback();
         let pool = StaticDmaPool::<[u8; 8], 1, 1>::new();
         let mut storage = AlignedStorage::<2>(MaybeUninit::uninit());
@@ -408,6 +412,66 @@ mod tests {
         assert_eq!(
             unsafe { pool.init(core::ptr::NonNull::<()>::dangling().as_ptr(), 0) },
             Err(AllocatorError::AddressOutOfBounds)
+        );
+    }
+
+    #[test]
+    fn free_list_aba_generation_wraps_without_corrupting_the_list() {
+        let _serial = crate::test_support::serialize();
+        install_test_callback();
+        let pool = StaticDmaPool::<u32, 3, 1>::new();
+        let mut storage = AlignedStorage::<3>(MaybeUninit::uninit());
+        let pointer = storage.0.as_mut_ptr().cast::<u32>();
+        unsafe { pool.init(pointer, core::mem::size_of::<[u32; 3]>()) }.unwrap();
+
+        pool.free_list_head.store(
+            super::pack_head(0, u32::MAX - 1),
+            core::sync::atomic::Ordering::Release,
+        );
+        let mut held = [(0usize, 0u64); 3];
+        for slot in held.iter_mut() {
+            let (index, token, _) = pool.allocate().unwrap();
+            *slot = (index, token);
+        }
+        assert_eq!(pool.allocate(), Err(AllocatorError::OutOfMemory));
+        for (index, token) in held {
+            pool.free(index, token).unwrap();
+        }
+        let mut seen = [false; 3];
+        for _ in 0..3 {
+            let (index, _, _) = pool.allocate().unwrap();
+            assert!(!seen[index], "slot {index} handed out twice");
+            seen[index] = true;
+        }
+        assert_eq!(pool.allocate(), Err(AllocatorError::OutOfMemory));
+    }
+
+    #[test]
+    fn ownership_token_wraps_and_stale_tokens_remain_rejected() {
+        let _serial = crate::test_support::serialize();
+        install_test_callback();
+        let pool = StaticDmaPool::<u32, 1, 1>::new();
+        let mut storage = AlignedStorage::<1>(MaybeUninit::uninit());
+        let pointer = storage.0.as_mut_ptr().cast::<u32>();
+        unsafe { pool.init(pointer, core::mem::size_of::<u32>()) }.unwrap();
+
+        let last = super::OWNERSHIP_GENERATION_MASK;
+        pool.ownership[0].store(last, core::sync::atomic::Ordering::Release);
+        let (index, wrapped, _) = pool.allocate().unwrap();
+        assert_eq!(wrapped, 0, "63-bit token wraps to zero");
+        assert_eq!(
+            pool.free(index, last),
+            Err(AllocatorError::DoubleFree),
+            "the pre-wrap token must not free the live allocation"
+        );
+        pool.free(index, wrapped).unwrap();
+        assert_eq!(pool.free(index, wrapped), Err(AllocatorError::DoubleFree));
+        let (_, next, _) = pool.allocate().unwrap();
+        assert_eq!(next, 1);
+        assert_eq!(
+            pool.free(index, u64::MAX),
+            Err(AllocatorError::DoubleFree),
+            "tokens with the allocated bit set are invalid"
         );
     }
 }

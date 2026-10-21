@@ -83,6 +83,35 @@ step "Lite crypto tests"
 cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked
 pass "Lite crypto tests"
 
+# 7b. Targets without 64-bit atomics must be rejected with the documented message.
+# Skipped, loudly, when the Cortex-M target is not installed.
+if rustup target list --installed 2>/dev/null | grep -qx thumbv7em-none-eabihf; then
+    step "32-bit target rejection"
+    if cargo check -p shawncore-pq-crypto -p shawncore-rtos-sync \
+        --target thumbv7em-none-eabihf --locked > "$ROOT/target/thumb.log" 2>&1; then
+        fail "a 32-bit target unexpectedly built"
+    fi
+    [[ "$(grep -c 'requires a 64-bit target with native 64-bit atomics' "$ROOT/target/thumb.log")" -ge 2 ]] || \
+        fail "32-bit rejection message missing for one of the crates"
+    pass "32-bit target rejection"
+else
+    step "32-bit target rejection SKIPPED (rustup target add thumbv7em-none-eabihf to enable)"
+fi
+
+# 7c. The OpenSSL cross-implementation vectors must be reproducible. Skipped when OpenSSL < 3.5.
+case "$(openssl version 2>/dev/null | awk '{print $2}')" in
+    3.[5-9]*|[4-9].*)
+        step "OpenSSL vector reproducibility"
+        REGENERATED="$(mktemp)"
+        SHAWNCORE_VECTOR_OUT="$REGENERATED" bash "$ROOT/validation/gen_openssl_vectors.sh" > /dev/null
+        diff -u <(grep -v '^#' "$ROOT/shawncore-pq-crypto/tests/vectors/openssl_interop.txt") \
+                <(grep -v '^#' "$REGENERATED") || fail "OpenSSL vectors are not reproducible"
+        rm -f "$REGENERATED"
+        pass "OpenSSL vector reproducibility"
+        ;;
+    *) step "OpenSSL vector reproducibility SKIPPED (OpenSSL >= 3.5 required)" ;;
+esac
+
 # 8. Bare-metal type check, header/archive symbol parity, and archive self-containment.
 step "bare-metal check"
 cargo check --target aarch64-unknown-none --workspace --locked

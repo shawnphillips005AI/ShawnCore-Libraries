@@ -24,20 +24,21 @@ hardware behavior, certification, production approval, or independent review.
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | PASS | Executed and passed. |
 | `cargo check --target aarch64-unknown-none --workspace --locked` | PASS | Executed and passed; compile check only, not target execution. |
 | `cargo audit` and `cargo audit --file fuzz/Cargo.lock` | PASS | cargo-audit 0.22.2 against 1,348 advisories: no advisories for either lockfile (54 and 52 crates). |
-| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 114 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
+| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 154 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
 
 ## TEST VALIDATION
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 114 #[test] functions passed in both profiles: 56 in `shawncore-pq-crypto` (45 unit, 8 known-answer, 3 regression-vector), 37 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 20 in the validation harness (host traces, layout contracts, version-drift guards and the 11-test spec-sheet suite). |
-| `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 52 tests (42 unit, 8 known-answer, 2 regression-vector); the ML-DSA tests are feature-gated out. |
-| `cargo test -p shawncore-validation --test spec_sheet --locked` | PASS | 11 tests: crypto and wire sizes, replay window (offset 63 accepted, 64 rejected), nonce format, uniform-entropy rejection, entropy queue capacity and mix bound, scheduler/state machine/TCB, DMA pool alignment, token and zeroization behavior, object sizes, the C header surface (function, type and callback counts, no secret-key serialization), and drift checks that the README, ARCHITECTURE, VALIDATION, RELEASE_MANIFEST, CI workflow and BENCHMARKS record state the same numbers. It found a mis-rounded ops/sec figure in the README on its first run. |
-| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (56 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
+| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 154 #[test] functions passed in both profiles: 88 in `shawncore-pq-crypto` (52 unit, 8 known-answer, 3 regression-vector, 22 adversarial protocol, 3 OpenSSL cross-implementation), 44 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 21 in the validation harness (host traces, layout contracts, version-drift guards and the 12-test spec-sheet suite). |
+| `cargo test -p shawncore-pq-crypto --test adversarial_protocol --test openssl_interop --locked` | PASS | 22 active-attacker tests and 3 cross-implementation tests (see the sections below the table). |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 83 tests (49 unit, 8 known-answer, 22 adversarial protocol, 2 regression-vector, 2 OpenSSL cross-implementation); the ML-DSA tests are feature-gated out. |
+| `cargo test -p shawncore-validation --test spec_sheet --locked` | PASS | 12 tests: crypto and wire sizes, replay window (offset 63 accepted, 64 rejected), nonce format, uniform-entropy rejection, entropy queue capacity and mix bound, scheduler/state machine/TCB, DMA pool alignment, token and zeroization behavior, object sizes, the C header surface (function, type and callback counts, no secret-key serialization), and drift checks that the README, ARCHITECTURE, VALIDATION, RELEASE_MANIFEST, CI workflow and BENCHMARKS record state the same numbers. It found a mis-rounded ops/sec figure in the README on its first run. |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (88 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
 | Repeated lib-test runs | PASS | The `shawncore-pq-crypto` unit-test binary ran 300 consecutive times with a 20 s hang timeout: 0 failures, 0 hangs. Before the test-callback fix the same loop hung in roughly 1 run in 17. |
 | `validation/run_tsan.sh` (nightly ThreadSanitizer) | PASS | Standalone workload of 3 rounds x 100,000 SPSC and ring-buffer transfers completed with no reported data race. |
-| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (56) and `shawncore-rtos-sync` (37) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
-| `cargo +nightly miri test -p shawncore-rtos-sync` with `-Zmiri-symbolic-alignment-check` | PASS | 37 tests passed. With `-Zmiri-strict-provenance` the run stops at the first scheduler test: the scheduler API takes stack addresses as integers (`u64`) and casts them to pointers, which strict provenance rejects by design. Miri was not run on the lattice-heavy `shawncore-pq-crypto` tests; it ran on `shawncore-rtos-sync` (37 tests) and on the crypto crate's entropy-pool, entropy-queue and session-state unit tests (12), all with `-Zmiri-symbolic-alignment-check`. That run caught undefined behavior in the test-only cache-flush dispatcher (an integer-to-function-pointer transmute), which is fixed. |
+| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (88) and `shawncore-rtos-sync` (44) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
+| `cargo +nightly miri test -p shawncore-rtos-sync` with `-Zmiri-symbolic-alignment-check` | PASS | 44 tests passed. With `-Zmiri-strict-provenance` the run stops at the first scheduler test: the scheduler API takes stack addresses as integers (`u64`) and casts them to pointers, which strict provenance rejects by design. Miri was not run on the lattice-heavy ML-KEM/ML-DSA tests or on the OpenSSL interop tests. It ran on all 44 `shawncore-rtos-sync` tests and on 24 `shawncore-pq-crypto` tests (entropy pool and queue, session counters, replay window, key-wipe observation, wire-codec pointer validation, and the null/oversized-length/misalignment FFI tests), all with `-Zmiri-symbolic-alignment-check`; the only diagnostic was the expected integer-to-pointer cast warning from the deliberately bogus never-dereferenced address in `absurd_lengths_are_rejected_before_any_dereference`. The earlier run caught undefined behavior in the test-only cache-flush dispatcher (an integer-to-function-pointer transmute), which is fixed. |
 
 Known-answer tests (`shawncore-pq-crypto/tests/known_answers.rs`) check HMAC-SHA384
 against RFC 4231 cases 1 and 2, X25519 against the RFC 7748 section 6.1 vectors,
@@ -49,6 +50,94 @@ and the upgraded dependency set alike.
 Regression vectors (`tests/pq_regression_vectors.rs`) pin ML-KEM-1024 and ML-DSA-87
 output captured from `ml-kem` 0.2.3 and `ml-dsa` 0.1.1; `ml-kem` 0.3.3 reproduces
 them byte for byte. They detect dependency drift and are **not** NIST ACVP vectors.
+
+## Cross-implementation vectors
+
+`shawncore-pq-crypto/tests/openssl_interop.rs` compares ShawnCore against
+**OpenSSL 3.5.8**, an implementation independent of the `ml-kem` and `ml-dsa`
+crates, using `tests/vectors/openssl_interop.txt`. The file is produced entirely
+by `validation/gen_openssl_vectors.sh` and `validation/gen_session_vector.py`
+(re-running it reproduces the file byte for byte). Results, all passing:
+
+| Check | Outcome |
+| --- | --- |
+| ML-KEM-1024 public key derived from a 64-byte seed (2 seeds) | Identical to OpenSSL's |
+| ML-KEM-1024 encapsulation with fixed 32-byte entropy (2 cases) | Ciphertext and shared secret identical to OpenSSL's |
+| ML-KEM-1024 decapsulation of OpenSSL's ciphertext | Recovers OpenSSL's secret |
+| ML-KEM-1024 decapsulation of a one-bit-flipped ciphertext | Returns OpenSSL's implicit-rejection secret (not an error) |
+| ML-DSA-87 public key derived from a 32-byte seed | Identical to OpenSSL's |
+| ML-DSA-87 deterministic signature | Identical to OpenSSL's 4,627-byte signature, which OpenSSL also verified; altered message or signature bit rejected |
+| One complete hybrid session | Handshake ciphertext, both X25519 public keys, and both directions' packet ciphertext and tag identical to a Python/OpenSSL re-implementation of the documented transcript, key split, nonce and MAC framing |
+
+These are cross-implementation vectors, **not** NIST ACVP vectors; they cover the
+listed inputs only and say nothing about timing. The session vector re-implements
+the protocol from its documentation, so it detects divergence from the documented
+design, not a flaw in the design itself.
+
+## Adversarial protocol tests
+
+`shawncore-pq-crypto/tests/adversarial_protocol.rs` (22 tests, public API only)
+models an active network attacker. Observed outcomes:
+
+| Attack | Result |
+| --- | --- |
+| Reflecting a packet back to its sender | Rejected (`VerificationFailed`): directional keys differ |
+| Duplicate packet | First accepted, second rejected |
+| Reordering inside the 64-packet window | Every packet accepted exactly once |
+| Authentic packet older than the window | Rejected (offset 63 accepted, 64 rejected) |
+| Forged tag or forged far-future sequence number | Rejected, and the replay window is not moved; the genuine packet is still accepted afterwards |
+| Every single-bit flip in ciphertext, AAD, nonce and tag | Every one rejected |
+| Nonzero reserved nonce bytes; truncated, extended or length-mismatched ciphertext | Rejected |
+| Failed authentication | Output buffer wiped; a replayed packet leaves no plaintext in the output |
+| Packet from a previous session after re-keying | Rejected; **but** reusing identical entropy on both sides reproduces the keys and the old packet is accepted (documented host obligation) |
+| Traffic before a handshake or after `zeroize_session` | Rejected |
+| `finalize_handshake` with no pending handshake, or replayed a second time | Rejected; a live session is not disturbed |
+| Failed finalize (low-order X25519 point) | Consumes the pending handshake; retry requires a new `initiate_handshake` |
+| Uniform all-zero / all-`0xFF` entropy | Rejected without side effects |
+| Active intermediary between two endpoints | **Succeeds**: relays and rewrites traffic undetected. The handshake is unauthenticated; see SECURITY.md section 10 |
+| Intermediary without a pre-shared `salt` | Cannot decrypt the victim's first packet (a mitigation, not a reviewed protocol) |
+
+## Test sensitivity (mutation testing)
+
+Sixteen deliberate faults were applied one at a time to a disposable copy of the
+source tree (`/tmp`, never the repository) and the relevant tests run. Every
+mutant was killed, and the copy's mutations were reverted after each run.
+
+| Mutant | Killed by |
+| --- | --- |
+| AEAD decrypt accepts any tag | Many tests, including `aead_round_trip_rejects_tampering` |
+| Replay window ignores already-seen bits | Several tests, including `replay_window_handles_extreme_sequence_numbers` |
+| Nonce committed before authentication | `session_rejects_tampering_without_committing_replay_state` and others |
+| `encrypt_packet` without the counter-exhaustion guard | `last_usable_counter_encrypts_once_then_refuses_without_wrapping` |
+| SPSC queue and ring buffer full-boundary off-by-one | `full_queue_rejects_push_without_overwriting_the_oldest_item` and `full_and_empty_boundaries_are_exact` |
+| DMA ownership token never advances | `ownership_token_wraps_and_stale_tokens_remain_rejected`, `rapid_reuse_rejects_every_stale_generation` and others |
+| `encapsulate_for_peer` alignment check removed | `encapsulate_for_peer_rejects_misaligned_typed_pointers` (the unchecked call aborts with a misaligned-pointer dereference) |
+| AAD not covered by the MAC | Many tests, including `tampered_or_mismatched_handshake_inputs_fail_the_first_packet` |
+| Ciphertext, or the protocol label, dropped from the handshake transcript | `session_derivation_matches_an_independent_implementation` (only the independent vector detects these) |
+| Reserved nonce bytes not checked | `nonce_with_nonzero_reserved_bytes_is_rejected` |
+| `secure_zeroize` made a no-op | Several tests, including `oversized_hkdf_request_fails_and_releases_no_key_material` |
+| `zeroize_session` skips wiping a key | `zeroize_session_wipes_each_key_before_it_is_flushed` |
+| Failed finalize keeps the pending handshake | `failed_finalize_consumes_the_pending_handshake_and_cannot_be_retried` |
+| `lite` feature secretly enabling ML-DSA | `validation/check_archive.sh` (`[archive][FAIL] Lite archive exports ML-DSA symbols`) |
+
+Gaps found and closed: the key-wipe mutant **survived** the pre-existing suite
+(confirmed by running the mutant with the new test skipped), and no test pinned
+the handshake transcript. The unobserved-wipe gap is now covered by a cache-flush
+observation test; the transcript by the independent session vector. A trivially
+true test (`ring_payload_paths_are_expected_to_use_atomic_ownership`, which only
+asserted constants) was removed and replaced by real ring-buffer boundary,
+wraparound and fail-closed tests. Mutants that were not run: the timing
+properties of `verify_tag_constant_time`, and any fault confined to the C
+harness.
+
+## Target scope
+
+`cargo check -p shawncore-pq-crypto --target thumbv7em-none-eabihf` and the same
+for `shawncore-rtos-sync` fail: the entropy pool, latency tracker and DMA pool
+need `AtomicU64`, and the DMA free-list head packs 32+32 bits into a `usize`.
+Both crates now stop with an explicit `compile_error!` on any target that is not
+64-bit with native 64-bit atomics. Supported and checked: x86-64 host and
+`aarch64-unknown-none`.
 
 The executed tests cover AEAD and in-place round trips, authentication failure,
 FFI null/zero-length/overlap handling, session re-establishment, replay,
@@ -157,7 +246,7 @@ addresses, and `shawncore-pq-crypto` has only been run under Miri on its entropy
 
 ## Current Source Inventory
 
-The repository contains **114 Rust functions annotated with `#[test]`**. All 114 were
+The repository contains **154 Rust functions annotated with `#[test]`**. All 154 were
 executed and passed in the `cargo test --workspace --all-targets` runs recorded
 above.
 

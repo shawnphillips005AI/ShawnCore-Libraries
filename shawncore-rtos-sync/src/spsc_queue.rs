@@ -380,6 +380,7 @@ mod tests {
 
     #[test]
     fn init_is_one_shot_and_queue_preserves_fifo_order() {
+        let _serial = crate::test_support::serialize();
         install_test_callbacks();
         let queue = SpscQueue::<u32, 4>::new();
         let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
@@ -404,6 +405,7 @@ mod tests {
 
     #[test]
     fn queue_reuses_slots_after_wraparound() {
+        let _serial = crate::test_support::serialize();
         install_test_callbacks();
         let queue = SpscQueue::<u32, 4>::new();
         let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
@@ -419,6 +421,7 @@ mod tests {
 
     #[test]
     fn odd_slot_sequence_aborts_pop_without_consuming_data() {
+        let _serial = crate::test_support::serialize();
         install_test_callbacks();
         let queue = SpscQueue::<u32, 4>::new();
         let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
@@ -443,6 +446,7 @@ mod tests {
         // the payload read, allowing this test to model a sequence change during
         // the validation window. The queue must reject the item and must not
         // advance `tail` on the failure path.
+        let _serial = crate::test_support::serialize();
         static TEST_SEQUENCE_PTR: core::sync::atomic::AtomicPtr<core::sync::atomic::AtomicUsize> =
             core::sync::atomic::AtomicPtr::new(core::ptr::null_mut());
 
@@ -483,5 +487,60 @@ mod tests {
             (*sequence_ptr).store(2, Ordering::Release);
         }
         assert_eq!(unsafe { queue.pop() }, Some(99));
+    }
+
+    #[test]
+    fn indices_wrap_past_usize_max_without_losing_order_or_capacity() {
+        let _serial = crate::test_support::serialize();
+        install_test_callbacks();
+        let queue = SpscQueue::<u32, 4>::new();
+        let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
+        let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
+        let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
+        unsafe { queue.init(storage_ptr, storage_size) }.unwrap();
+
+        let start = usize::MAX - 2;
+        queue.head.0.store(start, Ordering::Relaxed);
+        queue.tail.0.store(start, Ordering::Relaxed);
+
+        for value in 10..14 {
+            unsafe { queue.push(value) }.unwrap();
+        }
+        assert_eq!(queue.head.0.load(Ordering::Relaxed), start.wrapping_add(4));
+        assert_eq!(unsafe { queue.push(99) }, Err(IpcError::QueueFull));
+        for value in 10..14 {
+            assert_eq!(unsafe { queue.pop() }, Some(value));
+        }
+        assert_eq!(unsafe { queue.pop() }, None);
+        unsafe { queue.push(7) }.unwrap();
+        assert_eq!(unsafe { queue.pop() }, Some(7));
+    }
+
+    #[test]
+    fn uninitialized_queue_fails_closed() {
+        let queue = SpscQueue::<u32, 4>::new();
+        assert_eq!(unsafe { queue.push(1) }, Err(IpcError::NotInitialized));
+        assert_eq!(unsafe { queue.pop() }, None);
+    }
+
+    #[test]
+    fn full_queue_rejects_push_without_overwriting_the_oldest_item() {
+        let _serial = crate::test_support::serialize();
+        install_test_callbacks();
+        let queue = SpscQueue::<u32, 4>::new();
+        let mut storage = AlignedSlots::<4>(MaybeUninit::uninit());
+        let storage_ptr = storage.0.as_mut_ptr().cast::<CacheAlignedSlot<u32>>();
+        let storage_size = core::mem::size_of::<[CacheAlignedSlot<u32>; 4]>();
+        unsafe { queue.init(storage_ptr, storage_size) }.unwrap();
+
+        for value in 1..=4 {
+            unsafe { queue.push(value) }.unwrap();
+        }
+        for _ in 0..8 {
+            assert_eq!(unsafe { queue.push(0xDEAD) }, Err(IpcError::QueueFull));
+        }
+        for value in 1..=4 {
+            assert_eq!(unsafe { queue.pop() }, Some(value));
+        }
     }
 }

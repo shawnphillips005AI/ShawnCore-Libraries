@@ -81,8 +81,14 @@ cargo doc --workspace --no-deps --locked
 cargo check --target aarch64-unknown-none --workspace --locked
 cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked
 cargo test -p shawncore-validation --test spec_sheet --locked
+cargo test -p shawncore-pq-crypto --test adversarial_protocol --test openssl_interop --locked
 cargo audit && cargo audit --file fuzz/Cargo.lock
 ```
+
+Independent evidence: `bash validation/gen_openssl_vectors.sh` (OpenSSL 3.5 or
+later) regenerates the cross-implementation vectors that
+`tests/openssl_interop.rs` checks; the gate runs it when OpenSSL is new enough.
+The 32-bit rejection check needs `rustup target add thumbv7em-none-eabihf`.
 
 ## C FFI Checks
 

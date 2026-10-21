@@ -1328,6 +1328,7 @@ mod ffi_security_tests {
 
     #[test]
     fn dmapool_allocate_rejects_result_pointer_overlapping_pool() {
+        let _serial = crate::test_support::serialize();
         install_cache_callbacks();
         let mut pool_storage = Box::<DmaPool2K>::new_uninit();
         let pool = pool_storage.as_mut_ptr();
@@ -1366,6 +1367,7 @@ mod ffi_security_tests {
 
     #[test]
     fn queue_results_reject_control_object_overlap_without_consuming_items() {
+        let _serial = crate::test_support::serialize();
         install_cache_callbacks();
         const TELEMETRY_BYTES: usize = 64 * core::mem::size_of::<SpscQueueTelemetrySlot>();
         const RING_BYTES: usize = 1024 * core::mem::size_of::<CacheAlignedSlot<EwCommand>>();

@@ -10,6 +10,12 @@
 //! Hardware-agnostic deterministic execution and synchronization primitives for autonomous surface vehicles.
 //! Designed for seamless C/C++ host OS integration via FFI.
 
+#[cfg(not(all(target_pointer_width = "64", target_has_atomic = "64")))]
+compile_error!(
+    "shawncore-rtos-sync requires a 64-bit target with native 64-bit atomics (for example aarch64); \
+     32-bit targets such as Cortex-M are not supported."
+);
+
 pub mod bitmap_scheduler;
 pub mod error;
 pub mod ffi;
@@ -26,6 +32,19 @@ pub mod telemetry_queue;
 
 #[cfg(test)]
 extern crate std;
+
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::{Mutex, MutexGuard};
+
+    static CALLBACKS: Mutex<()> = Mutex::new(());
+
+    /// The callback registries are process-global, so tests that register or count
+    /// callbacks hold this for their whole duration instead of racing each other.
+    pub(crate) fn serialize() -> MutexGuard<'static, ()> {
+        CALLBACKS.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
 
 #[cfg(test)]
 mod tests {

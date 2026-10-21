@@ -508,6 +508,38 @@ fn documents_state_the_real_test_count() {
 }
 
 #[test]
+fn platform_requirement_and_independent_evidence_are_enforced_and_documented() {
+    for krate in ["shawncore-pq-crypto", "shawncore-rtos-sync"] {
+        let lib = read(&format!("{krate}/src/lib.rs"));
+        assert!(
+            lib.contains("compile_error!") && lib.contains("target_has_atomic = \"64\""),
+            "{krate} must reject targets without 64-bit atomics"
+        );
+    }
+    assert_doc_contains(
+        &read("README.md"),
+        "README.md",
+        "64-bit target with native 64-bit atomics",
+    );
+
+    let vectors = read("shawncore-pq-crypto/tests/vectors/openssl_interop.txt");
+    for key in [
+        "kem1.pk",
+        "kem2.tampered_ss",
+        "dsa.sig",
+        "session.e2k_tag",
+        "session.k2e_tag",
+    ] {
+        assert!(
+            vectors.contains(&format!("{key} = ")),
+            "vector {key} missing"
+        );
+    }
+    assert_doc_contains(&read("VALIDATION.md"), "VALIDATION.md", "OpenSSL 3.5.8");
+    assert_doc_contains(&read("SECURITY.md"), "SECURITY.md", "unauthenticated");
+}
+
+#[test]
 fn readme_performance_table_matches_the_benchmark_record() {
     let benchmarks = read("BENCHMARKS.md");
     let section = benchmarks

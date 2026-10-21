@@ -24,7 +24,7 @@ self-contained static library with a C header that compiles as C99, C11 and C++1
 | **Signatures** | ML-DSA-87, optional (omitted by the `lite` configuration) |
 | **RTOS primitives** | O(1) bitmap scheduler, SPSC/ring queues, ABA-tagged DMA pool, interrupt-aware spinlocks, state machine |
 | **Integration** | One `staticlib`, one header for C99/C11 and C++ (135 functions, `SHAWNCORE_VERSION_*` macros), no libc, no heap, caller-allocated objects |
-| **Targets built** | Host (x86-64) and `aarch64-unknown-none` |
+| **Targets built** | Host (x86-64) and `aarch64-unknown-none`. A 64-bit target with native 64-bit atomics is required; 32-bit targets such as Cortex-M are rejected at compile time |
 | **Toolchain** | `no_std`, `panic = "abort"`; minimum Rust 1.88 (CI-checked), developed and validated on 1.99.1 |
 
 ---
@@ -58,8 +58,11 @@ Every claim below is reproducible from a clean checkout with
 | **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
 | **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
 | **135 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
-| **114 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 52-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
-| **Known-answer tests for the classical primitives** | HMAC-SHA384 (RFC 4231), X25519 (RFC 7748 section 6.1), HKDF-SHA384, the hybrid KDF, and the AEAD framing, with vectors produced by independent implementations. ML-KEM/ML-DSA have regression vectors only; see the open gates below. |
+| **154 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 83-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
+| **Known-answer tests for the classical primitives** | HMAC-SHA384 (RFC 4231), X25519 (RFC 7748 section 6.1), ChaCha20 (RFC 8439 keystream, cross-checked with OpenSSL), HKDF-SHA384, the hybrid KDF, and the AEAD framing, with vectors produced by independent implementations. |
+| **Cross-implementation agreement with OpenSSL 3.5.8** | ML-KEM-1024 key generation from seed, deterministic encapsulation, decapsulation and implicit rejection, ML-DSA-87 key generation, deterministic signing and verification, and one complete hybrid session (transcript, key split, both packet directions) re-derived independently in Python, all byte-for-byte identical. Regenerate with [`validation/gen_openssl_vectors.sh`](validation/gen_openssl_vectors.sh). These are **not** NIST ACVP vectors. |
+| **Adversarial protocol tests** | Active-attacker tests for reflection, duplication, reordering, window edges, forged tags and sequence numbers, every single-bit flip, truncation, cross-session replay, failed-handshake retry, and a demonstration that an active intermediary can relay an unauthenticated handshake. |
+| **Test sensitivity** | 16 deliberate faults (accepting any tag, disabling replay detection, committing before authentication, boundary off-by-ones, dropped MAC and transcript coverage, skipped key wipes, a Lite feature leak) were applied to a disposable copy; every one made the suite fail. One gap, an unobserved key wipe, was found and closed. |
 | **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
 | **Fuzzed** | Three harnesses (`ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz`) with retained regression corpora; CI runs 10,000 executions of each. |
 | **ThreadSanitizer** | Standalone SPSC and ring-buffer stress workload, no reported race. |
@@ -164,6 +167,7 @@ the two peers: roughly 0.32 ms of CPU on this machine.
 | Property | Value |
 |---|---|
 | Targets built and checked | x86-64 Linux host, `aarch64-unknown-none` |
+| Platform requirement | 64-bit pointers and native 64-bit atomics (`AtomicU64`); both crates stop with a `compile_error!` otherwise. `thumbv7em-none-eabihf` was confirmed to fail |
 | Language | `no_std` Rust, edition 2021, `panic = "abort"` |
 | Toolchain | Minimum Rust 1.88, developed on 1.99.1 |
 | Configurations | Full (ML-DSA and `fast-x25519` enabled), `usv` (size-optimized), `lite` (no ML-DSA, no X25519 tables); footprint figures below |
@@ -392,7 +396,7 @@ The evidence behind each line is in [VALIDATION.md](VALIDATION.md).
 **IMPLEMENTED** — AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF and
 directional session keys, wire codecs, FFI surfaces, RTOS primitives, C HAL stubs.
 
-**TESTED** — 114 Rust #[test] functions covering crypto round trips and tampering,
+**TESTED** — 154 Rust #[test] functions covering crypto round trips and tampering,
 known-answer vectors for the classical primitives, wire round trips proving
 semantic equivalence after decode, FFI null/zero-length and overlap handling,
 session re-establishment and replay paths, queue reuse and corruption paths,
@@ -421,8 +425,8 @@ model cache-coherent DMA hardware.
 
 **NOT YET VALIDATED** — target ABI interoperability, cache coherency, DMA
 visibility, ISR/NMI/FIQ behavior, watchdog behavior, entropy-source quality,
-ML-KEM/ML-DSA known-answer and external
-interoperability tests, free-list ABA-tag wraparound, and independent security
+NIST ACVP known-answer tests for ML-KEM/ML-DSA, interoperability with a second
+peer over a real link, free-list ABA-tag wraparound, and independent security
 review.
 
 ---
@@ -498,6 +502,10 @@ cargo build -p shawncore-ffi --no-default-features --features lite --profile lit
 ```
 
 Lite is a constrained deployment profile, not a security-certification or
-hardware-readiness claim. The integrating system remains responsible for
+hardware-readiness claim. The `lite` feature does not itself remove anything:
+always pass `--no-default-features`, or ML-DSA and the X25519 tables stay
+enabled. `validation/check_archive.sh` verifies that the Lite archive contains
+neither, and that its exported symbols equal the header seen with
+`SHAWNCORE_LITE`. The integrating system remains responsible for
 providing an appropriate device identity/authentication mechanism when ML-DSA
 signatures are not available on the target.
