@@ -11,7 +11,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Changed
 - Upgraded the pinned Rust toolchain from 1.85.0 to 1.99.1 (`rust-toolchain.toml`,
-  crate `rust-version` fields, CI workflow, and documentation).
+  CI workflow, and documentation). The minimum supported Rust version is 1.88, the
+  floor set by `sha2` 0.11; it is declared in `[workspace.package]` and checked in CI.
 - Host-only tooling (`shawncore-benchmarks`, `tsan-host-validation`) now compiles to
   an inert stub on bare-metal targets so the documented
   `cargo check --target aarch64-unknown-none --workspace` gate covers the whole
@@ -36,6 +37,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   self-containment). Its `fail()` helper printed a literal `%s` and is fixed.
 
 ### Added
+- `LICENSES/AGPL-3.0-or-later.txt`: the unmodified AGPLv3 text that `LICENSE` offers
+  by reference, so recipients receive a copy with the source.
 - `shawncore.h` is now valid C++ (it declared `extern "C"` but did not parse as
   C++). Fixed-length parameters use `SHAWNCORE_MIN_LEN(n)`, which expands to
   `static n` for C99/C11 and to `n` under C++ and MSVC. The function surface is

@@ -25,7 +25,7 @@ self-contained static library with a C header that compiles as C99, C11 and C++1
 | **RTOS primitives** | O(1) bitmap scheduler, SPSC/ring queues, ABA-tagged DMA pool, interrupt-aware spinlocks, state machine |
 | **Integration** | One `staticlib`, one header for C99/C11 and C++ (135 functions, `SHAWNCORE_VERSION_*` macros), no libc, no heap, caller-allocated objects |
 | **Targets built** | Host (x86-64) and `aarch64-unknown-none` |
-| **Toolchain** | Rust 1.99.1, `no_std`, `panic = "abort"` |
+| **Toolchain** | `no_std`, `panic = "abort"`; minimum Rust 1.88 (CI-checked), developed and validated on 1.99.1 |
 
 ---
 
@@ -340,7 +340,9 @@ certification or approval conclusion.
 
 ## License
 
-ShawnCore is dual-licensed; see [LICENSE](LICENSE) for the governing terms.
+ShawnCore is dual-licensed; see [LICENSE](LICENSE) for the governing terms. The
+unmodified GNU AGPLv3 text is in
+[LICENSES/AGPL-3.0-or-later.txt](LICENSES/AGPL-3.0-or-later.txt).
 
 1. **GNU Affero General Public License v3 (or later)** for open-source evaluation
    and research.

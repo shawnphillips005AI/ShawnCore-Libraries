@@ -52,6 +52,18 @@ jobs:
       - name: Header/archive parity and bare-metal archive self-containment
         run: bash validation/check_archive.sh
 
+  msrv:
+    runs-on: ubuntu-latest
+    env:
+      RUSTUP_TOOLCHAIN: 1.88.0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          targets: aarch64-unknown-none
+      - run: cargo test --workspace --all-targets --locked
+      - run: cargo check --target aarch64-unknown-none --workspace --locked
+
   c-integration:
     runs-on: ubuntu-latest
     steps:
