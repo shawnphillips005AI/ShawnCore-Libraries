@@ -64,12 +64,12 @@ fi
 ARTIFACT_BYTES="$(wc -c < "$ARTIFACT")"
 printf '%s\n' "[release-gate] full artifact bytes: $ARTIFACT_BYTES"
 
-# 6. Verify the public PQ feature surface is exactly the expected trio.
+# 6. Verify the public PQ feature surface is exactly the expected set.
 PQ_FEATURES="$(cargo metadata --format-version 1 --no-deps --locked \
     | python3 -c 'import json,sys; d=json.load(sys.stdin); p=next(x for x in d["packages"] if x["name"]=="shawncore-pq-crypto"); print(", ".join(sorted(p["features"])))')"
 printf '%s\n' "[release-gate] PQ features: $PQ_FEATURES"
 
-EXPECTED_FEATURES="default, lite, ml-dsa"
+EXPECTED_FEATURES="default, fast-x25519, lite, ml-dsa"
 [[ "$PQ_FEATURES" == "$EXPECTED_FEATURES" ]] || \
     fail "unexpected shawncore-pq-crypto feature set: $PQ_FEATURES"
 

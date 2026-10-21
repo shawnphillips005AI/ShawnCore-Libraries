@@ -18,6 +18,7 @@ shawncore-pq-crypto = { default-features = false, path = "../shawncore-pq-crypto
 shawncore-rtos-sync = { path = "../shawncore-rtos-sync" }
 
 [features]
-default = ["ml-dsa"]
+default = ["ml-dsa", "fast-x25519"]
 ml-dsa = ["shawncore-pq-crypto/ml-dsa"]
+fast-x25519 = ["shawncore-pq-crypto/fast-x25519"]
 lite = ["shawncore-pq-crypto/lite"]
