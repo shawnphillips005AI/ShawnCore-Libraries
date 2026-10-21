@@ -66,7 +66,7 @@ struct Stats {
 }
 
 #[cfg(not(target_os = "none"))]
-const BATCHES: u64 = 9;
+const BATCHES: u64 = 25;
 
 #[cfg(not(target_os = "none"))]
 fn measure<F>(mut f: F, iters: u64) -> Stats
