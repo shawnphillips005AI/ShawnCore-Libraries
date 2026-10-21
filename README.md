@@ -23,7 +23,7 @@ self-contained static library with a C header that compiles as C99, C11 and C++1
 | **Packet protection** | ChaCha20 + HMAC-SHA384 Encrypt-then-MAC, per-direction nonce counters, 64-entry replay window |
 | **Signatures** | ML-DSA-87, optional (omitted by the `lite` configuration) |
 | **RTOS primitives** | O(1) bitmap scheduler, SPSC/ring queues, ABA-tagged DMA pool, interrupt-aware spinlocks, state machine |
-| **Integration** | One `staticlib`, one header for C99/C11 and C++ (135 functions, `SHAWNCORE_VERSION_*` macros), no libc, no heap, caller-allocated objects |
+| **Integration** | One `staticlib`, one header for C99/C11 and C++ (138 functions, `SHAWNCORE_VERSION_*` macros), no libc, no heap, caller-allocated objects |
 | **Targets built** | Host (x86-64) and `aarch64-unknown-none`. A 64-bit target with native 64-bit atomics is required; 32-bit targets such as Cortex-M are rejected at compile time |
 | **Toolchain** | `no_std`, `panic = "abort"`; minimum Rust 1.88 (CI-checked), developed and validated on 1.99.1 |
 
@@ -57,13 +57,14 @@ Every claim below is reproducible from a clean checkout with
 | **Zero external symbols** | The `aarch64-unknown-none` archive resolves entirely within itself. `memcpy`/`memset`/`memcmp` and soft-float builtins are bundled. No libc required. Checked by [`validation/check_archive.sh`](validation/check_archive.sh). |
 | **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
 | **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
-| **135 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
-| **159 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 87-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
+| **138 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
+| **171 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 87-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
 | **Known-answer tests for the classical primitives** | HMAC-SHA384 (RFC 4231), X25519 (RFC 7748 section 6.1), ChaCha20 (RFC 8439 keystream, cross-checked with OpenSSL), HKDF-SHA384, the hybrid KDF, and the AEAD framing, with vectors produced by independent implementations. |
 | **Official NIST ACVP sample vectors** | ML-KEM-1024 key generation, encapsulation, decapsulation and both key checks, and ML-DSA-87 key generation and signature verification, copied verbatim from usnistgov/ACVP-Server at a pinned commit; all 120 cases pass. Not a CAVP/CMVP validation. See [VALIDATION.md](VALIDATION.md). |
 | **Cross-implementation agreement with OpenSSL 3.5.8** | ML-KEM-1024 key generation from seed, deterministic encapsulation, decapsulation and implicit rejection, ML-DSA-87 key generation, deterministic signing and verification, and one complete hybrid session (transcript, key split, both packet directions) re-derived independently in Python, all byte-for-byte identical. Regenerate with [`validation/gen_openssl_vectors.sh`](validation/gen_openssl_vectors.sh). These are **not** NIST ACVP vectors. |
 | **Adversarial protocol tests** | Active-attacker tests for reflection, duplication, reordering, window edges, forged tags and sequence numbers, every single-bit flip, truncation, cross-session replay, failed-handshake retry, and a demonstration that an active intermediary can relay an unauthenticated handshake. |
-| **Test sensitivity** | 16 deliberate faults (accepting any tag, disabling replay detection, committing before authentication, boundary off-by-ones, dropped MAC and transcript coverage, skipped key wipes, a Lite feature leak) were applied to a disposable copy; every one made the suite fail. One gap, an unobserved key wipe, was found and closed. |
+| **Authenticated handshake tests** | Nine active-attacker tests (impersonation, tampering with every transcript field, wrong trust anchor, role-context reuse, replay against a new session, unconfirmed-session refusal, out-of-order calls) plus C-ABI tests; binding, transcript, both ML-DSA signatures and the resulting packets are byte-identical to an independent OpenSSL/Python derivation. Unreviewed and not formally analyzed. |
+| **Test sensitivity** | 24 deliberate faults (accepting any tag, disabling replay detection, committing before authentication, boundary off-by-ones, dropped MAC and transcript coverage, skipped key wipes, a Lite feature leak, and eight faults in the authenticated handshake) were applied to a disposable copy; every one made the suite fail. One gap, an unobserved key wipe, was found and closed. |
 | **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
 | **Fuzzed** | Three harnesses (`ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz`) with retained regression corpora; CI runs 10,000 executions of each. |
 | **ThreadSanitizer** | Standalone SPSC and ring-buffer stress workload, no reported race. |
@@ -84,6 +85,7 @@ Every claim below is reproducible from a clean checkout with
 | Digital signatures (optional) | ML-DSA-87 (FIPS 204) | Public key 2,592 B, signature 4,627 B on the wire; 32 B keygen seed |
 | Packet protection | ChaCha20 (RFC 8439, 96-bit nonce) + HMAC-SHA384, Encrypt-then-MAC | 32 B cipher key, 32 B MAC key, 48 B tag; MAC covers `len(aad) ‖ len(ct) ‖ nonce ‖ aad ‖ ct` |
 | Handshake transcript | SHA-384 over protocol label, ciphertext, sender X25519 key and caller info | 48 B, passed to HKDF as `info` |
+| Authenticated handshake (full configuration) | Mutual ML-DSA-87 signatures over a SHA-384 transcript that binds version, suite, both parties' public keys, both identity fingerprints, `info`, ciphertext and the encapsulating side's X25519 key; role-specific FIPS 204 contexts | Trust anchors provisioned out of band; session unconfirmed until the peer's signature verifies; unreviewed |
 
 ### Session behavior
 
@@ -95,6 +97,7 @@ Every claim below is reproducible from a clean checkout with
 | Replay window | 64 packets; authentication precedes any window update; sequences below the window are rejected |
 | Largest packet per nonce | $2^{38}-64$ bytes (ChaCha20 32-bit block-counter limit) |
 | Re-establishment | Zeroizes prior keys, counters and window before installing new keys |
+| Peer authentication | Opt-in via `*_authenticated` / `confirm_peer`; the plain handshake authenticates nobody |
 | Key material | No serialization entry point for secret keys; zeroized on every return path |
 
 ### Entropy
@@ -122,7 +125,7 @@ Every claim below is reproducible from a clean checkout with
 | Property | Value |
 |---|---|
 | Header | One file, [`shawncore.h`](shawncore-ffi/include/shawncore.h): C99/C11 and C++11 or later, `SHAWNCORE_VERSION_*` macros |
-| Surface | 135 exported functions, 24 sized types each with `_sizeof()` / `_alignof()` (all 64 B aligned) |
+| Surface | 138 exported functions, 24 sized types each with `_sizeof()` / `_alignof()` (all 64 B aligned) |
 | Errors | Typed status enums for crypto and RTOS; nothing is signalled out of band |
 | Host callbacks | Seven: `panic`, `disable_interrupts`, `restore_interrupts`, `cache_flush`, `cache_invalidate`, `monotonic_clock`, `pet_watchdog` |
 | Linking | One static archive; no libc, no allocator, no unwinding |
@@ -131,7 +134,7 @@ Every claim below is reproducible from a clean checkout with
 
 | Object | Size | Object | Size |
 |---|---:|---|---:|
-| Session manager | 4,608 | ML-DSA verifying key | 73,856 |
+| Session manager | 4,736 | ML-DSA verifying key | 73,856 |
 | ML-KEM public key | 2,112 | ML-DSA signing key | 104,640 |
 | ML-KEM decapsulation key | 4,288 | ML-DSA signature | 4,672 |
 | ML-KEM ciphertext | 1,600 | Scheduler | 1,088 |
@@ -260,6 +263,23 @@ two session managers completing a full hybrid handshake with every public value
 passed through its wire encoding, then an authenticated packet exchange and a
 replay rejection.
 
+**Authenticating the peer** (full configuration). Swap the two handshake calls for
+their signed variants; everything else is unchanged. Each side needs its own ML-DSA
+signing key and the peer's verifying key, provisioned out of band, and both sides
+must pass the same `salt` and `app_info`.
+
+```c
+/* Responder:  initiate_handshake(...)  -> send ek, x25519_pk                        */
+/* Initiator:  encapsulate_authenticated(s, my_sk, responder_vk, ek, x_pk, entropy,
+                   salt, salt_len, app_info, app_len, ct, my_x_pk, sig_i);
+               -> send ct, my_x_pk, sig_i   (session refuses traffic until confirmed) */
+/* Responder:  finalize_authenticated(s, my_sk, initiator_vk, my_x_pk, ct, sig_i,
+                   salt, salt_len, app_info, app_len, sig_r);
+               -> VERIFICATION_FAILED on a forged reply; handshake stays pending;
+               -> send sig_r                                                         */
+/* Initiator:  confirm_peer(s, responder_vk, sig_r)  -> session now usable           */
+```
+
 ---
 
 ## Components
@@ -282,10 +302,19 @@ transmit and replay state before installing replacements. Sensitive material is
 explicitly zeroized on every return path, success or error. Secret keys have no
 serialization entry point and cannot be exported through the ABI.
 
-**The handshake is not authenticated.** It performs hybrid key agreement only: no
-peer identity, no key confirmation, and no full-transcript binding. An active
-man-in-the-middle is not defended against until an integrator adds an
-authenticated layer; SECURITY.md section 10 lists the required properties.
+**Peer authentication is opt-in, and unreviewed.** The quick-start handshake above
+performs hybrid key agreement only and is open to an active man-in-the-middle. The
+full configuration also provides an **authenticated handshake**
+(`encapsulate_authenticated`, `finalize_authenticated`, `confirm_peer`): each side
+signs the whole exchange with its ML-DSA-87 identity key and verifies the peer
+against a verifying key you provisioned out of band, and an unconfirmed session
+refuses all traffic. It is a composition of standard components in the signed-
+transcript pattern of TLS 1.3 and SIGMA, tested against active attackers and
+reproduced byte for byte by an independent OpenSSL/Python implementation, but it
+has had no formal analysis and no independent review. The Lite configuration has
+no ML-DSA and therefore no authenticated handshake. Design, encodings and limits:
+[ARCHITECTURE.md section 4.5](ARCHITECTURE.md#45-the-authenticated-handshake) and
+[SECURITY.md section 10](SECURITY.md).
 
 Full trust boundaries, in-scope and out-of-scope threats, known limitations, and
 the host integration contract: **[SECURITY.md](SECURITY.md)**.
@@ -397,7 +426,7 @@ The evidence behind each line is in [VALIDATION.md](VALIDATION.md).
 **IMPLEMENTED** — AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF and
 directional session keys, wire codecs, FFI surfaces, RTOS primitives, C HAL stubs.
 
-**TESTED** — 159 Rust #[test] functions covering crypto round trips and tampering,
+**TESTED** — 171 Rust #[test] functions covering crypto round trips and tampering,
 known-answer vectors for the classical primitives, wire round trips proving
 semantic equivalence after decode, FFI null/zero-length and overlap handling,
 session re-establishment and replay paths, queue reuse and corruption paths,
@@ -438,8 +467,8 @@ This is a prototype for technical evaluation. It is not a claim of FIPS
 certification, CNSA approval, operational USV readiness, or comprehensive
 security assurance. The 32-bit DMA-pool free-list ABA tag can wrap after $2^{32}$
 free-list mutations; deployments must bound that operational lifetime or
-reinitialize the pool. The session handshake is unauthenticated, and no peer identity, PKI, trust-anchor, or revocation model
-is defined here; that protocol layer belongs to the integrator. Retained
+reinitialize the pool. The unauthenticated handshake offers no peer authentication; the authenticated handshake is unreviewed, and certificate formats, revocation and
+trust-anchor provisioning are not defined here and belong to the integrator. Retained
 regression tests do not establish target timing, cache, or physical-memory
 behavior.
 

@@ -76,10 +76,11 @@ in portable `no_std` Rust at all.
   memory model only. They do not flush caches, do not make data visible to a DMA
   engine, and do not prove board-level coherency. Page alignment is an
   alignment and storage property, **not** DMA pinning or physical ownership.
-- **Peer authentication and PKI.** ML-DSA-87 primitives are provided, but this
-  repository does not define an identity model, certificate format, trust
-  anchor, revocation mechanism, or binding of a signature to the handshake
-  transcript. That protocol layer is the integrator's responsibility.
+- **PKI and identity provisioning.** The authenticated handshake (section 10)
+  authenticates a peer against a verifying key you provisioned. Certificate
+  formats, chains, revocation, key rotation and provisioning are platform policy
+  and are not defined here, and the Lite configuration has no ML-DSA and so no
+  authenticated handshake.
 - **Traffic analysis.** No padding, cover traffic, or length hiding.
 - **Denial of service at the link layer.** Jamming, flooding, and resource
   exhaustion driven from outside the library are not addressed.
@@ -277,60 +278,86 @@ structure check includes the FIPS 203 modulus check, so a non-canonical encoding
 is rejected. Any other well-formed encoding of the correct length decodes, and
 none of the decoders authenticates a peer. Binding a public key to a peer identity — through
 ML-DSA signatures over a transcript, a pre-provisioned trust anchor, or an
-out-of-band channel — is your protocol layer's responsibility. Without it the
-handshake is unauthenticated and open to an active man-in-the-middle.
+out-of-band channel — is your protocol layer's responsibility unless you use the
+authenticated handshake (section 10), which binds identities through a signed transcript.
+Without one of them the handshake is unauthenticated and open to an active man-in-the-middle.
 
-### 10. The handshake is unauthenticated; required properties of an authenticated one
+### 10. Peer authentication
 
-The session handshake performs hybrid key agreement only. Assessment of the
-current implementation:
+ShawnCore offers two handshakes. Choose deliberately.
 
-- **No peer identity.** Nothing binds either public key to an identity. ML-DSA-87
-  primitives exist but are not connected to the handshake. An active attacker can
-  substitute keys and terminate a session with each side separately.
-- **No key confirmation.** Neither side proves possession of the derived keys, so
-  a mismatched or tampered handshake is detected only when the first packet fails
-  authentication.
-- **Partial transcript.** The KDF input covers the ML-KEM ciphertext, the
-  encapsulating peer's X25519 public key and caller `info`. It does not cover the
-  key-generating peer's ML-KEM or X25519 public keys, roles, a protocol version or
-  algorithm identifiers. Put these into `info` until a defined protocol exists.
-- **Entropy reuse reuses nonces.** Starting or completing a handshake resets the
-  packet counters. If both peers reuse the entropy they supplied earlier, the
-  derived keys and the nonce sequence repeat, which breaks confidentiality and
-  authenticity. The host must never supply the same entropy twice.
-- **No negotiation.** The library has a single fixed suite, so it exposes no
-  in-library downgrade surface; an integrator-added negotiation must be covered
-  by the signed transcript.
-- **Failed handshakes fail closed.** A response that fails (for example a
-  low-order X25519 point) consumes the pending handshake, so an on-path attacker
-  can force the key-generating side to restart. A forged ML-KEM ciphertext does
-  not fail: ML-KEM implicit rejection yields an unrelated secret and the failure
-  surfaces only at the first packet.
+**Unauthenticated (`initiate_handshake`, `finalize_handshake`, `encapsulate_for_peer`).**
+Hybrid key agreement only: no peer identity, no key confirmation, and a transcript that omits
+the key-generating peer's public keys, roles, version and suite. These functions are unchanged and
+remain open to an active man-in-the-middle, which the test
+`unauthenticated_handshake_lets_an_active_intermediary_relay_and_rewrite_traffic` demonstrates: an
+intermediary who intercepts the exchange sits between the endpoints, reads and rewrites every
+packet, and both endpoints see valid sessions. A forged ML-KEM ciphertext is not an error (implicit
+rejection yields an unrelated secret), so tampering surfaces only at the first packet, and a
+response that fails outright (for example a low-order X25519 point) consumes the pending handshake.
+Starting or completing a handshake resets the packet counters, so reusing the same entropy on both
+sides repeats keys and nonces; never supply entropy twice. Use this API only where an active
+attacker is out of scope, or authenticate the link another way (a pre-provisioned secret passed as
+`salt` stops an intermediary that lacks it from deriving the keys; this gives symmetric
+authentication only and mismatch shows at the first packet).
 
-**Demonstrated attacker capability** (test
-`unauthenticated_handshake_lets_an_active_intermediary_relay_and_rewrite_traffic`):
-an active intermediary who can intercept the key exchange establishes one session
-with each endpoint, reads and rewrites every packet, and both endpoints see valid
-sessions.
+**Authenticated (`encapsulate_authenticated`, `finalize_authenticated`, `confirm_peer`).**
+Full configuration only (it needs ML-DSA-87; the Lite configuration has no equivalent).
 
-**Smallest mitigation available without an ABI change.** Pass a secret that was
-provisioned out of band as `salt` on both sides. HKDF-Extract is HMAC keyed by the
-salt, so an intermediary without it derives keys unrelated to its victim's (test
-`an_intermediary_without_the_preshared_salt_cannot_read_the_session`). This is a
-mitigation, not a reviewed protocol: it gives symmetric, not per-device,
-authentication, requires secure provisioning and rotation, and reveals mismatch
-only at the first packet.
+*Design decision.* The hybrid exchange is kept as is and wrapped in the signed-transcript pattern
+used by TLS 1.3 and SIGMA, using only primitives already in the library. Each side holds an ML-DSA-87
+signing key and a **trust anchor**: the peer's verifying key, provisioned out of band. This was
+chosen over a pre-shared key because it gives per-device identity and survives compromise of a
+single device's secrets, over a certificate chain because chains, revocation and clocks are platform
+policy this library cannot own, and over a bespoke key-confirmation MAC because a signature over the
+full transcript already binds both identities and every exchanged value.
 
-This repository does not define the replacement protocol. A design for expert
-review should include: pre-provisioned ML-DSA trust anchors; a signature over the
-full transcript (both parties' public keys and ciphertext, roles, version, suite
-identifier, a fresh nonce from each side); key-confirmation MACs under keys
-derived from the transcript; and a rekey policy that bounds the packet counter.
-The `info` and `salt` parameters are bound into the KDF, so a protocol layer can
-add its transcript without changing the ABI. Do not describe the library as
-resistant to active man-in-the-middle attacks until that layer exists and is
-reviewed.
+*Flow* (names as in [ARCHITECTURE.md](ARCHITECTURE.md#45-the-authenticated-handshake)):
+
+1. Key-generating side: `initiate_handshake` sends its ML-KEM and X25519 public keys.
+2. Encapsulating side: `encapsulate_authenticated` derives the session keys, signs the transcript
+   (context `ShawnCore-auth-v1 encapsulating side`), and sends the ciphertext, its X25519 key and the
+   signature. Its session is **unconfirmed** and refuses all traffic.
+3. Key-generating side: `finalize_authenticated` verifies that signature against its trust anchor
+   *before* finalizing, then sends its own signature (context `ShawnCore-auth-v1 key-generating
+   side`).
+4. Encapsulating side: `confirm_peer` verifies it against the identity the session was bound to;
+   only then may the session carry traffic.
+
+*What the transcript binds.* Protocol version, suite identifier, the key-generating side's ML-KEM
+and X25519 public keys, both identities (SHA-384 fingerprints of the verifying keys), the length-
+prefixed application `info`, the ML-KEM ciphertext and the encapsulating side's X25519 key. The
+binding is also passed to the existing handshake as `info`, so the session keys depend on all of it.
+
+*Properties the design aims at, and what evidence exists* (host tests only; the second column is not
+a proof):
+
+| Property | Evidence |
+| --- | --- |
+| An intermediary with its own key cannot impersonate either side | `an_active_intermediary_with_its_own_identity_is_rejected`, `an_impersonator_of_the_keygen_side_cannot_confirm_the_session` |
+| Every transcript field is authenticated (ciphertext, X25519 key, signature, application info) | `every_tampered_reply_field_is_rejected_without_consuming_the_handshake` |
+| No unknown-key-share: identities are bound, and `confirm_peer` pins the identity | `the_wrong_trust_anchor_rejects_a_genuine_reply`, `an_impersonator_of_the_keygen_side_cannot_confirm_the_session` |
+| No reflection or cross-role reuse of a signature (role contexts) | `role_contexts_stop_one_sides_signature_standing_in_for_the_other` (one key on both sides, so only the context differs) |
+| Freshness: a recorded reply fails against a new ephemeral key | `a_reply_recorded_from_an_earlier_handshake_does_not_verify_in_a_new_one` |
+| An unconfirmed session cannot send or receive | `mutual_authentication_completes_and_traffic_flows_both_ways` |
+| Forged replies do not consume the pending handshake (cost: one verification) | `an_active_intermediary_with_its_own_identity_is_rejected` |
+| The encodings match an independent implementation | `authenticated_handshake_matches_an_independent_implementation`: binding, transcript, both ML-DSA signatures (OpenSSL 3.5.8 with FIPS 204 contexts) and the resulting packets are byte-identical |
+| The tests detect regressions | Eight targeted faults (ignoring a signature, dropping the identity pin, sharing one context, letting an unconfirmed session send, omitting `info` or an identity from the binding, skipping `confirm_peer` verification, consuming the handshake on a forgery) were each caught |
+
+*Not claimed.* No formal analysis (for example Tamarin or ProVerif) and no independent review: this
+is a composition of standard components, but the composition itself is new and **unreviewed**.
+Authentication is post-quantum only through ML-DSA (the key exchange is hybrid). Forward secrecy
+against later compromise of a long-term signing key is the design intent (session keys come from
+ephemeral keys) and has not been proven. Identity privacy is not provided: both verifying keys'
+fingerprints are bound, and the signatures travel in the clear. There is no revocation, key
+rotation or provisioning mechanism; those are platform policy. Freshness depends on the key-
+generating side's entropy being fresh. Signing is deterministic (see Known Limitations).
+
+*Integrator obligations.* Provision each side's trust anchor through a channel you trust. Supply
+unpredictable entropy and never reuse it. Give both sides identical `salt` and `app_info`. Abandon a
+handshake that does not complete (`zeroize`); a forged or delayed message cannot be told from loss.
+Budget the memory: an ML-DSA signing key occupies about 105 KB and a verifying key about 74 KB in
+memory, and signing uses a large stack (see the README).
 
 ## Build and Link
 
@@ -354,7 +381,8 @@ The following remain required and are not satisfied by this repository:
 - ML-KEM / ML-DSA known-answer and external interoperability testing.
 - Target ABI validation with the real toolchain and HAL.
 - Board-level cache, DMA, interrupt, watchdog, entropy, and stack validation.
-- A defined peer authentication and key-provisioning protocol.
+- A reviewed key-provisioning and revocation process for the authenticated
+  handshake's trust anchors, and independent review of the handshake itself.
 
 ## Lite Security Boundary
 

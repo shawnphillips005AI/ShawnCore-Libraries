@@ -17,6 +17,8 @@ compile_error!(
 );
 
 pub mod aead_wrapper;
+#[cfg(feature = "ml-dsa")]
+pub mod auth_handshake;
 pub mod entropy_pool;
 pub mod entropy_queue;
 pub mod error;

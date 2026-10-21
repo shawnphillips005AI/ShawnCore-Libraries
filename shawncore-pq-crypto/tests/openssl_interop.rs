@@ -207,3 +207,115 @@ fn ml_dsa_87_agrees_with_openssl() {
         .join()
         .unwrap();
 }
+
+/// The authenticated handshake (identities, binding, transcript, both signatures and the
+/// resulting session) re-derived by `validation/gen_session_vector.py` with OpenSSL and Python.
+#[cfg(feature = "ml-dsa")]
+#[test]
+fn authenticated_handshake_matches_an_independent_implementation() {
+    use shawncore_pq_crypto::auth_handshake::{
+        handshake_binding, identity_fingerprint, transcript_hash,
+    };
+    use shawncore_pq_crypto::ml_dsa_wrapper::{ml_dsa_keygen, Signature87};
+    use shawncore_pq_crypto::session_manager::SessionManager;
+    use shawncore_pq_crypto::x25519_wrapper::X25519Public;
+
+    std::thread::Builder::new()
+        .stack_size(64 << 20)
+        .spawn(|| {
+            setup();
+            let v = vectors();
+            let (k_vk, k_sk) = ml_dsa_keygen(&[0x41; 32]).unwrap();
+            let (e_vk, e_sk) = ml_dsa_keygen(&[0x42; 32]).unwrap();
+            assert_eq!(
+                k_vk.to_bytes().as_slice(),
+                v["auth.keygen_identity_pk"].as_slice()
+            );
+            assert_eq!(
+                e_vk.to_bytes().as_slice(),
+                v["auth.encap_identity_pk"].as_slice()
+            );
+
+            let keygen_entropy: [u8; 96] = array(&v, "session.keygen_entropy");
+            let encap_entropy: [u8; 64] = array(&v, "session.encap_entropy");
+            let (salt, aad) = (&v["session.salt"], &v["session.aad"]);
+            let app_info = &v["auth.app_info"];
+
+            let mut keygen = SessionManager::new();
+            let mut encap = SessionManager::new();
+            let (ek, xk) = keygen.initiate_handshake(&keygen_entropy).unwrap();
+
+            let binding = handshake_binding(
+                &ek,
+                &xk,
+                &identity_fingerprint(&k_vk),
+                &identity_fingerprint(&e_vk),
+                app_info,
+            )
+            .unwrap();
+            assert_eq!(binding.as_slice(), v["auth.binding"].as_slice());
+
+            let mut ct = Ciphertext1024([0; 1568]);
+            let mut xe = X25519Public([0; 32]);
+            let mut sig_e = Signature87([0; 4627]);
+            encap
+                .encapsulate_authenticated(
+                    &e_sk,
+                    &k_vk,
+                    &ek,
+                    &xk,
+                    &encap_entropy,
+                    salt,
+                    app_info,
+                    &mut ct,
+                    &mut xe,
+                    &mut sig_e,
+                )
+                .unwrap();
+            assert_eq!(
+                transcript_hash(&binding, &ct, &xe).as_slice(),
+                v["auth.transcript"].as_slice()
+            );
+            assert_eq!(
+                sig_e.0.as_slice(),
+                v["auth.sig_e"].as_slice(),
+                "encapsulating signature"
+            );
+
+            let mut sig_k = Signature87([0; 4627]);
+            keygen
+                .finalize_authenticated(&k_sk, &e_vk, &xe, &ct, &sig_e, salt, app_info, &mut sig_k)
+                .unwrap();
+            assert_eq!(
+                sig_k.0.as_slice(),
+                v["auth.sig_k"].as_slice(),
+                "key-generating signature"
+            );
+            encap.confirm_peer(&k_vk, &sig_k).unwrap();
+
+            let plaintext = &v["session.e2k_plaintext"];
+            let mut out = vec![0u8; plaintext.len()];
+            let (mut nonce, mut tag) = ([0u8; 12], [0u8; 48]);
+            encap
+                .encrypt_packet(aad, plaintext, &mut out, &mut nonce, &mut tag)
+                .unwrap();
+            assert_eq!(out.as_slice(), v["auth.e2k_ct"].as_slice());
+            assert_eq!(tag.as_slice(), v["auth.e2k_tag"].as_slice());
+            let mut back = vec![0u8; out.len()];
+            keygen
+                .decrypt_packet(aad, &out, &nonce, &tag, &mut back)
+                .unwrap();
+            assert_eq!(&back, plaintext);
+            let plaintext = &v["session.k2e_plaintext"];
+            let mut out = vec![0u8; plaintext.len()];
+            let (mut nonce, mut tag) = ([0u8; 12], [0u8; 48]);
+            keygen
+                .encrypt_packet(aad, plaintext, &mut out, &mut nonce, &mut tag)
+                .unwrap();
+            assert_eq!(out.as_slice(), v["auth.k2e_ct"].as_slice());
+            assert_eq!(tag.as_slice(), v["auth.k2e_tag"].as_slice());
+        })
+        .unwrap()
+        .join()
+        .unwrap();
+}

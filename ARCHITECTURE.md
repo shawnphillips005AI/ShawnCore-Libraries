@@ -52,7 +52,7 @@ graph TD
         HAL["Platform HAL<br/>cache · IRQ · clock · watchdog · RNG"]
     end
 
-    subgraph ABI["C ABI surface — 135 exported symbols"]
+    subgraph ABI["C ABI surface — 138 exported symbols"]
         HDR["shawncore.h"]
     end
 
@@ -201,6 +201,60 @@ A single bidirectional key would require both peers to coordinate a nonce space
 to avoid catastrophic reuse. Splitting by direction means each side owns a
 private, monotonic counter and reuse is structurally impossible without a bug in
 one endpoint alone.
+
+### 4.5 The authenticated handshake
+
+Section 4.2 is key agreement only; it authenticates nobody, and an active
+intermediary can relay it (see SECURITY.md section 10). The authenticated variant
+keeps 4.2 intact and wraps it in the signed-transcript pattern of TLS 1.3 and
+SIGMA, using only ML-DSA-87 and SHA-384 already in the library. Roles map as
+**key-generating side = Responder**, **encapsulating side = Initiator**.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant R as Responder (key-generating)
+    participant I as Initiator (encapsulating)
+
+    Note over R,I: Each holds its own ML-DSA-87 signing key<br/>and the peer's verifying key (trust anchor)
+    R->>I: ek ‖ xK                      (initiate_handshake)
+    Note over I: encapsulate_authenticated<br/>binding → info → session keys (UNCONFIRMED)<br/>σE = Sign(skI, ctxI, transcript)
+    I->>R: ct ‖ xE ‖ σE
+    Note over R: finalize_authenticated<br/>Verify(vkI, ctxI, transcript, σE) BEFORE finalizing<br/>keys live; σK = Sign(skR, ctxR, transcript)
+    R->>I: σK
+    Note over I: confirm_peer<br/>pinned identity + Verify(vkR, ctxR, transcript, σK)<br/>session may now carry traffic
+```
+
+**Encodings** (all hashes SHA-384; `be16/be32` big-endian lengths):
+
+| Value | Definition |
+| --- | --- |
+| `fp(vk)` | `SHA384("ShawnCore-auth-v1 identity" ‖ vk[2592])` |
+| `binding` | `SHA384("ShawnCore-auth-v1 binding" ‖ 0x01 ‖ be16(len suite) ‖ suite ‖ ek[1568] ‖ xK[32] ‖ fp(vkR) ‖ fp(vkI) ‖ be32(len info) ‖ info)` |
+| `transcript` | `SHA384("ShawnCore-auth-v1 transcript" ‖ binding ‖ ct[1568] ‖ xE[32])` |
+| session keys | The 4.2 derivation with `info := binding` (its internal transcript hashes `binding` again with `ct` and `xE`) |
+| `σE` | ML-DSA-87 deterministic signature of `transcript`, FIPS 204 context `"ShawnCore-auth-v1 encapsulating side"` |
+| `σK` | The same over `transcript`, context `"ShawnCore-auth-v1 key-generating side"` |
+| `suite` | `"ML-KEM-1024+X25519;HKDF-SHA384;ChaCha20+HMAC-SHA384;ML-DSA-87"`; there is no negotiation, so there is nothing to downgrade |
+
+**State rules.** The Initiator's session is *unconfirmed* after
+`encapsulate_authenticated`: `encrypt_packet` and `decrypt_packet` return
+`InvalidState` until `confirm_peer` succeeds. `finalize_authenticated` verifies before it
+finalizes, so a forged reply costs one verification and leaves the pending handshake
+untouched. A valid signature with a failing derivation consumes the pending
+handshake. `confirm_peer` compares `fp(vk)` to the identity recorded at encapsulation in constant
+time, so a valid signature from a different key is rejected. A failed `confirm_peer` leaves the
+session unconfirmed; `zeroize_session` abandons it. The pending state (transcript and peer
+fingerprint, 96 bytes) is why `SessionManager` grew from 4,608 to 4,736 bytes.
+
+**Why this shape.** Signatures over the whole transcript bind both identities and every exchanged
+value, so no separate key-confirmation MAC is needed; distinct contexts stop one side's signature
+standing in for the other; the Responder's fresh ephemeral key inside the transcript is the
+freshness challenge; and putting the verification ahead of ML-KEM decapsulation means unauthenticated
+input cannot reach the expensive or secret-dependent path. The independent derivation in
+`validation/gen_session_vector.py` (OpenSSL + Python) reproduces every encoding above byte for byte.
+The design is **unreviewed**; its limits are listed in SECURITY.md section 10. The Lite configuration
+omits it with ML-DSA.
 
 ---
 
@@ -493,7 +547,7 @@ archive with the `_sizeof()` / `_alignof()` functions):
 
 | Object | Size (B) | Align (B) |
 |---|---:|---:|
-| `session_manager` | 4,608 | 64 |
+| `session_manager` | 4,736 | 64 |
 | `ml_kem_publickey` | 2,112 | 64 |
 | `ml_kem_decapskey` | 4,288 | 64 |
 | `ml_kem_ciphertext` | 1,600 | 64 |
@@ -586,8 +640,9 @@ Stated here so it is not inferred from silence:
   OpenSSL cross-implementation vectors add drift and interoperability evidence, but
   none of this is an algorithm validation.
 - Side-channel behavior of the compiled artifact on the target core.
-- Peer identity, PKI, trust anchors, and revocation — no identity model is
-  defined here.
+- Independent review of the authenticated handshake (section 4.5), a formal
+  analysis of it, and PKI, trust-anchor provisioning and revocation, which are
+  platform policy and are not defined here.
 - Independent security review.
 
 Each of these is tracked as an explicit open gate in [VALIDATION.md](VALIDATION.md)

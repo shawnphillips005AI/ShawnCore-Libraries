@@ -8,12 +8,12 @@
 //! Hybrid ML-KEM-1024 and X25519 handshake.
 //! Hardware-agnostic implementation for autonomous surface vehicles.
 //!
-//! Security boundary: the handshake transcript does not authenticate a peer identity.
-//! Deployments that require MITM resistance must bind the handshake to an authenticated
-//! identity or trust anchor in the integrating protocol.
+//! Security boundary: `initiate_handshake` / `finalize_handshake` / `encapsulate_for_peer` do not
+//! authenticate a peer identity. Use `encapsulate_authenticated` / `finalize_authenticated` /
+//! `confirm_peer` (feature `ml-dsa`) for MITM resistance; they are unreviewed (see SECURITY.md).
 //! Manages both ML-KEM-1024 and X25519 key encapsulation/decapsulation to establish
-//! a hybrid symmetric key for network communications. Peer authentication, trust
-//! binding, and any application-level forward-secrecy guarantees are defined by
+//! a hybrid symmetric key for network communications. Trust provisioning and any
+//! application-level forward-secrecy guarantees are defined by
 //! the integrating protocol rather than this module alone.
 //! Prevents single-algorithm cryptographic collapse.
 //! Every sensitive local (entropy arrays, shared secrets, and the derived hybrid
@@ -34,6 +34,18 @@ use crate::zeroize::{secure_cache_flush, secure_zeroize};
 use core::sync::atomic::{compiler_fence, Ordering};
 use sha2::{Digest, Sha384};
 use zeroize::Zeroize;
+
+#[cfg(feature = "ml-dsa")]
+use crate::auth_handshake::{
+    handshake_binding, identity_fingerprint, transcript_hash, CONTEXT_ENCAPSULATING_SIDE,
+    CONTEXT_KEYGEN_SIDE,
+};
+#[cfg(feature = "ml-dsa")]
+use crate::ml_dsa_wrapper::{
+    ml_dsa_sign_with_context, ml_dsa_verify_with_context, PublicKey87, Signature87, SigningKey87,
+};
+#[cfg(feature = "ml-dsa")]
+use subtle::ConstantTimeEq;
 
 /// Manages the lifecycle of the hybrid post-quantum session key.
 /// Designed to be instantiated by the host OS and passed across the FFI boundary.
@@ -58,6 +70,15 @@ pub struct SessionManager {
     rx_counter: u64,
     /// Bitmask of accepted sequence numbers in the trailing 64-packet window.
     rx_window: u64,
+    /// Set while an authenticated encapsulation awaits the peer's signature; traffic is refused.
+    pending_auth: Option<PendingAuthentication>,
+}
+
+/// What `confirm_peer` must check: the signed transcript and the identity it was bound to.
+#[cfg_attr(not(feature = "ml-dsa"), allow(dead_code))]
+struct PendingAuthentication {
+    transcript: [u8; 48],
+    peer_identity: [u8; 48],
 }
 
 impl Default for SessionManager {
@@ -87,6 +108,7 @@ impl SessionManager {
             tx_counter: 0,
             rx_counter: 0,
             rx_window: 0,
+            pending_auth: None,
         }
     }
 
@@ -384,7 +406,10 @@ impl SessionManager {
         nonce: &mut [u8; 12],
         tag: &mut [u8; AEAD_TAG_SIZE],
     ) -> Result<(), CryptoError> {
-        if !self.is_established || ciphertext.len() != plaintext.len() {
+        if !self.is_established
+            || self.pending_auth.is_some()
+            || ciphertext.len() != plaintext.len()
+        {
             return Err(CryptoError::InvalidState);
         }
         if self.tx_counter == u64::MAX {
@@ -435,7 +460,10 @@ impl SessionManager {
         tag: &[u8; AEAD_TAG_SIZE],
         plaintext: &mut [u8],
     ) -> Result<(), CryptoError> {
-        if !self.is_established || plaintext.len() != ciphertext.len() {
+        if !self.is_established
+            || self.pending_auth.is_some()
+            || plaintext.len() != ciphertext.len()
+        {
             return Err(CryptoError::InvalidState);
         }
         self.check_rx_nonce(nonce)?;
@@ -493,8 +521,168 @@ impl SessionManager {
         self.tx_counter = 0;
         self.rx_counter = 0;
         self.rx_window = 0;
+        self.pending_auth = None;
 
         compiler_fence(Ordering::SeqCst);
+    }
+}
+
+#[cfg(feature = "ml-dsa")]
+impl SessionManager {
+    /// Encapsulating side of the authenticated handshake.
+    ///
+    /// Runs [`Self::encapsulate_for_peer`] with `info` set to the handshake binding, then signs the
+    /// transcript with `own_signing_key`. The session keys are derived but **unconfirmed**: the
+    /// session refuses all traffic until [`Self::confirm_peer`] verifies the peer's signature.
+    ///
+    /// `peer_verifying_key` is the trust anchor for the key-generating side. Any failure after
+    /// the keys were derived wipes the session.
+    #[allow(clippy::too_many_arguments)]
+    pub fn encapsulate_authenticated(
+        &mut self,
+        own_signing_key: &SigningKey87,
+        peer_verifying_key: &PublicKey87,
+        peer_ml_kem_pk: &PublicKey1024,
+        peer_x25519_pk: &X25519Public,
+        entropy: &[u8; 64],
+        salt: &[u8],
+        app_info: &[u8],
+        out_ct: &mut Ciphertext1024,
+        out_pk: &mut X25519Public,
+        out_signature: &mut Signature87,
+    ) -> Result<(), CryptoError> {
+        let own_identity = identity_fingerprint(&own_signing_key.verifying_key());
+        let peer_identity = identity_fingerprint(peer_verifying_key);
+        let binding = handshake_binding(
+            peer_ml_kem_pk,
+            peer_x25519_pk,
+            &peer_identity,
+            &own_identity,
+            app_info,
+        )?;
+
+        self.encapsulate_for_peer(
+            peer_ml_kem_pk,
+            peer_x25519_pk,
+            entropy,
+            salt,
+            &binding,
+            out_ct,
+            out_pk,
+        )?;
+
+        let transcript = transcript_hash(&binding, out_ct, out_pk);
+        match ml_dsa_sign_with_context(own_signing_key, &transcript, CONTEXT_ENCAPSULATING_SIDE) {
+            Ok(signature) => {
+                *out_signature = signature;
+                self.pending_auth = Some(PendingAuthentication {
+                    transcript,
+                    peer_identity,
+                });
+                Ok(())
+            }
+            Err(error) => {
+                self.zeroize_session();
+                Err(error)
+            }
+        }
+    }
+
+    /// Key-generating side of the authenticated handshake.
+    ///
+    /// Verifies the encapsulating side's signature over the transcript against
+    /// `peer_verifying_key` **before** finalizing, so a forged response costs one signature
+    /// verification and consumes nothing: the pending handshake survives and the genuine
+    /// response can still be processed. On success the keys are live and `out_signature`
+    /// (this side's proof) must be sent to the peer for [`Self::confirm_peer`].
+    ///
+    /// `salt` and `app_info` must equal the peer's. A valid signature with a failing key
+    /// derivation (for example a low-order X25519 point) consumes the pending handshake.
+    #[allow(clippy::too_many_arguments)]
+    pub fn finalize_authenticated(
+        &mut self,
+        own_signing_key: &SigningKey87,
+        peer_verifying_key: &PublicKey87,
+        peer_x25519_pk: &X25519Public,
+        ml_kem_ct: &Ciphertext1024,
+        peer_signature: &Signature87,
+        salt: &[u8],
+        app_info: &[u8],
+        out_signature: &mut Signature87,
+    ) -> Result<(), CryptoError> {
+        let (own_ml_kem_pk, own_x25519_pk) = {
+            let dk = self.ml_kem_dk.as_ref().ok_or(CryptoError::InvalidState)?;
+            let sk = self.x25519_sk.as_ref().ok_or(CryptoError::InvalidState)?;
+            (
+                PublicKey1024(dk.0.encapsulation_key().clone()),
+                x25519_keygen(&sk.0).0,
+            )
+        };
+        let own_identity = identity_fingerprint(&own_signing_key.verifying_key());
+        let peer_identity = identity_fingerprint(peer_verifying_key);
+        let binding = handshake_binding(
+            &own_ml_kem_pk,
+            &own_x25519_pk,
+            &own_identity,
+            &peer_identity,
+            app_info,
+        )?;
+        let transcript = transcript_hash(&binding, ml_kem_ct, peer_x25519_pk);
+
+        ml_dsa_verify_with_context(
+            peer_verifying_key,
+            &transcript,
+            CONTEXT_ENCAPSULATING_SIDE,
+            peer_signature,
+        )?;
+
+        self.finalize_handshake(peer_x25519_pk, ml_kem_ct, salt, &binding)?;
+
+        match ml_dsa_sign_with_context(own_signing_key, &transcript, CONTEXT_KEYGEN_SIDE) {
+            Ok(signature) => {
+                *out_signature = signature;
+                Ok(())
+            }
+            Err(error) => {
+                self.zeroize_session();
+                Err(error)
+            }
+        }
+    }
+
+    /// Completes the encapsulating side by verifying the key-generating side's signature.
+    ///
+    /// `peer_verifying_key` must be the identity this session was bound to; a signature from any
+    /// other key is rejected even if it verifies. A failed check leaves the session unconfirmed
+    /// (still refusing traffic) so the genuine signature can still arrive; call
+    /// [`Self::zeroize_session`] to abandon it.
+    pub fn confirm_peer(
+        &mut self,
+        peer_verifying_key: &PublicKey87,
+        peer_signature: &Signature87,
+    ) -> Result<(), CryptoError> {
+        let pending = self
+            .pending_auth
+            .as_ref()
+            .ok_or(CryptoError::InvalidState)?;
+        let presented = identity_fingerprint(peer_verifying_key);
+        if !bool::from(presented.as_slice().ct_eq(pending.peer_identity.as_slice())) {
+            return Err(CryptoError::VerificationFailed);
+        }
+        ml_dsa_verify_with_context(
+            peer_verifying_key,
+            &pending.transcript,
+            CONTEXT_KEYGEN_SIDE,
+            peer_signature,
+        )?;
+        self.pending_auth = None;
+        Ok(())
+    }
+
+    /// Whether this side is waiting for [`Self::confirm_peer`].
+    #[must_use]
+    pub fn is_awaiting_peer_confirmation(&self) -> bool {
+        self.pending_auth.is_some()
     }
 }
 
@@ -544,6 +732,7 @@ mod tests {
             tx_counter: 0,
             rx_counter: 0,
             rx_window: 0,
+            pending_auth: None,
         };
 
         assert_eq!(manager.verify_key_integrity(), Ok(()));
@@ -568,6 +757,7 @@ mod tests {
             tx_counter: 7,
             rx_counter: 0,
             rx_window: 0,
+            pending_auth: None,
         };
         let mut ciphertext = [0u8; 1];
         let mut nonce = [0u8; 12];
@@ -662,6 +852,7 @@ mod tests {
             tx_counter: u64::MAX - 1,
             rx_counter: 0,
             rx_window: 0,
+            pending_auth: None,
         };
         let mut ciphertext = [0u8; 2];
         let mut nonce = [0u8; 12];
@@ -755,6 +946,7 @@ mod tests {
             tx_counter: 5,
             rx_counter: 9,
             rx_window: 3,
+            pending_auth: None,
         };
         TX.store(
             manager.tx_key.as_ref().unwrap().as_ptr() as usize,

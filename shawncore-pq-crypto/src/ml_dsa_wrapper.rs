@@ -44,6 +44,14 @@ pub struct SigningKey87(#[zeroize(skip)] pub SigningKey<MlDsa87>);
 #[derive(Clone)]
 pub struct Signature87(pub [u8; 4627]);
 
+impl SigningKey87 {
+    /// The verifying key that corresponds to this signing key.
+    #[must_use]
+    pub fn verifying_key(&self) -> PublicKey87 {
+        PublicKey87(self.0.verifying_key().clone())
+    }
+}
+
 impl PublicKey87 {
     /// Serializes the key into its FIPS 204 `pk` wire encoding.
     ///
@@ -128,4 +136,49 @@ pub fn ml_dsa_verify(pk: &PublicKey87, msg: &[u8], sig: &Signature87) -> Result<
 
     pk.0.verify(msg, &sig_obj)
         .map_err(|_| CryptoError::VerificationFailed)
+}
+
+/// Signs `msg` with the FIPS 204 deterministic variant under a non-empty-capable context string.
+///
+/// The context separates signing purposes: a signature made under one context never verifies
+/// under another. FIPS 204 limits the context to 255 bytes.
+pub fn ml_dsa_sign_with_context(
+    sk: &SigningKey87,
+    msg: &[u8],
+    context: &[u8],
+) -> Result<Signature87, CryptoError> {
+    let sig =
+        sk.0.expanded_key()
+            .sign_deterministic(msg, context)
+            .map_err(|_| CryptoError::InvalidLength)?;
+    let sig_slice = sig.to_bytes();
+    if sig_slice.len() != ML_DSA_SIGNATURE_BYTES {
+        return Err(CryptoError::InvalidLength);
+    }
+
+    compiler_fence(Ordering::SeqCst);
+
+    let mut signature = Signature87([0u8; ML_DSA_SIGNATURE_BYTES]);
+    signature.0.copy_from_slice(sig_slice.as_ref());
+    secure_cache_flush(&signature.0);
+    Ok(signature)
+}
+
+/// Verifies a signature produced under `context` (see [`ml_dsa_sign_with_context`]).
+pub fn ml_dsa_verify_with_context(
+    pk: &PublicKey87,
+    msg: &[u8],
+    context: &[u8],
+    sig: &Signature87,
+) -> Result<(), CryptoError> {
+    let sig_obj = Signature::<MlDsa87>::try_from(sig.0.as_slice())
+        .map_err(|_| CryptoError::VerificationFailed)?;
+
+    compiler_fence(Ordering::SeqCst);
+
+    if pk.0.verify_with_context(msg, context, &sig_obj) {
+        Ok(())
+    } else {
+        Err(CryptoError::VerificationFailed)
+    }
 }

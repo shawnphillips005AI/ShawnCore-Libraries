@@ -212,6 +212,54 @@ shawncore_crypto_err shawncore_crypto_ml_dsa_verify(
     size_t msg_len,
     const shawncore_crypto_ml_dsa_signature *sig);
 
+/*
+ * Authenticated handshake (signed transcript, mutual). The unauthenticated functions above remain
+ * unchanged and offer no peer authentication. Each side holds its own ML-DSA signing key and a
+ * trust anchor (the peer's verifying key) provisioned out of band; a signature over the whole
+ * exchange, under a role-specific FIPS 204 context, is verified before keys are used.
+ *
+ *   key-generating side:  initiate_handshake            -> sends ml_kem_pk, x25519_pk
+ *   encapsulating side:   encapsulate_authenticated     -> sends ct, x25519_pk, signature
+ *                         (keys derived, session UNCONFIRMED: it refuses all traffic)
+ *   key-generating side:  finalize_authenticated        -> verifies, keys live, sends signature
+ *   encapsulating side:   confirm_peer                  -> verifies, session usable
+ *
+ * `salt` and `app_info` must be equal on both sides; `app_info` is bound into the transcript.
+ * A forged reply makes finalize_authenticated return SHAWNCORE_CRYPTO_VERIFICATION_FAILED and
+ * leaves the pending handshake intact. Outputs are written only on success. This protocol has not
+ * been formally analyzed or independently reviewed. Not available in the Lite configuration.
+ */
+shawncore_crypto_err shawncore_crypto_session_manager_encapsulate_authenticated(
+    shawncore_crypto_session_manager *manager,
+    const shawncore_crypto_ml_dsa_signingkey *own_signing_key,
+    const shawncore_crypto_ml_dsa_publickey *peer_verifying_key,
+    const shawncore_crypto_ml_kem_publickey *peer_ml_kem_pk,
+    const shawncore_crypto_x25519_publickey *peer_x25519_pk,
+    const uint8_t entropy[SHAWNCORE_MIN_LEN(64)],
+    const uint8_t *salt,
+    size_t salt_len,
+    const uint8_t *app_info,
+    size_t app_info_len,
+    shawncore_crypto_ml_kem_ciphertext *out_ct,
+    shawncore_crypto_x25519_publickey *out_my_x25519_pk,
+    shawncore_crypto_ml_dsa_signature *out_signature);
+shawncore_crypto_err shawncore_crypto_session_manager_finalize_authenticated(
+    shawncore_crypto_session_manager *manager,
+    const shawncore_crypto_ml_dsa_signingkey *own_signing_key,
+    const shawncore_crypto_ml_dsa_publickey *peer_verifying_key,
+    const shawncore_crypto_x25519_publickey *peer_x25519_pk,
+    const shawncore_crypto_ml_kem_ciphertext *ml_kem_ct,
+    const shawncore_crypto_ml_dsa_signature *peer_signature,
+    const uint8_t *salt,
+    size_t salt_len,
+    const uint8_t *app_info,
+    size_t app_info_len,
+    shawncore_crypto_ml_dsa_signature *out_signature);
+shawncore_crypto_err shawncore_crypto_session_manager_confirm_peer(
+    shawncore_crypto_session_manager *manager,
+    const shawncore_crypto_ml_dsa_publickey *peer_verifying_key,
+    const shawncore_crypto_ml_dsa_signature *peer_signature);
+
 #endif /* SHAWNCORE_LITE */
 size_t shawncore_crypto_x25519_publickey_sizeof(void);
 size_t shawncore_crypto_x25519_publickey_alignof(void);

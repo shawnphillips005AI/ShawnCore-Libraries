@@ -299,7 +299,7 @@ fn object_sizes_match_the_spec_sheet() {
         core::mem::size_of::<T>()
     }
 
-    assert_eq!(aligned_64::<SessionManager>(), 4608);
+    assert_eq!(aligned_64::<SessionManager>(), 4736);
     assert_eq!(aligned_64::<PublicKey1024>(), 2112);
     assert_eq!(aligned_64::<DecapsKey1024>(), 4288);
     assert_eq!(aligned_64::<Ciphertext1024>(), 1600);
@@ -554,6 +554,37 @@ fn platform_requirement_and_independent_evidence_are_enforced_and_documented() {
     );
     assert_doc_contains(&read("VALIDATION.md"), "VALIDATION.md", "OpenSSL 3.5.8");
     assert_doc_contains(&read("SECURITY.md"), "SECURITY.md", "unauthenticated");
+    // The authenticated handshake must stay declared, documented and absent from the Lite ABI.
+    let header = read("shawncore-ffi/include/shawncore.h");
+    let lite_start = header
+        .find("#ifndef SHAWNCORE_LITE\n/* ML-DSA primary")
+        .expect("ML-DSA block");
+    for function in [
+        "shawncore_crypto_session_manager_encapsulate_authenticated",
+        "shawncore_crypto_session_manager_finalize_authenticated",
+        "shawncore_crypto_session_manager_confirm_peer",
+    ] {
+        let at = header
+            .find(function)
+            .unwrap_or_else(|| panic!("{function} not declared"));
+        assert!(
+            at > lite_start,
+            "{function} must sit inside the non-Lite block"
+        );
+        for (name, text) in [
+            ("README.md", read("README.md")),
+            ("SECURITY.md", read("SECURITY.md")),
+        ] {
+            let short = function.trim_start_matches("shawncore_crypto_session_manager_");
+            let short = short.trim_end_matches("_authenticated");
+            assert!(text.contains(short), "{name} must mention {short}");
+        }
+    }
+    assert_doc_contains(
+        &read("ARCHITECTURE.md"),
+        "ARCHITECTURE.md",
+        "4.5 The authenticated handshake",
+    );
 }
 
 #[test]

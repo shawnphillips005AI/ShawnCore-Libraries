@@ -78,12 +78,64 @@ def seal(key64: bytes, aad: bytes, plaintext: bytes, sequence: int = 0):
     return ciphertext, hmac.new(mac_key, framed, hashlib.sha384).digest()
 
 
+AUTH_SUITE = b"ML-KEM-1024+X25519;HKDF-SHA384;ChaCha20+HMAC-SHA384;ML-DSA-87"
+AUTH_APP_INFO = b"auth-app-info"
+
+
+def ml_dsa_identity(seed: bytes, name: str):
+    run("openssl", "genpkey", "-algorithm", "ML-DSA-87", "-pkeyopt", "hexseed:" + seed.hex(),
+        "-out", f"{name}.pem")
+    run("openssl", "pkey", "-in", f"{name}.pem", "-pubout", "-outform", "DER", "-out", f"{name}.der")
+    return open(f"{name}.der", "rb").read()[-2592:]
+
+
+def ml_dsa_sign_ctx(name: str, message: bytes, context: bytes) -> bytes:
+    open("msg.bin", "wb").write(message)
+    run("openssl", "pkeyutl", "-sign", "-inkey", f"{name}.pem", "-rawin", "-in", "msg.bin",
+        "-pkeyopt", "deterministic:1", "-pkeyopt", "hexcontext-string:" + context.hex(),
+        "-out", "sig.bin")
+    return open("sig.bin", "rb").read()
+
+
+def authenticated_section(kem_pk, kem_ct, pq_secret, keygen_x_pk, encap_x_pk, classical,
+                          salt, aad, plain_e2k, plain_k2e):
+    """Re-derives the authenticated handshake (see auth_handshake.rs) outside Rust."""
+    k_pk = ml_dsa_identity(bytes([0x41]) * 32, "idk")
+    e_pk = ml_dsa_identity(bytes([0x42]) * 32, "ide")
+    fp = lambda pk: hashlib.sha384(b"ShawnCore-auth-v1 identity" + pk).digest()
+    binding = hashlib.sha384(
+        b"ShawnCore-auth-v1 binding" + bytes([1]) + len(AUTH_SUITE).to_bytes(2, "big") + AUTH_SUITE
+        + kem_pk + keygen_x_pk + fp(k_pk) + fp(e_pk)
+        + len(AUTH_APP_INFO).to_bytes(4, "big") + AUTH_APP_INFO).digest()
+    transcript = hashlib.sha384(b"ShawnCore-auth-v1 transcript" + binding + kem_ct + encap_x_pk).digest()
+    sig_e = ml_dsa_sign_ctx("ide", transcript, b"ShawnCore-auth-v1 encapsulating side")
+    sig_k = ml_dsa_sign_ctx("idk", transcript, b"ShawnCore-auth-v1 key-generating side")
+
+    # The existing handshake runs with the binding as its `info`.
+    inner = hashlib.sha384(b"ShawnCore-v1.3-hybrid-handshake" + kem_ct + encap_x_pk + binding).digest()
+    prk = hmac.new(salt, pq_secret + classical, hashlib.sha384).digest()
+    okm = hkdf_expand(prk, inner, 128)
+    e2k_ct, e2k_tag = seal(okm[32:96], aad, plain_e2k)
+    k2e_ct, k2e_tag = seal(okm[0:32] + okm[96:128], aad, plain_k2e)
+    return [f"auth.{name} = {value.hex()}" for name, value in [
+        ("app_info", AUTH_APP_INFO), ("keygen_identity_pk", k_pk), ("encap_identity_pk", e_pk),
+        ("binding", binding), ("transcript", transcript), ("sig_e", sig_e), ("sig_k", sig_k),
+        ("e2k_ct", e2k_ct), ("e2k_tag", e2k_tag), ("k2e_ct", k2e_ct), ("k2e_tag", k2e_tag),
+    ]]
+
+
 def main():
     keygen_entropy = bytes((i * 7 + 3) % 256 for i in range(96))
     encap_entropy = bytes((i * 11 + 5) % 256 for i in range(64))
     salt, info, aad = b"session-salt", b"session-info", b"hdr"
     plain_e2k = b"encap to keygen packet"
     plain_k2e = b"keygen to encap packet"
+
+    base = b"\x09" + bytes(31)
+    keygen_x_sk, encap_x_sk = keygen_entropy[64:96], encap_entropy[32:64]
+    keygen_x_pk, encap_x_pk = x25519(keygen_x_sk, base), x25519(encap_x_sk, base)
+    classical = x25519(encap_x_sk, keygen_x_pk)
+    assert classical == x25519(keygen_x_sk, encap_x_pk)
 
     with tempfile.TemporaryDirectory() as tmp:
         os.chdir(tmp)
@@ -94,12 +146,11 @@ def main():
             "hexikme:" + encap_entropy[:32].hex(), "-out", "ct.bin", "-secret", "ss.bin")
         kem_ct = open("ct.bin", "rb").read()
         pq_secret = open("ss.bin", "rb").read()
-
-    base = b"\x09" + bytes(31)
-    keygen_x_sk, encap_x_sk = keygen_entropy[64:96], encap_entropy[32:64]
-    keygen_x_pk, encap_x_pk = x25519(keygen_x_sk, base), x25519(encap_x_sk, base)
-    classical = x25519(encap_x_sk, keygen_x_pk)
-    assert classical == x25519(keygen_x_sk, encap_x_pk)
+        run("openssl", "pkey", "-in", "pub.pem", "-pubin", "-outform", "DER", "-out", "pub.der")
+        kem_pk = open("pub.der", "rb").read()[-1568:]
+        auth_lines = authenticated_section(
+            kem_pk, kem_ct, pq_secret, keygen_x_pk, encap_x_pk, classical, salt, aad,
+            plain_e2k, plain_k2e)
 
     transcript = hashlib.sha384(b"ShawnCore-v1.3-hybrid-handshake" + kem_ct + encap_x_pk + info).digest()
     prk = hmac.new(salt, pq_secret + classical, hashlib.sha384).digest()
@@ -118,6 +169,8 @@ def main():
         ("k2e_plaintext", plain_k2e), ("k2e_ct", k2e_ct), ("k2e_tag", k2e_tag),
     ]:
         print(f"session.{name} = {value.hex()}")
+    for line in auth_lines:
+        print(line)
 
 
 if __name__ == "__main__":

@@ -9,6 +9,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [12.3.11] — 2026-10-21
 
+### Authenticated handshake (new, unreviewed)
+- **Added** (full configuration, `ml-dsa` feature): `encapsulate_authenticated`,
+  `finalize_authenticated` and `confirm_peer` on `SessionManager`, the three C functions
+  `shawncore_crypto_session_manager_{encapsulate_authenticated,finalize_authenticated,confirm_peer}`
+  (header: 135 to 138 symbols; the Lite header and archive stay at 119), the `auth_handshake`
+  module (transcript encodings), and `ml_dsa_sign_with_context` / `ml_dsa_verify_with_context` /
+  `SigningKey87::verifying_key`. Design: mutual ML-DSA-87 signatures over a SHA-384 transcript
+  binding version, suite, both parties' keys and identity fingerprints, application `info`, the
+  ciphertext and the encapsulating side's X25519 key, with role-specific FIPS 204 contexts; the
+  unconfirmed session refuses traffic; a forged reply is rejected before decapsulation and does not
+  consume the pending handshake. Specified in ARCHITECTURE.md 4.5, assessed in SECURITY.md 10.
+- **Unchanged:** the unauthenticated functions, every wire format and key format, and all feature
+  defaults. Existing integrators are unaffected unless they adopt the new calls.
+- **Changed:** `SessionManager` grew from 4,608 to 4,736 bytes (it now holds the pending
+  transcript and peer fingerprint). Hosts must already allocate from `_sizeof()`.
+- **Evidence:** 9 active-attacker tests, 2 C-ABI tests, byte-identical agreement with an independent
+  OpenSSL 3.5.8 / Python derivation (binding, transcript, both signatures, packets), and 8 mutants
+  detected. **Not** formally analyzed and **not** independently reviewed.
+
 ### Adversarial verification (second pass)
 - **Findings:** no new defect in exported behavior was found. Confirmed issues were
   a 32-bit build that failed with unclear errors (now a clear `compile_error!`; no
