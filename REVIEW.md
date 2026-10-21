@@ -122,6 +122,7 @@ cd fuzz
 cargo +nightly fuzz run ffi_aead_fuzz -- -runs=10000 -max_len=512
 cargo +nightly fuzz run session_replay_fuzz -- -runs=10000 -max_len=512
 cargo +nightly fuzz run rtos_stateful_fuzz -- -runs=10000 -max_len=512
+cargo +nightly fuzz run auth_handshake_fuzz -- -runs=3000 -max_len=512
 ```
 
 The retained corpora are intentional regression input. A bounded smoke run is not

@@ -219,6 +219,7 @@ before dispatching cache maintenance.
 | C++ header and smoke executable | PASS | `make -C integration cxx` built `integration/cxx_smoke.cpp` with `-std=c++17 -Wall -Wextra -Werror -pedantic`, linked the release archive, and ran a self-test and an HMAC-SHA384 vector. The header also passes `-fsyntax-only` as C++11/17/20, C99, C11 `-pedantic` and with `SHAWNCORE_LITE`. |
 | C smoke executable | PASS | `make -C integration run` automatically built the release archive, then built and executed `integration/c_api_smoke.c`; exit status 0. |
 | C wire handshake | PASS | The smoke binary drives two session managers through a complete hybrid handshake with every public value passed through its wire codec, then an authenticated packet exchange and a replay rejection. |
+| C authenticated handshake | PASS | The same binary (full configuration) runs the signed handshake through the exported C functions: an intermediary with its own identity is rejected with `VERIFICATION_FAILED`, an unconfirmed initiator refuses to send, a signature from the wrong identity does not confirm, and packets flow only after `confirm_peer`. Clean under AddressSanitizer and Valgrind (0 errors, 0 bytes in use at exit); the file also passes `-fsyntax-only` with `SHAWNCORE_LITE`. |
 | Public-symbol check | PASS | Header declarations and archive exports were compared and matched exactly: 138 symbols, empty diff. |
 | Self-contained archive check | PASS | `validation/check_archive.sh`: for `aarch64-unknown-none`, the set of undefined symbols minus the set of archive-defined symbols is empty, and `nm` shows no `malloc`, `free`, `__rust_alloc`, libc I/O, or pthread references. |
 | Lite archive exclusions | PASS | `validation/check_archive.sh` builds the Lite archive in a scratch target directory and fails if it exports or contains any ML-DSA symbol or the `ED25519_BASEPOINT_TABLE` precomputed table, or if it loses ML-KEM. The same patterns are confirmed present in the full archive, so the check is not vacuous. |
@@ -236,7 +237,8 @@ is not target C ABI or hardware integration validation.
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo check --manifest-path fuzz/Cargo.toml --bin <target> --locked` (3 targets) | PASS | Executed and passed for `ffi_aead_fuzz`, `session_replay_fuzz` and `rtos_stateful_fuzz`. |
+| `cargo check --manifest-path fuzz/Cargo.toml --bin <target> --locked` (4 targets) | PASS | Executed and passed for `ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz` and `auth_handshake_fuzz`. |
+| `cd fuzz && cargo +nightly fuzz run auth_handshake_fuzz -- -runs=3000 -max_len=512` | PASS | 3,000 executions (143 s, about 20 exec/s because every input signs and verifies ML-DSA); no crash, timeout or artifact. The harness asserts that arbitrary replies never authenticate, never consume the pending handshake, and never let an unconfirmed session carry traffic. The corpus was not retained. |
 | `cd fuzz && cargo +nightly fuzz run ffi_aead_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 91 retained corpus files; no crash, timeout or artifact. |
 | `cd fuzz && cargo +nightly fuzz run session_replay_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 256 retained corpus files (544 s); no crash, timeout or artifact. |
 | `cd fuzz && cargo +nightly fuzz run rtos_stateful_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 225 retained corpus files; no crash, timeout or artifact. |

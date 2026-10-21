@@ -2,7 +2,7 @@ ShawnCore-Libraries Release Manifest
 ====================================
 
 Release: 12.3.11
-Generated UTC: 2026-10-21T19:22:04+00:00
+Generated UTC: 2026-10-21T19:34:09+00:00
 
 Toolchain
 ---------
@@ -34,7 +34,8 @@ Platform: 64-bit with native 64-bit atomics required (compile_error! otherwise);
 ThreadSanitizer: EXECUTED — standalone SPSC/ring-buffer workload, no reported race.
 Rust AddressSanitizer: EXECUTED — shawncore-pq-crypto and shawncore-rtos-sync test targets, no report.
 Miri: PARTIAL — all 44 shawncore-rtos-sync tests and 24 shawncore-pq-crypto tests (entropy, session counters, key-wipe, FFI pointer validation) pass with symbolic-alignment checks; strict provenance is rejected by the scheduler's integer stack addresses; the lattice-heavy tests were not run under Miri.
-Fuzzing: EXECUTED — see VALIDATION.md for per-harness campaigns and exact commands.
+Fuzzing: EXECUTED — four harnesses; see VALIDATION.md for per-harness campaigns and exact commands (authenticated-handshake harness: 3,000 executions).
+C authenticated handshake: EXECUTED — C smoke test through the exported functions, clean under ASan and Valgrind.
 AddressSanitizer (C smoke): EXECUTED — PASS.
 Valgrind (C smoke): EXECUTED — 0 errors and no allocations left in use at exit.
 Hardware validation: NOT CLAIMED

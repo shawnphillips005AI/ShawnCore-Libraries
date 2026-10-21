@@ -24,9 +24,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   defaults. Existing integrators are unaffected unless they adopt the new calls.
 - **Changed:** `SessionManager` grew from 4,608 to 4,736 bytes (it now holds the pending
   transcript and peer fingerprint). Hosts must already allocate from `_sizeof()`.
-- **Evidence:** 9 active-attacker tests, 2 C-ABI tests, byte-identical agreement with an independent
-  OpenSSL 3.5.8 / Python derivation (binding, transcript, both signatures, packets), and 8 mutants
-  detected. **Not** formally analyzed and **not** independently reviewed.
+- **Evidence:** 9 active-attacker tests, 2 C-ABI tests, a C smoke-test round trip through the
+  exported functions (clean under ASan and Valgrind), an `auth_handshake_fuzz` harness (3,000
+  executions, no finding), byte-identical agreement with an independent OpenSSL 3.5.8 / Python
+  derivation (binding, transcript, both signatures, packets), and 8 mutants detected. **Not**
+  formally analyzed and **not** independently reviewed; Miri was not run on it.
 
 ### Adversarial verification (second pass)
 - **Findings:** no new defect in exported behavior was found. Confirmed issues were

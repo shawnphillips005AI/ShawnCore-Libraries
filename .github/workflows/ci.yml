@@ -49,6 +49,7 @@ jobs:
           cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz --locked
           cargo check --manifest-path fuzz/Cargo.toml --bin session_replay_fuzz --locked
           cargo check --manifest-path fuzz/Cargo.toml --bin rtos_stateful_fuzz --locked
+          cargo check --manifest-path fuzz/Cargo.toml --bin auth_handshake_fuzz --locked
       - name: Header/archive parity and bare-metal archive self-containment
         run: bash validation/check_archive.sh
 
@@ -98,3 +99,4 @@ jobs:
       - run: cargo +nightly fuzz run ffi_aead_fuzz -- -runs=10000 -max_len=512
       - run: cargo +nightly fuzz run session_replay_fuzz -- -runs=10000 -max_len=512
       - run: cargo +nightly fuzz run rtos_stateful_fuzz -- -runs=10000 -max_len=512
+      - run: cargo +nightly fuzz run auth_handshake_fuzz -- -runs=3000 -max_len=512

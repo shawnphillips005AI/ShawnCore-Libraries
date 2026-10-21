@@ -157,6 +157,156 @@ static int wire_handshake_round_trip(void)
     return 0;
 }
 
+#ifndef SHAWNCORE_LITE
+/*
+ * Authenticated handshake: the responder trusts the initiator's verifying key and vice versa.
+ * An intermediary with its own identity must be rejected, the unconfirmed initiator must refuse
+ * traffic, and only after confirm_peer may packets flow. Returns 0 on success.
+ */
+static int authenticated_handshake_round_trip(void)
+{
+    static _Alignas(64) uint8_t sk_resp[120000], sk_init[120000], sk_mall[120000];
+    static _Alignas(64) uint8_t vk_resp[90000], vk_init[90000], vk_mall[90000];
+    static _Alignas(64) uint8_t sig_i[8192], sig_i_decoded[8192], sig_m[8192], sig_r[8192];
+    static _Alignas(64) uint8_t mgr_resp[8192], mgr_init[8192], mgr_mall[8192];
+    static _Alignas(64) uint8_t pk_store[4096], xpk_store[256], ct_store[2048], peer_x_store[256];
+    static _Alignas(64) uint8_t ct_m_store[2048], peer_x_m_store[256];
+    static uint8_t sig_wire[4627];
+
+    uint8_t seed_resp[32], seed_init[32], seed_mall[32];
+    uint8_t resp_entropy[96], init_entropy[64], mall_entropy[64];
+    uint8_t plaintext[16], ciphertext[16], recovered[16], nonce[12], tag[48];
+    static const uint8_t salt[] = {'s', 'a', 'l', 't'};
+    static const uint8_t app[] = {'a', 'p', 'p'};
+
+    shawncore_crypto_ml_dsa_signingkey *rsk = (shawncore_crypto_ml_dsa_signingkey *)sk_resp;
+    shawncore_crypto_ml_dsa_signingkey *isk = (shawncore_crypto_ml_dsa_signingkey *)sk_init;
+    shawncore_crypto_ml_dsa_signingkey *msk = (shawncore_crypto_ml_dsa_signingkey *)sk_mall;
+    shawncore_crypto_ml_dsa_publickey *rvk = (shawncore_crypto_ml_dsa_publickey *)vk_resp;
+    shawncore_crypto_ml_dsa_publickey *ivk = (shawncore_crypto_ml_dsa_publickey *)vk_init;
+    shawncore_crypto_ml_dsa_publickey *mvk = (shawncore_crypto_ml_dsa_publickey *)vk_mall;
+    shawncore_crypto_ml_dsa_signature *sigi = (shawncore_crypto_ml_dsa_signature *)sig_i;
+    shawncore_crypto_ml_dsa_signature *sigi2 = (shawncore_crypto_ml_dsa_signature *)sig_i_decoded;
+    shawncore_crypto_ml_dsa_signature *sigm = (shawncore_crypto_ml_dsa_signature *)sig_m;
+    shawncore_crypto_ml_dsa_signature *sigr = (shawncore_crypto_ml_dsa_signature *)sig_r;
+    shawncore_crypto_session_manager *resp = (shawncore_crypto_session_manager *)mgr_resp;
+    shawncore_crypto_session_manager *init = (shawncore_crypto_session_manager *)mgr_init;
+    shawncore_crypto_session_manager *mall = (shawncore_crypto_session_manager *)mgr_mall;
+    shawncore_crypto_ml_kem_publickey *pk = (shawncore_crypto_ml_kem_publickey *)pk_store;
+    shawncore_crypto_x25519_publickey *xpk = (shawncore_crypto_x25519_publickey *)xpk_store;
+    shawncore_crypto_ml_kem_ciphertext *ct = (shawncore_crypto_ml_kem_ciphertext *)ct_store;
+    shawncore_crypto_x25519_publickey *peer_x = (shawncore_crypto_x25519_publickey *)peer_x_store;
+    shawncore_crypto_ml_kem_ciphertext *ct_m = (shawncore_crypto_ml_kem_ciphertext *)ct_m_store;
+    shawncore_crypto_x25519_publickey *peer_x_m = (shawncore_crypto_x25519_publickey *)peer_x_m_store;
+
+    if (shawncore_crypto_ml_dsa_signingkey_sizeof() > sizeof(sk_resp) ||
+        shawncore_crypto_ml_dsa_publickey_sizeof() > sizeof(vk_resp) ||
+        shawncore_crypto_ml_dsa_signature_sizeof() > sizeof(sig_r) ||
+        shawncore_crypto_ml_dsa_signature_encoded_len() != sizeof(sig_wire) ||
+        shawncore_crypto_session_manager_sizeof() > sizeof(mgr_resp)) {
+        return 101;
+    }
+    for (size_t i = 0; i < 32; i++) {
+        seed_resp[i] = (uint8_t)(0x41 + i);
+        seed_init[i] = (uint8_t)(0x82 + i);
+        seed_mall[i] = (uint8_t)(0xC3 + i);
+    }
+    for (size_t i = 0; i < sizeof(resp_entropy); i++) {
+        resp_entropy[i] = (uint8_t)(i + 7);
+    }
+    for (size_t i = 0; i < sizeof(init_entropy); i++) {
+        init_entropy[i] = (uint8_t)(0x30 ^ i);
+        mall_entropy[i] = (uint8_t)(0x5A + i);
+    }
+    for (size_t i = 0; i < sizeof(plaintext); i++) {
+        plaintext[i] = (uint8_t)(0xA0 + i);
+    }
+
+    if (shawncore_crypto_ml_dsa_keygen(seed_resp, rvk, rsk) != SHAWNCORE_CRYPTO_SUCCESS ||
+        shawncore_crypto_ml_dsa_keygen(seed_init, ivk, isk) != SHAWNCORE_CRYPTO_SUCCESS ||
+        shawncore_crypto_ml_dsa_keygen(seed_mall, mvk, msk) != SHAWNCORE_CRYPTO_SUCCESS) {
+        return 102;
+    }
+    if (shawncore_crypto_session_manager_init(resp) != SHAWNCORE_CRYPTO_SUCCESS ||
+        shawncore_crypto_session_manager_init(init) != SHAWNCORE_CRYPTO_SUCCESS ||
+        shawncore_crypto_session_manager_init(mall) != SHAWNCORE_CRYPTO_SUCCESS) {
+        return 103;
+    }
+
+    if (shawncore_crypto_session_manager_initiate_handshake(resp, resp_entropy, pk, xpk) !=
+        SHAWNCORE_CRYPTO_SUCCESS) {
+        return 104;
+    }
+
+    /* An intermediary answers with its own identity; the responder must refuse it. */
+    if (shawncore_crypto_session_manager_encapsulate_authenticated(
+            mall, msk, rvk, pk, xpk, mall_entropy, salt, sizeof salt, app, sizeof app, ct_m,
+            peer_x_m, sigm) != SHAWNCORE_CRYPTO_SUCCESS) {
+        return 105;
+    }
+    if (shawncore_crypto_session_manager_finalize_authenticated(
+            resp, rsk, ivk, peer_x_m, ct_m, sigm, salt, sizeof salt, app, sizeof app, sigr) !=
+        SHAWNCORE_CRYPTO_VERIFICATION_FAILED) {
+        return 106;
+    }
+
+    /* The genuine initiator; its signature travels through the wire codec. */
+    if (shawncore_crypto_session_manager_encapsulate_authenticated(
+            init, isk, rvk, pk, xpk, init_entropy, salt, sizeof salt, app, sizeof app, ct, peer_x,
+            sigi) != SHAWNCORE_CRYPTO_SUCCESS) {
+        return 107;
+    }
+    if (shawncore_crypto_ml_dsa_signature_to_bytes(sigi, sig_wire, sizeof sig_wire) !=
+            SHAWNCORE_CRYPTO_SUCCESS ||
+        shawncore_crypto_ml_dsa_signature_from_bytes(sig_wire, sizeof sig_wire, sigi2) !=
+            SHAWNCORE_CRYPTO_SUCCESS) {
+        return 108;
+    }
+
+    /* The unconfirmed initiator refuses to send. */
+    if (shawncore_crypto_session_manager_encrypt_packet(
+            init, NULL, 0, plaintext, ciphertext, sizeof plaintext, nonce, tag) ==
+        SHAWNCORE_CRYPTO_SUCCESS) {
+        return 109;
+    }
+
+    if (shawncore_crypto_session_manager_finalize_authenticated(
+            resp, rsk, ivk, peer_x, ct, sigi2, salt, sizeof salt, app, sizeof app, sigr) !=
+        SHAWNCORE_CRYPTO_SUCCESS) {
+        return 110;
+    }
+    /* A signature from the wrong identity must not confirm the session. */
+    if (shawncore_crypto_session_manager_confirm_peer(init, mvk, sigr) == SHAWNCORE_CRYPTO_SUCCESS) {
+        return 111;
+    }
+    if (shawncore_crypto_session_manager_confirm_peer(init, rvk, sigr) != SHAWNCORE_CRYPTO_SUCCESS) {
+        return 112;
+    }
+
+    if (shawncore_crypto_session_manager_encrypt_packet(
+            init, NULL, 0, plaintext, ciphertext, sizeof plaintext, nonce, tag) !=
+            SHAWNCORE_CRYPTO_SUCCESS ||
+        shawncore_crypto_session_manager_decrypt_packet(
+            resp, NULL, 0, ciphertext, sizeof ciphertext, nonce, tag, recovered) !=
+            SHAWNCORE_CRYPTO_SUCCESS) {
+        return 113;
+    }
+    for (size_t i = 0; i < sizeof plaintext; i++) {
+        if (recovered[i] != plaintext[i]) {
+            return 114;
+        }
+    }
+
+    shawncore_crypto_session_manager_destroy(resp);
+    shawncore_crypto_session_manager_destroy(init);
+    shawncore_crypto_session_manager_destroy(mall);
+    shawncore_crypto_ml_dsa_signingkey_destroy(rsk);
+    shawncore_crypto_ml_dsa_signingkey_destroy(isk);
+    shawncore_crypto_ml_dsa_signingkey_destroy(msk);
+    return 0;
+}
+#endif /* SHAWNCORE_LITE */
+
 int main(void)
 {
     uint8_t enc_key[32] = {0};
@@ -200,6 +350,11 @@ int main(void)
     if (wire_handshake_round_trip() != 0) {
         return 5;
     }
+#ifndef SHAWNCORE_LITE
+    if (authenticated_handshake_round_trip() != 0) {
+        return 6;
+    }
+#endif
 
     return 0;
 }

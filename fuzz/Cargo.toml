@@ -32,3 +32,10 @@ path = "fuzz_targets/rtos_stateful_fuzz.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "auth_handshake_fuzz"
+path = "fuzz_targets/auth_handshake_fuzz.rs"
+test = false
+doc = false
+bench = false

@@ -66,7 +66,7 @@ Every claim below is reproducible from a clean checkout with
 | **Authenticated handshake tests** | Nine active-attacker tests (impersonation, tampering with every transcript field, wrong trust anchor, role-context reuse, replay against a new session, unconfirmed-session refusal, out-of-order calls) plus C-ABI tests; binding, transcript, both ML-DSA signatures and the resulting packets are byte-identical to an independent OpenSSL/Python derivation. Unreviewed and not formally analyzed. |
 | **Test sensitivity** | 24 deliberate faults (accepting any tag, disabling replay detection, committing before authentication, boundary off-by-ones, dropped MAC and transcript coverage, skipped key wipes, a Lite feature leak, and eight faults in the authenticated handshake) were applied to a disposable copy; every one made the suite fail. One gap, an unobserved key wipe, was found and closed. |
 | **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
-| **Fuzzed** | Three harnesses (`ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz`) with retained regression corpora; CI runs 10,000 executions of each. |
+| **Fuzzed** | Four harnesses (`ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz`, `auth_handshake_fuzz`); the first three have retained regression corpora and a 10,000-execution CI job, the authenticated-handshake harness runs 3,000 executions (it signs and verifies ML-DSA per input). |
 | **ThreadSanitizer** | Standalone SPSC and ring-buffer stress workload, no reported race. |
 | **Bare-metal clean** | `cargo check --target aarch64-unknown-none` and `clippy -D warnings` for the whole workspace. |
 | **Dependency advisories** | `cargo audit` reports no advisories for the root and fuzz lockfiles. |
@@ -438,8 +438,9 @@ smoke binary compile,
 links, and executes a full wire handshake against the release archive, clean
 under AddressSanitizer and Valgrind.
 
-**FUZZED** — three harnesses with retained regression corpora and a
-10,000-execution CI job per harness. Compile checks are not reported as fuzz
+**FUZZED** — four harnesses (three with retained regression corpora and a
+10,000-execution CI job, the authenticated-handshake harness with a 3,000-execution
+CI job). Compile checks are not reported as fuzz
 executions, and a bounded campaign is not a security proof.
 
 **STATICALLY REVIEWED** — strict Clippy, formatting, workspace checks,
