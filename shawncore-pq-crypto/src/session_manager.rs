@@ -24,7 +24,10 @@
 
 use crate::aead_wrapper::{aead_decrypt, aead_encrypt, AEAD_TAG_SIZE};
 use crate::error::CryptoError;
-use crate::hybrid_kdf::derive_hybrid_key;
+use crate::hybrid_kdf::{
+    confirmation_info, derive_hybrid_key, derive_hybrid_key_with_confirmation,
+    CONFIRMATION_OUTPUT_SIZE,
+};
 use crate::ml_kem_wrapper::{
     ml_kem_decapsulate, ml_kem_encapsulate, ml_kem_keygen, Ciphertext1024, DecapsKey1024,
     PublicKey1024,
@@ -37,15 +40,15 @@ use zeroize::Zeroize;
 
 #[cfg(feature = "ml-dsa")]
 use crate::auth_handshake::{
-    handshake_binding, identity_fingerprint, transcript_hash, CONTEXT_ENCAPSULATING_SIDE,
-    CONTEXT_KEYGEN_SIDE,
+    confirmation_tag, confirmation_tags_equal, encapsulator_digest, handshake_binding,
+    identity_fingerprint, keygen_digest, transcript_hash, CONFIRMATION_KEY_LEN,
+    CONFIRMATION_TAG_LEN, CONFIRM_LABEL_ENCAPSULATING_SIDE, CONFIRM_LABEL_KEYGEN_SIDE,
+    CONTEXT_ENCAPSULATING_SIDE, CONTEXT_KEYGEN_SIDE,
 };
 #[cfg(feature = "ml-dsa")]
 use crate::ml_dsa_wrapper::{
     ml_dsa_sign_with_context, ml_dsa_verify_with_context, PublicKey87, Signature87, SigningKey87,
 };
-#[cfg(feature = "ml-dsa")]
-use subtle::ConstantTimeEq;
 
 /// Manages the lifecycle of the hybrid post-quantum session key.
 /// Designed to be instantiated by the host OS and passed across the FFI boundary.
@@ -74,11 +77,14 @@ pub struct SessionManager {
     pending_auth: Option<PendingAuthentication>,
 }
 
-/// What `confirm_peer` must check: the signed transcript and the identity it was bound to.
+/// What `confirm_peer` must check: the signed digest, the bound identity and the confirmation key.
 #[cfg_attr(not(feature = "ml-dsa"), allow(dead_code))]
 struct PendingAuthentication {
-    transcript: [u8; 48],
+    /// The encapsulator digest the key-generating side's signature and tag extend.
+    digest: [u8; 48],
     peer_identity: [u8; 48],
+    /// Expected key-generating-side confirmation key; secret, wiped when the state is cleared.
+    confirmation_key: [u8; 48],
 }
 
 impl Default for SessionManager {
@@ -259,6 +265,34 @@ impl SessionManager {
         out_ct: &mut Ciphertext1024,
         out_pk: &mut X25519Public,
     ) -> Result<(), CryptoError> {
+        self.encapsulate_inner(
+            peer_ml_kem_pk,
+            peer_x25519_pk,
+            entropy,
+            salt,
+            info,
+            out_ct,
+            out_pk,
+            false,
+        )
+        .map(|_| ())
+    }
+
+    /// Shared body of the unauthenticated and authenticated encapsulation. With
+    /// `want_confirmation` it also returns the 96-byte confirmation expansion; the session keys
+    /// are identical either way.
+    #[allow(clippy::too_many_arguments)]
+    fn encapsulate_inner(
+        &mut self,
+        peer_ml_kem_pk: &PublicKey1024,
+        peer_x25519_pk: &X25519Public,
+        entropy: &[u8; 64],
+        salt: &[u8],
+        info: &[u8],
+        out_ct: &mut Ciphertext1024,
+        out_pk: &mut X25519Public,
+        want_confirmation: bool,
+    ) -> Result<Option<[u8; CONFIRMATION_OUTPUT_SIZE]>, CryptoError> {
         if entropy.iter().all(|&byte| byte == 0) || entropy.iter().all(|&byte| byte == 0xFF) {
             return Err(CryptoError::InvalidState);
         }
@@ -293,12 +327,27 @@ impl SessionManager {
         };
 
         let mut transcript = handshake_transcript(&ct, &my_x25519_pk, info);
-        let hybrid_res = derive_hybrid_key(
-            &mut pq_secret_wrapper.0,
-            &mut classical_secret_wrapper.0,
-            salt,
-            &transcript,
-        );
+        let mut confirmation = None;
+        let hybrid_res = if want_confirmation {
+            derive_hybrid_key_with_confirmation(
+                &mut pq_secret_wrapper.0,
+                &mut classical_secret_wrapper.0,
+                salt,
+                &transcript,
+                &confirmation_info(&transcript),
+            )
+            .map(|(session, material)| {
+                confirmation = Some(material);
+                session
+            })
+        } else {
+            derive_hybrid_key(
+                &mut pq_secret_wrapper.0,
+                &mut classical_secret_wrapper.0,
+                salt,
+                &transcript,
+            )
+        };
         transcript.zeroize();
 
         let mut hybrid_key_128 = match hybrid_res {
@@ -333,7 +382,7 @@ impl SessionManager {
 
         *out_ct = ct;
         *out_pk = my_x25519_pk;
-        Ok(())
+        Ok(confirmation)
     }
 
     /// Assigns the next RFC 8439 transmit nonce and advances `tx_counter`.
@@ -500,6 +549,17 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Wipes the pending authentication state, flushing the confirmation key once it is zero.
+    fn wipe_pending_authentication(&mut self) {
+        if let Some(pending) = self.pending_auth.as_mut() {
+            secure_zeroize(&mut pending.digest);
+            secure_zeroize(&mut pending.peer_identity);
+            secure_zeroize(&mut pending.confirmation_key);
+            secure_cache_flush(&pending.confirmation_key);
+        }
+        self.pending_auth = None;
+    }
+
     /// Explicitly zeroizes the active session key.
     pub fn zeroize_session(&mut self) {
         self.ml_kem_dk = None;
@@ -521,22 +581,40 @@ impl SessionManager {
         self.tx_counter = 0;
         self.rx_counter = 0;
         self.rx_window = 0;
-        self.pending_auth = None;
+        self.wipe_pending_authentication();
 
         compiler_fence(Ordering::SeqCst);
     }
 }
 
+/// Session and confirmation secrets derived during a handshake; wiped on every exit path.
+#[cfg(feature = "ml-dsa")]
+struct DerivedSecrets {
+    session: [u8; 128],
+    confirmation: [u8; CONFIRMATION_OUTPUT_SIZE],
+}
+
+#[cfg(feature = "ml-dsa")]
+impl Drop for DerivedSecrets {
+    fn drop(&mut self) {
+        secure_zeroize(&mut self.session);
+        secure_zeroize(&mut self.confirmation);
+    }
+}
+
 #[cfg(feature = "ml-dsa")]
 impl SessionManager {
-    /// Encapsulating side of the authenticated handshake.
+    /// Encapsulating side of the authenticated handshake (protocol version 2).
     ///
-    /// Runs [`Self::encapsulate_for_peer`] with `info` set to the handshake binding, then signs the
-    /// transcript with `own_signing_key`. The session keys are derived but **unconfirmed**: the
-    /// session refuses all traffic until [`Self::confirm_peer`] verifies the peer's signature.
+    /// Runs the hybrid encapsulation with `info` set to the handshake binding, derives the
+    /// session keys and an independent confirmation key, then produces `out_signature` (this
+    /// side's ML-DSA signature) and `out_confirmation` (its key-confirmation tag), which the
+    /// signature covers. The session is **unconfirmed**: it refuses all traffic until
+    /// [`Self::confirm_peer`] verifies the key-generating side's signature and tag.
     ///
-    /// `peer_verifying_key` is the trust anchor for the key-generating side. Any failure after
-    /// the keys were derived wipes the session.
+    /// `peer_verifying_key` is the trust anchor for the key-generating side. `salt` may be a
+    /// secret and is not placed in any transcript; a salt that differs from the peer's makes
+    /// the peer's confirmation fail. Any failure after the keys were derived wipes the session.
     #[allow(clippy::too_many_arguments)]
     pub fn encapsulate_authenticated(
         &mut self,
@@ -550,6 +628,7 @@ impl SessionManager {
         out_ct: &mut Ciphertext1024,
         out_pk: &mut X25519Public,
         out_signature: &mut Signature87,
+        out_confirmation: &mut [u8; CONFIRMATION_TAG_LEN],
     ) -> Result<(), CryptoError> {
         let own_identity = identity_fingerprint(&own_signing_key.verifying_key());
         let peer_identity = identity_fingerprint(peer_verifying_key);
@@ -561,43 +640,72 @@ impl SessionManager {
             app_info,
         )?;
 
-        self.encapsulate_for_peer(
-            peer_ml_kem_pk,
-            peer_x25519_pk,
-            entropy,
-            salt,
-            &binding,
-            out_ct,
-            out_pk,
-        )?;
+        let confirmation = self
+            .encapsulate_inner(
+                peer_ml_kem_pk,
+                peer_x25519_pk,
+                entropy,
+                salt,
+                &binding,
+                out_ct,
+                out_pk,
+                true,
+            )?
+            .ok_or(CryptoError::InvalidState)?;
+        let mut encapsulator_key = [0u8; CONFIRMATION_KEY_LEN];
+        let mut keygen_key = [0u8; CONFIRMATION_KEY_LEN];
+        encapsulator_key.copy_from_slice(&confirmation[..CONFIRMATION_KEY_LEN]);
+        keygen_key.copy_from_slice(&confirmation[CONFIRMATION_KEY_LEN..]);
+        let mut confirmation = confirmation;
+        secure_zeroize(&mut confirmation);
 
         let transcript = transcript_hash(&binding, out_ct, out_pk);
-        match ml_dsa_sign_with_context(own_signing_key, &transcript, CONTEXT_ENCAPSULATING_SIDE) {
-            Ok(signature) => {
+        let outcome = confirmation_tag(
+            &encapsulator_key,
+            CONFIRM_LABEL_ENCAPSULATING_SIDE,
+            &transcript,
+        )
+        .and_then(|tag| {
+            let digest = encapsulator_digest(&transcript, &tag);
+            ml_dsa_sign_with_context(own_signing_key, &digest, CONTEXT_ENCAPSULATING_SIDE)
+                .map(|signature| (tag, digest, signature))
+        });
+        secure_zeroize(&mut encapsulator_key);
+
+        match outcome {
+            Ok((tag, digest, signature)) => {
                 *out_signature = signature;
+                *out_confirmation = tag;
                 self.pending_auth = Some(PendingAuthentication {
-                    transcript,
+                    digest,
                     peer_identity,
+                    confirmation_key: keygen_key,
                 });
+                secure_zeroize(&mut keygen_key);
                 Ok(())
             }
             Err(error) => {
+                secure_zeroize(&mut keygen_key);
                 self.zeroize_session();
                 Err(error)
             }
         }
     }
 
-    /// Key-generating side of the authenticated handshake.
+    /// Key-generating side of the authenticated handshake (protocol version 2).
     ///
-    /// Verifies the encapsulating side's signature over the transcript against
-    /// `peer_verifying_key` **before** finalizing, so a forged response costs one signature
-    /// verification and consumes nothing: the pending handshake survives and the genuine
-    /// response can still be processed. On success the keys are live and `out_signature`
-    /// (this side's proof) must be sent to the peer for [`Self::confirm_peer`].
+    /// In order: (1) verify the peer's signature, which covers the transcript and the peer's
+    /// confirmation tag, against `peer_verifying_key`; a bad signature changes nothing, so a
+    /// forgery cannot consume the pending handshake. (2) Derive the session and confirmation
+    /// keys. (3) Verify the peer's confirmation tag against the derived key; a mismatch (a
+    /// differing `salt`, a ciphertext that does not match the peer's encapsulation, a faulty or
+    /// malicious authenticated peer) returns `KeyConfirmationFailed`. (4) Only then install the
+    /// session keys and return this side's signature and tag for [`Self::confirm_peer`].
     ///
-    /// `salt` and `app_info` must equal the peer's. A valid signature with a failing key
-    /// derivation (for example a low-order X25519 point) consumes the pending handshake.
+    /// Once (1) succeeds the input is authenticated, and any later failure consumes the pending
+    /// handshake (fail closed; a fresh `initiate_handshake` is required), which limits an
+    /// authenticated peer to one decapsulation attempt per handshake. Nothing is installed on
+    /// failure.
     #[allow(clippy::too_many_arguments)]
     pub fn finalize_authenticated(
         &mut self,
@@ -606,9 +714,11 @@ impl SessionManager {
         peer_x25519_pk: &X25519Public,
         ml_kem_ct: &Ciphertext1024,
         peer_signature: &Signature87,
+        peer_confirmation: &[u8; CONFIRMATION_TAG_LEN],
         salt: &[u8],
         app_info: &[u8],
         out_signature: &mut Signature87,
+        out_confirmation: &mut [u8; CONFIRMATION_TAG_LEN],
     ) -> Result<(), CryptoError> {
         let (own_ml_kem_pk, own_x25519_pk) = {
             let dk = self.ml_kem_dk.as_ref().ok_or(CryptoError::InvalidState)?;
@@ -628,19 +738,47 @@ impl SessionManager {
             app_info,
         )?;
         let transcript = transcript_hash(&binding, ml_kem_ct, peer_x25519_pk);
+        let peer_digest = encapsulator_digest(&transcript, peer_confirmation);
 
         ml_dsa_verify_with_context(
             peer_verifying_key,
-            &transcript,
+            &peer_digest,
             CONTEXT_ENCAPSULATING_SIDE,
             peer_signature,
         )?;
 
-        self.finalize_handshake(peer_x25519_pk, ml_kem_ct, salt, &binding)?;
+        let outcome = self.complete_authenticated_finalize(
+            own_signing_key,
+            peer_x25519_pk,
+            ml_kem_ct,
+            peer_confirmation,
+            salt,
+            &binding,
+            &transcript,
+            &peer_digest,
+        );
+        match outcome {
+            Ok((signature, tag, secrets)) => {
+                let session = &secrets.session;
+                let mut tx_key = [0u8; 64];
+                let mut rx_key = [0u8; 64];
+                tx_key[..32].copy_from_slice(&session[..32]);
+                tx_key[32..].copy_from_slice(&session[96..]);
+                rx_key.copy_from_slice(&session[32..96]);
+                drop(secrets);
 
-        match ml_dsa_sign_with_context(own_signing_key, &transcript, CONTEXT_KEYGEN_SIDE) {
-            Ok(signature) => {
+                self.zeroize_session();
+                self.tx_key = Some(tx_key);
+                self.rx_key = Some(rx_key);
+                self.tx_key_checksum = key_checksum(&tx_key);
+                self.rx_key_checksum = key_checksum(&rx_key);
+                self.is_established = true;
+                self.ml_kem_dk = None;
+                self.x25519_sk = None;
+                compiler_fence(Ordering::SeqCst);
+
                 *out_signature = signature;
+                *out_confirmation = tag;
                 Ok(())
             }
             Err(error) => {
@@ -650,33 +788,138 @@ impl SessionManager {
         }
     }
 
-    /// Completes the encapsulating side by verifying the key-generating side's signature.
+    /// Steps (2) and (3) of `finalize_authenticated` plus this side's proof; reads the pending
+    /// handshake but changes no session state.
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    fn complete_authenticated_finalize(
+        &self,
+        own_signing_key: &SigningKey87,
+        peer_x25519_pk: &X25519Public,
+        ml_kem_ct: &Ciphertext1024,
+        peer_confirmation: &[u8; CONFIRMATION_TAG_LEN],
+        salt: &[u8],
+        binding: &[u8; 48],
+        transcript: &[u8; 48],
+        peer_digest: &[u8; 48],
+    ) -> Result<(Signature87, [u8; CONFIRMATION_TAG_LEN], DerivedSecrets), CryptoError> {
+        let dk = self.ml_kem_dk.as_ref().ok_or(CryptoError::InvalidState)?;
+        let sk = self.x25519_sk.as_ref().ok_or(CryptoError::InvalidState)?;
+
+        let mut pq_secret = ml_kem_decapsulate(dk, ml_kem_ct)?.0;
+        let mut classical_secret = match x25519_diffie_hellman(sk, peer_x25519_pk) {
+            Ok(shared) => shared.0,
+            Err(error) => {
+                pq_secret.zeroize();
+                return Err(error);
+            }
+        };
+
+        let mut inner = handshake_transcript(ml_kem_ct, peer_x25519_pk, binding);
+        let derived = derive_hybrid_key_with_confirmation(
+            &mut pq_secret,
+            &mut classical_secret,
+            salt,
+            &inner,
+            &confirmation_info(&inner),
+        );
+        inner.zeroize();
+        let (session, confirmation) = derived?;
+        let secrets = DerivedSecrets {
+            session,
+            confirmation,
+        };
+
+        let mut encapsulator_key = [0u8; CONFIRMATION_KEY_LEN];
+        let mut keygen_key = [0u8; CONFIRMATION_KEY_LEN];
+        encapsulator_key.copy_from_slice(&secrets.confirmation[..CONFIRMATION_KEY_LEN]);
+        keygen_key.copy_from_slice(&secrets.confirmation[CONFIRMATION_KEY_LEN..]);
+
+        let expected = confirmation_tag(
+            &encapsulator_key,
+            CONFIRM_LABEL_ENCAPSULATING_SIDE,
+            transcript,
+        );
+        secure_zeroize(&mut encapsulator_key);
+        let expected = match expected {
+            Ok(tag) => tag,
+            Err(error) => {
+                secure_zeroize(&mut keygen_key);
+                return Err(error);
+            }
+        };
+        if !confirmation_tags_equal(&expected, peer_confirmation) {
+            secure_zeroize(&mut keygen_key);
+            return Err(CryptoError::KeyConfirmationFailed);
+        }
+
+        let proof =
+            confirmation_tag(&keygen_key, CONFIRM_LABEL_KEYGEN_SIDE, peer_digest).and_then(|tag| {
+                let digest = keygen_digest(peer_digest, &tag);
+                ml_dsa_sign_with_context(own_signing_key, &digest, CONTEXT_KEYGEN_SIDE)
+                    .map(|signature| (signature, tag))
+            });
+        secure_zeroize(&mut keygen_key);
+        let (signature, tag) = proof?;
+        Ok((signature, tag, secrets))
+    }
+
+    /// Completes the encapsulating side: verifies the key-generating side's signature and
+    /// key-confirmation tag, then lets the session carry traffic.
     ///
     /// `peer_verifying_key` must be the identity this session was bound to; a signature from any
-    /// other key is rejected even if it verifies. A failed check leaves the session unconfirmed
-    /// (still refusing traffic) so the genuine signature can still arrive; call
-    /// [`Self::zeroize_session`] to abandon it.
+    /// other key is rejected even if it verifies. A bad signature (which covers the tag) leaves
+    /// the session unconfirmed and still refusing traffic, so the genuine proof can still
+    /// arrive; call [`Self::zeroize_session`] to abandon it. A valid signature with a tag that
+    /// does not match the expected key returns `KeyConfirmationFailed` and wipes the session.
     pub fn confirm_peer(
         &mut self,
         peer_verifying_key: &PublicKey87,
         peer_signature: &Signature87,
+        peer_confirmation: &[u8; CONFIRMATION_TAG_LEN],
     ) -> Result<(), CryptoError> {
-        let pending = self
-            .pending_auth
-            .as_ref()
-            .ok_or(CryptoError::InvalidState)?;
+        let (digest, pinned_identity, mut confirmation_key) = {
+            let pending = self
+                .pending_auth
+                .as_ref()
+                .ok_or(CryptoError::InvalidState)?;
+            (
+                pending.digest,
+                pending.peer_identity,
+                pending.confirmation_key,
+            )
+        };
         let presented = identity_fingerprint(peer_verifying_key);
-        if !bool::from(presented.as_slice().ct_eq(pending.peer_identity.as_slice())) {
+        if !confirmation_tags_equal(&presented, &pinned_identity) {
+            secure_zeroize(&mut confirmation_key);
             return Err(CryptoError::VerificationFailed);
         }
-        ml_dsa_verify_with_context(
+        let signed = keygen_digest(&digest, peer_confirmation);
+        if let Err(error) = ml_dsa_verify_with_context(
             peer_verifying_key,
-            &pending.transcript,
+            &signed,
             CONTEXT_KEYGEN_SIDE,
             peer_signature,
-        )?;
-        self.pending_auth = None;
-        Ok(())
+        ) {
+            secure_zeroize(&mut confirmation_key);
+            return Err(error);
+        }
+
+        let expected = confirmation_tag(&confirmation_key, CONFIRM_LABEL_KEYGEN_SIDE, &digest);
+        secure_zeroize(&mut confirmation_key);
+        match expected {
+            Ok(tag) if confirmation_tags_equal(&tag, peer_confirmation) => {
+                self.wipe_pending_authentication();
+                Ok(())
+            }
+            Ok(_) => {
+                self.zeroize_session();
+                Err(CryptoError::KeyConfirmationFailed)
+            }
+            Err(error) => {
+                self.zeroize_session();
+                Err(error)
+            }
+        }
     }
 
     /// Whether this side is waiting for [`Self::confirm_peer`].
@@ -977,6 +1220,117 @@ mod tests {
             (manager.tx_counter, manager.rx_counter, manager.rx_window),
             (0, 0, 0)
         );
+    }
+
+    /// The pending confirmation key is wiped, and flushed as zeros, when the handshake is
+    /// abandoned and when the peer's proof fails key confirmation.
+    #[cfg(feature = "ml-dsa")]
+    #[test]
+    fn pending_confirmation_key_is_wiped_and_flushed_on_abandon_and_on_failed_confirmation() {
+        use crate::auth_handshake::{
+            encapsulator_digest, handshake_binding, identity_fingerprint, keygen_digest,
+            transcript_hash, CONFIRMATION_TAG_LEN, CONTEXT_KEYGEN_SIDE,
+        };
+        use crate::ml_dsa_wrapper::{ml_dsa_keygen, ml_dsa_sign_with_context, Signature87};
+        use crate::ml_kem_wrapper::Ciphertext1024;
+        use crate::x25519_wrapper::X25519Public;
+        use core::sync::atomic::{AtomicUsize, Ordering as O};
+        static KEY: AtomicUsize = AtomicUsize::new(0);
+        static ZERO_FLUSHES: AtomicUsize = AtomicUsize::new(0);
+        static DIRTY_FLUSHES: AtomicUsize = AtomicUsize::new(0);
+
+        fn hook(ptr: *const u8, len: usize) {
+            if ptr as usize != KEY.load(O::SeqCst) {
+                return;
+            }
+            let bytes = unsafe { core::slice::from_raw_parts(ptr, len) };
+            if len == 48 && bytes.iter().all(|&b| b == 0) {
+                ZERO_FLUSHES.fetch_add(1, O::SeqCst);
+            } else {
+                DIRTY_FLUSHES.fetch_add(1, O::SeqCst);
+            }
+        }
+
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(|| {
+                let _hook_guard = crate::test_support::hook_guard();
+                crate::test_support::install_callbacks();
+                let (k_vk, k_sk) = ml_dsa_keygen(&[0x41; 32]).unwrap();
+                let (e_vk, e_sk) = ml_dsa_keygen(&[0x42; 32]).unwrap();
+                let mut keygen = SessionManager::new();
+                let (ek, xk) = keygen.initiate_handshake(&[0x11; 96]).unwrap();
+
+                for abandon in [true, false] {
+                    let mut encap = SessionManager::new();
+                    let mut ct = Ciphertext1024([0; 1568]);
+                    let mut xe = X25519Public([0; 32]);
+                    let mut sig = Signature87([0; 4627]);
+                    let mut tag = [0u8; CONFIRMATION_TAG_LEN];
+                    encap
+                        .encapsulate_authenticated(
+                            &e_sk,
+                            &k_vk,
+                            &ek,
+                            &xk,
+                            &[0x22; 64],
+                            b"s",
+                            b"a",
+                            &mut ct,
+                            &mut xe,
+                            &mut sig,
+                            &mut tag,
+                        )
+                        .unwrap();
+                    KEY.store(
+                        encap
+                            .pending_auth
+                            .as_ref()
+                            .unwrap()
+                            .confirmation_key
+                            .as_ptr() as usize,
+                        O::SeqCst,
+                    );
+                    ZERO_FLUSHES.store(0, O::SeqCst);
+                    DIRTY_FLUSHES.store(0, O::SeqCst);
+                    crate::test_support::set_cache_flush_hook(Some(hook));
+
+                    if abandon {
+                        encap.zeroize_session();
+                    } else {
+                        // A genuine signature over a wrong tag: authentic, but no shared key.
+                        let binding = handshake_binding(
+                            &ek,
+                            &xk,
+                            &identity_fingerprint(&k_vk),
+                            &identity_fingerprint(&e_vk),
+                            b"a",
+                        )
+                        .unwrap();
+                        let digest =
+                            encapsulator_digest(&transcript_hash(&binding, &ct, &xe), &tag);
+                        let wrong = [0xC3u8; CONFIRMATION_TAG_LEN];
+                        let proof = ml_dsa_sign_with_context(
+                            &k_sk,
+                            &keygen_digest(&digest, &wrong),
+                            CONTEXT_KEYGEN_SIDE,
+                        )
+                        .unwrap();
+                        assert_eq!(
+                            encap.confirm_peer(&k_vk, &proof, &wrong),
+                            Err(CryptoError::KeyConfirmationFailed)
+                        );
+                    }
+                    crate::test_support::set_cache_flush_hook(None);
+
+                    assert!(ZERO_FLUSHES.load(O::SeqCst) >= 1, "flushed as zeros");
+                    assert_eq!(DIRTY_FLUSHES.load(O::SeqCst), 0, "never flushed unwiped");
+                    assert!(!encap.is_awaiting_peer_confirmation());
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
     }
 
     #[test]

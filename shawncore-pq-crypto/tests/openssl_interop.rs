@@ -208,14 +208,17 @@ fn ml_dsa_87_agrees_with_openssl() {
         .unwrap();
 }
 
-/// The authenticated handshake (identities, binding, transcript, both signatures and the
-/// resulting session) re-derived by `validation/gen_session_vector.py` with OpenSSL and Python.
+/// The authenticated handshake, protocol version 2 (identities, binding, transcript, confirmation
+/// keys, both confirmation tags, both signatures and the resulting session) re-derived by
+/// `validation/gen_session_vector.py` with OpenSSL and Python from the documented design.
 #[cfg(feature = "ml-dsa")]
 #[test]
 fn authenticated_handshake_matches_an_independent_implementation() {
     use shawncore_pq_crypto::auth_handshake::{
-        handshake_binding, identity_fingerprint, transcript_hash,
+        confirmation_info, encapsulator_digest, handshake_binding, identity_fingerprint,
+        keygen_digest, transcript_hash, CONFIRMATION_TAG_LEN,
     };
+    use shawncore_pq_crypto::hybrid_kdf::derive_hybrid_key_with_confirmation;
     use shawncore_pq_crypto::ml_dsa_wrapper::{ml_dsa_keygen, Signature87};
     use shawncore_pq_crypto::session_manager::SessionManager;
     use shawncore_pq_crypto::x25519_wrapper::X25519Public;
@@ -258,6 +261,7 @@ fn authenticated_handshake_matches_an_independent_implementation() {
             let mut ct = Ciphertext1024([0; 1568]);
             let mut xe = X25519Public([0; 32]);
             let mut sig_e = Signature87([0; 4627]);
+            let mut tag_e = [0u8; CONFIRMATION_TAG_LEN];
             encap
                 .encapsulate_authenticated(
                     &e_sk,
@@ -270,11 +274,15 @@ fn authenticated_handshake_matches_an_independent_implementation() {
                     &mut ct,
                     &mut xe,
                     &mut sig_e,
+                    &mut tag_e,
                 )
                 .unwrap();
+            let transcript = transcript_hash(&binding, &ct, &xe);
+            assert_eq!(transcript.as_slice(), v["auth.transcript"].as_slice());
+            assert_eq!(tag_e.as_slice(), v["auth.tag_e"].as_slice(), "tag E");
             assert_eq!(
-                transcript_hash(&binding, &ct, &xe).as_slice(),
-                v["auth.transcript"].as_slice()
+                encapsulator_digest(&transcript, &tag_e).as_slice(),
+                v["auth.digest_e"].as_slice()
             );
             assert_eq!(
                 sig_e.0.as_slice(),
@@ -283,15 +291,55 @@ fn authenticated_handshake_matches_an_independent_implementation() {
             );
 
             let mut sig_k = Signature87([0; 4627]);
+            let mut tag_k = [0u8; CONFIRMATION_TAG_LEN];
             keygen
-                .finalize_authenticated(&k_sk, &e_vk, &xe, &ct, &sig_e, salt, app_info, &mut sig_k)
+                .finalize_authenticated(
+                    &k_sk, &e_vk, &xe, &ct, &sig_e, &tag_e, salt, app_info, &mut sig_k, &mut tag_k,
+                )
                 .unwrap();
+            assert_eq!(tag_k.as_slice(), v["auth.tag_k"].as_slice(), "tag K");
+            assert_eq!(
+                keygen_digest(&encapsulator_digest(&transcript, &tag_e), &tag_k).as_slice(),
+                v["auth.digest_k"].as_slice()
+            );
             assert_eq!(
                 sig_k.0.as_slice(),
                 v["auth.sig_k"].as_slice(),
                 "key-generating signature"
             );
-            encap.confirm_peer(&k_vk, &sig_k).unwrap();
+            encap.confirm_peer(&k_vk, &sig_k, &tag_k).unwrap();
+
+            // The confirmation keys themselves, from the same PRK as the session keys.
+            let keygen_dk = ml_kem_keygen(&keygen_entropy[..64].try_into().unwrap())
+                .unwrap()
+                .1;
+            let mut pq = ml_kem_decapsulate(&keygen_dk, &ct).unwrap().0;
+            let x_sk = shawncore_pq_crypto::x25519_wrapper::X25519Secret(
+                keygen_entropy[64..96].try_into().unwrap(),
+            );
+            let mut classical =
+                shawncore_pq_crypto::x25519_wrapper::x25519_diffie_hellman(&x_sk, &xe)
+                    .unwrap()
+                    .0;
+            let inner: [u8; 48] = {
+                use sha2::{Digest, Sha384};
+                let mut hasher = Sha384::new();
+                hasher.update(b"ShawnCore-v1.3-hybrid-handshake");
+                hasher.update(ct.0);
+                hasher.update(xe.0);
+                hasher.update(binding);
+                hasher.finalize().into()
+            };
+            let (_, confirmation) = derive_hybrid_key_with_confirmation(
+                &mut pq,
+                &mut classical,
+                salt,
+                &inner,
+                &confirmation_info(&inner),
+            )
+            .unwrap();
+            assert_eq!(&confirmation[..48], v["auth.confirm_key_e"].as_slice());
+            assert_eq!(&confirmation[48..], v["auth.confirm_key_k"].as_slice());
 
             let plaintext = &v["session.e2k_plaintext"];
             let mut out = vec![0u8; plaintext.len()];

@@ -31,8 +31,9 @@ uses the complementary assignment.
 ## Important Boundaries
 
 - The authenticated handshake (`encapsulate_authenticated`, `finalize_authenticated`,
-  `confirm_peer`; ARCHITECTURE.md section 4.5) is new, unreviewed and the highest-priority
-  review item. The legacy handshake is unauthenticated and open to an active
+  `confirm_peer`, protocol version 2 with explicit key confirmation; ARCHITECTURE.md section 4.5)
+  is new, unreviewed and the highest-priority review item; SECURITY.md section 10 lists what
+  a cryptographer should examine. The legacy handshake is unauthenticated and open to an active
   man-in-the-middle; SECURITY.md section 10 states the design, the evidence and the limits.
 - Session decryption verifies authentication before committing replay-window
   state. Session re-establishment clears existing directional keys and replay

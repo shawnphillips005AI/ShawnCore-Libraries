@@ -560,9 +560,9 @@ fn platform_requirement_and_independent_evidence_are_enforced_and_documented() {
         .find("#ifndef SHAWNCORE_LITE\n/* ML-DSA primary")
         .expect("ML-DSA block");
     for function in [
-        "shawncore_crypto_session_manager_encapsulate_authenticated",
-        "shawncore_crypto_session_manager_finalize_authenticated",
-        "shawncore_crypto_session_manager_confirm_peer",
+        "shawncore_crypto_session_manager_encapsulate_authenticated_v2",
+        "shawncore_crypto_session_manager_finalize_authenticated_v2",
+        "shawncore_crypto_session_manager_confirm_peer_v2",
     ] {
         let at = header
             .find(function)
@@ -576,7 +576,6 @@ fn platform_requirement_and_independent_evidence_are_enforced_and_documented() {
             ("SECURITY.md", read("SECURITY.md")),
         ] {
             let short = function.trim_start_matches("shawncore_crypto_session_manager_");
-            let short = short.trim_end_matches("_authenticated");
             assert!(text.contains(short), "{name} must mention {short}");
         }
     }
@@ -585,6 +584,18 @@ fn platform_requirement_and_independent_evidence_are_enforced_and_documented() {
         "ARCHITECTURE.md",
         "4.5 The authenticated handshake",
     );
+    // Key confirmation is part of the authenticated handshake and its limits must stay stated.
+    assert!(header.contains("SHAWNCORE_CRYPTO_KEY_CONFIRMATION_FAILED = 7"));
+    for (name, text) in [
+        ("ARCHITECTURE.md", read("ARCHITECTURE.md")),
+        ("SECURITY.md", read("SECURITY.md")),
+        ("VALIDATION.md", read("VALIDATION.md")),
+    ] {
+        for needle in ["key confirmation", "KeyConfirmationFailed"] {
+            assert!(text.contains(needle), "{name} must mention {needle}");
+        }
+    }
+    assert_doc_contains(&read("SECURITY.md"), "SECURITY.md", "salt");
 }
 
 #[test]

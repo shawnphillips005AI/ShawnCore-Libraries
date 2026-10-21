@@ -29,6 +29,8 @@ pub enum ShawncoreCryptoErr {
     EntropyStarvation = 5,
     /// Entropy operation is already in progress; retry without blocking.
     EntropyBusy = 6,
+    /// A signature verified but the key-confirmation tag did not match the derived key.
+    KeyConfirmationFailed = 7,
     /// A panic occurred within the Rust boundary.
     Panic = 99,
 }
@@ -42,6 +44,7 @@ impl From<crate::error::CryptoError> for ShawncoreCryptoErr {
             crate::error::CryptoError::VerificationFailed => Self::VerificationFailed,
             crate::error::CryptoError::EntropyStarvation => Self::EntropyStarvation,
             crate::error::CryptoError::EntropyBusy => Self::EntropyBusy,
+            crate::error::CryptoError::KeyConfirmationFailed => Self::KeyConfirmationFailed,
         }
     }
 }

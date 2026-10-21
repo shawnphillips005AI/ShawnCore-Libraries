@@ -301,48 +301,76 @@ attacker is out of scope, or authenticate the link another way (a pre-provisione
 `salt` stops an intermediary that lacks it from deriving the keys; this gives symmetric
 authentication only and mismatch shows at the first packet).
 
-**Authenticated (`encapsulate_authenticated`, `finalize_authenticated`, `confirm_peer`).**
-Full configuration only (it needs ML-DSA-87; the Lite configuration has no equivalent).
+**Authenticated (`encapsulate_authenticated`, `finalize_authenticated`, `confirm_peer`; C: `…_v2`).**
+Full configuration only (it needs ML-DSA-87; the Lite configuration has no equivalent). The C
+functions are `encapsulate_authenticated_v2`, `finalize_authenticated_v2` and `confirm_peer_v2`
+(prefix `shawncore_crypto_session_manager_`). This is protocol version 2; the earlier signature-only draft was found to lack key confirmation and was
+replaced before any release (see CHANGELOG).
+
+*Why version 2.* An audit of the first draft confirmed two gaps by running them: the signed
+transcript did not bind the HKDF `salt`, and `confirm_peer` verified only the peer's signature, not
+that the peer derived the same key. Two sides given different salts both reported success and then
+could not talk. A signed unusable ciphertext was likewise accepted. Version 2 adds explicit key
+confirmation.
 
 *Design decision.* The hybrid exchange is kept as is and wrapped in the signed-transcript pattern
 used by TLS 1.3 and SIGMA, using only primitives already in the library. Each side holds an ML-DSA-87
 signing key and a **trust anchor**: the peer's verifying key, provisioned out of band. This was
 chosen over a pre-shared key because it gives per-device identity and survives compromise of a
-single device's secrets, over a certificate chain because chains, revocation and clocks are platform
-policy this library cannot own, and over a bespoke key-confirmation MAC because a signature over the
-full transcript already binds both identities and every exchanged value.
+single device's secrets, and over a certificate chain because chains, revocation and clocks are
+platform policy this library cannot own. Key confirmation is an HMAC-SHA384 tag under a key expanded
+from the same PRK with its own label, one key and label per role.
+
+*Salt.* The salt is **not** placed in the transcript: it may be a secret pre-shared value and a
+signed or hashed copy would expose it to offline guessing. It enters the PRK, so a mismatch changes
+the confirmation keys and fails the tag check as `KeyConfirmationFailed` during the handshake. A
+secret salt therefore also acts as a symmetric second factor: an authenticated peer without it
+cannot complete the handshake, and an attacker without it cannot confirm.
 
 *Flow* (names as in [ARCHITECTURE.md](ARCHITECTURE.md#45-the-authenticated-handshake)):
 
 1. Key-generating side: `initiate_handshake` sends its ML-KEM and X25519 public keys.
-2. Encapsulating side: `encapsulate_authenticated` derives the session keys, signs the transcript
-   (context `ShawnCore-auth-v1 encapsulating side`), and sends the ciphertext, its X25519 key and the
-   signature. Its session is **unconfirmed** and refuses all traffic.
+2. Encapsulating side: `encapsulate_authenticated` derives the session and confirmation keys,
+   computes its tag, signs the digest that covers the transcript and the tag, and sends ciphertext,
+   X25519 key, signature and tag. Its session is **unconfirmed** and refuses all traffic.
 3. Key-generating side: `finalize_authenticated` verifies that signature against its trust anchor
-   *before* finalizing, then sends its own signature (context `ShawnCore-auth-v1 key-generating
-   side`).
-4. Encapsulating side: `confirm_peer` verifies it against the identity the session was bound to;
-   only then may the session carry traffic.
+   *first* (failure changes nothing), then derives the keys, verifies the tag
+   (`KeyConfirmationFailed` otherwise), only then installs the keys, and sends its own signature
+   and tag.
+4. Encapsulating side: `confirm_peer` verifies the pinned identity, the signature and the tag; only
+   then may the session carry traffic.
 
-*What the transcript binds.* Protocol version, suite identifier, the key-generating side's ML-KEM
-and X25519 public keys, both identities (SHA-384 fingerprints of the verifying keys), the length-
-prefixed application `info`, the ML-KEM ciphertext and the encapsulating side's X25519 key. The
-binding is also passed to the existing handshake as `info`, so the session keys depend on all of it.
+*What each error means.* `VerificationFailed`: an unauthenticated or mis-attributed message; no
+state is consumed, so forgeries are cheap to reject and cannot cause denial of the genuine peer's
+reply. `KeyConfirmationFailed`: the peer is authentic but derived a different key (salt mismatch,
+inconsistent ciphertext, faulty peer); the pending handshake or unconfirmed session is wiped and
+nothing is installed. `InvalidState`: wrong call order, repeat or replay; no side effects, and a
+live session's keys and counters are untouched.
+
+*What the transcript binds.* Protocol version, suite identifier (including the key-confirmation
+suite), the key-generating side's ML-KEM and X25519 public keys, both identities (SHA-384
+fingerprints of the verifying keys), the length-prefixed application `info`, the ML-KEM ciphertext
+and the encapsulating side's X25519 key; each signature also covers the same side's confirmation
+tag. The salt is deliberately absent (above). The binding is also the HKDF `info`, so the session
+keys depend on all of it.
 
 *Properties the design aims at, and what evidence exists* (host tests only; the second column is not
 a proof):
 
 | Property | Evidence |
 | --- | --- |
-| An intermediary with its own key cannot impersonate either side | `an_active_intermediary_with_its_own_identity_is_rejected`, `an_impersonator_of_the_keygen_side_cannot_confirm_the_session` |
-| Every transcript field is authenticated (ciphertext, X25519 key, signature, application info) | `every_tampered_reply_field_is_rejected_without_consuming_the_handshake` |
-| No unknown-key-share: identities are bound, and `confirm_peer` pins the identity | `the_wrong_trust_anchor_rejects_a_genuine_reply`, `an_impersonator_of_the_keygen_side_cannot_confirm_the_session` |
-| No reflection or cross-role reuse of a signature (role contexts) | `role_contexts_stop_one_sides_signature_standing_in_for_the_other` (one key on both sides, so only the context differs) |
-| Freshness: a recorded reply fails against a new ephemeral key | `a_reply_recorded_from_an_earlier_handshake_does_not_verify_in_a_new_one` |
-| An unconfirmed session cannot send or receive | `mutual_authentication_completes_and_traffic_flows_both_ways` |
-| Forged replies do not consume the pending handshake (cost: one verification) | `an_active_intermediary_with_its_own_identity_is_rejected` |
-| The encodings match an independent implementation | `authenticated_handshake_matches_an_independent_implementation`: binding, transcript, both ML-DSA signatures (OpenSSL 3.5.8 with FIPS 204 contexts) and the resulting packets are byte-identical |
-| The tests detect regressions | Eight targeted faults (ignoring a signature, dropping the identity pin, sharing one context, letting an unconfirmed session send, omitting `info` or an identity from the binding, skipping `confirm_peer` verification, consuming the handshake on a forgery) were each caught |
+| An intermediary with its own key cannot impersonate either side | `an_active_intermediary_with_its_own_identity_is_rejected_and_consumes_nothing`, `an_impersonator_of_the_keygen_side_cannot_confirm_the_session` |
+| Every transcript field, both tags and both signatures are authenticated | `every_tampered_reply_field_fails_authentication_and_consumes_nothing`, `tampering_with_the_proof_in_flight_is_a_signature_failure_that_keeps_the_session_pending` |
+| No unknown-key-share: identities are bound and `confirm_peer` pins the identity | `the_wrong_trust_anchor_rejects_a_genuine_reply`, `an_impersonator_of_the_keygen_side_cannot_confirm_the_session` |
+| Different salts are detected during the handshake, as a distinct error, installing nothing | `different_salts_are_rejected_during_the_handshake_by_key_confirmation`, `an_empty_salt_on_one_side_only_is_also_a_key_confirmation_failure` |
+| A validly signed but unusable exchange is rejected | `a_validly_signed_but_unusable_exchange_fails_key_confirmation` |
+| A valid signature over a wrong tag wipes the unconfirmed session | `a_valid_signature_over_a_wrong_confirmation_tag_wipes_the_unconfirmed_session` |
+| Roles and directions are separated (keys and labels; no reflection) | `confirmation_keys_and_labels_are_separated_by_role`, `confirmation_keys_are_distinct_and_independent_of_the_session_keys` |
+| Freshness: a recorded reply fails against a new ephemeral key | `a_replayed_reply_from_a_previous_handshake_is_rejected_by_a_new_one` |
+| State machine: no traffic before confirmation; repeats and out-of-order calls refused; live counters not reset | `matching_salt_and_context_complete_with_mutual_confirmation`, `repeated_and_out_of_order_messages_are_refused_without_side_effects`, `an_abandoned_handshake_clears_state_and_a_new_one_recovers` |
+| Pending confirmation key is wiped and flushed as zeros | `pending_confirmation_key_is_wiped_and_flushed_on_abandon_and_on_failed_confirmation` |
+| The encodings match an independent implementation | `authenticated_handshake_matches_an_independent_implementation`: binding, transcript, both confirmation keys, both tags, both ML-DSA signatures (OpenSSL 3.5.8) and the packets are byte-identical |
+| The tests detect regressions | Fifteen targeted faults in version 2 (skipping either tag check, role-swapped tag key or label, a shared label, confirmation expansion reusing the session info, tag or app info or identity or key or ciphertext dropped from a digest or the binding, traffic allowed while unconfirmed, failed finalize keeping state, identity pin dropped, pending key not wiped) were each caught |
 
 *Not claimed.* No formal analysis (for example Tamarin or ProVerif) and no independent review: this
 is a composition of standard components, but the composition itself is new and **unreviewed**.
@@ -354,8 +382,18 @@ rotation or provisioning mechanism; those are platform policy. Freshness depends
 generating side's entropy being fresh. Signing is deterministic (see Known Limitations).
 
 *Integrator obligations.* Provision each side's trust anchor through a channel you trust. Supply
-unpredictable entropy and never reuse it. Give both sides identical `salt` and `app_info`. Abandon a
-handshake that does not complete (`zeroize`); a forged or delayed message cannot be told from loss.
+unpredictable entropy and never reuse it. Give both sides identical `salt` and `app_info`; a
+mismatch is reported as `KeyConfirmationFailed` (salt) or `VerificationFailed` (`app_info`). Treat a
+salt you intend to be secret as a secret: it is not signed or transmitted. Abandon a handshake that
+does not complete (`zeroize`); a forged or delayed message cannot be told from loss. After
+`KeyConfirmationFailed` start over with a fresh `initiate_handshake`.
+
+*Review this needs.* Before relying on version 2 for anything that matters, have a cryptographer
+review: the composition of signed transcript and MAC confirmation (including whether the
+confirmation tags need to cover more of the transcript than they do), the use of two HKDF
+expansions of one PRK and the label separation, deterministic signing, the one-decapsulation
+failure policy, and a mechanised model (for example Tamarin or ProVerif) of the message flow. None
+of that has been done.
 Budget the memory: an ML-DSA signing key occupies about 105 KB and a verifying key about 74 KB in
 memory, and signing uses a large stack (see the README).
 

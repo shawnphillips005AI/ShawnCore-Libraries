@@ -508,21 +508,24 @@ fn writable_regions_overlap(regions: &[(usize, usize, bool)]) -> bool {
     false
 }
 
-/// Encapsulating side of the authenticated handshake: derives the session keys, signs the
-/// transcript with `own_signing_key`, and leaves the session **unconfirmed** (it refuses all
-/// traffic) until `shawncore_crypto_session_manager_confirm_peer` succeeds.
+/// Encapsulating side of the authenticated handshake, protocol version 2: derives the session
+/// keys and a separate confirmation key, produces a signature and a key-confirmation tag, and
+/// leaves the session **unconfirmed** (it refuses all traffic) until
+/// `shawncore_crypto_session_manager_confirm_peer_v2` succeeds.
 ///
 /// `peer_verifying_key` is the trust anchor for the key-generating side and must be provisioned
-/// out of band. `app_info` is bound into the transcript. Outputs are written only on success.
+/// out of band. `app_info` is bound into the transcript; `salt` is not (it may be secret) and a
+/// salt that differs from the peer's is caught by key confirmation. Outputs are written only on
+/// success.
 ///
 /// # Safety
 /// All pointers except `salt`/`app_info` (null only with length zero) must be valid, non-null and
-/// aligned; `entropy` must point to exactly 64 bytes. Outputs must be **UNINITIALIZED** storage and
-/// must not overlap each other, `manager` or any input.
+/// aligned; `entropy` must point to exactly 64 bytes and `out_confirmation` to 48. Outputs must be
+/// **UNINITIALIZED** storage and must not overlap each other, `manager` or any input.
 #[no_mangle]
 #[cfg(feature = "ml-dsa")]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_authenticated(
+pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_authenticated_v2(
     manager: *mut SessionManager,
     own_signing_key: *const SigningKey87,
     peer_verifying_key: *const PublicKey87,
@@ -536,6 +539,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_authentica
     out_ct: *mut Ciphertext1024,
     out_my_x25519_pk: *mut X25519Public,
     out_signature: *mut Signature87,
+    out_confirmation: *mut u8,
 ) -> ShawncoreCryptoErr {
     if manager.is_null()
         || own_signing_key.is_null()
@@ -546,6 +550,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_authentica
         || out_ct.is_null()
         || out_my_x25519_pk.is_null()
         || out_signature.is_null()
+        || out_confirmation.is_null()
     {
         return ShawncoreCryptoErr::InvalidState;
     }
@@ -607,6 +612,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_authentica
             core::mem::size_of::<Signature87>(),
             true,
         ),
+        (out_confirmation as usize, 48, true),
     ]) {
         return ShawncoreCryptoErr::InvalidLength;
     }
@@ -627,6 +633,7 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_authentica
     let mut ct = Ciphertext1024([0; 1568]);
     let mut my_pk = X25519Public([0; 32]);
     let mut signature = Signature87([0; 4627]);
+    let mut confirmation = [0u8; 48];
     match manager_ref.encapsulate_authenticated(
         unsafe { &*own_signing_key },
         unsafe { &*peer_verifying_key },
@@ -638,12 +645,14 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_authentica
         &mut ct,
         &mut my_pk,
         &mut signature,
+        &mut confirmation,
     ) {
         Ok(()) => {
             unsafe {
                 core::ptr::write(out_ct, ct);
                 core::ptr::write(out_my_x25519_pk, my_pk);
                 core::ptr::write(out_signature, signature);
+                core::ptr::write(out_confirmation.cast::<[u8; 48]>(), confirmation);
             }
             ShawncoreCryptoErr::Success
         }
@@ -651,29 +660,35 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_authentica
     }
 }
 
-/// Key-generating side of the authenticated handshake. Verifies the peer's signature over the
-/// transcript against `peer_verifying_key` before finalizing; a forged response returns
-/// `VerificationFailed` and leaves the pending handshake intact. On success the keys are live and
-/// `out_signature` must be sent to the peer for `..._confirm_peer`.
+/// Key-generating side of the authenticated handshake, protocol version 2. Verifies the peer's
+/// signature (which covers the transcript and the peer's confirmation tag) before deriving
+/// anything; a forged response returns `VerificationFailed` and leaves the pending handshake
+/// intact. It then derives the keys and verifies the peer's confirmation tag; a mismatch returns
+/// `KeyConfirmationFailed` and consumes the pending handshake. Only a fully verified exchange
+/// installs the keys and writes `out_signature` and `out_confirmation`, which must be sent to the
+/// peer for `..._confirm_peer_v2`.
 ///
 /// # Safety
-/// As for `shawncore_crypto_session_manager_encapsulate_authenticated`; `out_signature` must be
-/// **UNINITIALIZED** storage and is written only on success.
+/// As for `shawncore_crypto_session_manager_encapsulate_authenticated_v2`; `peer_confirmation` and
+/// `out_confirmation` point to 48 bytes, and the outputs must be **UNINITIALIZED** storage that is
+/// written only on success.
 #[no_mangle]
 #[cfg(feature = "ml-dsa")]
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_authenticated(
+pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_authenticated_v2(
     manager: *mut SessionManager,
     own_signing_key: *const SigningKey87,
     peer_verifying_key: *const PublicKey87,
     peer_x25519_pk: *const X25519Public,
     ml_kem_ct: *const Ciphertext1024,
     peer_signature: *const Signature87,
+    peer_confirmation: *const u8,
     salt: *const u8,
     salt_len: usize,
     app_info: *const u8,
     app_info_len: usize,
     out_signature: *mut Signature87,
+    out_confirmation: *mut u8,
 ) -> ShawncoreCryptoErr {
     if manager.is_null()
         || own_signing_key.is_null()
@@ -681,7 +696,9 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_authenticated
         || peer_x25519_pk.is_null()
         || ml_kem_ct.is_null()
         || peer_signature.is_null()
+        || peer_confirmation.is_null()
         || out_signature.is_null()
+        || out_confirmation.is_null()
     {
         return ShawncoreCryptoErr::InvalidState;
     }
@@ -731,11 +748,13 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_authenticated
         ),
         (salt as usize, salt_len, false),
         (app_info as usize, app_info_len, false),
+        (peer_confirmation as usize, 48, false),
         (
             out_signature as usize,
             core::mem::size_of::<Signature87>(),
             true,
         ),
+        (out_confirmation as usize, 48, true),
     ]) {
         return ShawncoreCryptoErr::InvalidLength;
     }
@@ -753,39 +772,52 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_authenticated
     };
 
     let mut signature = Signature87([0; 4627]);
+    let mut confirmation = [0u8; 48];
     match manager_ref.finalize_authenticated(
         unsafe { &*own_signing_key },
         unsafe { &*peer_verifying_key },
         unsafe { &*peer_x25519_pk },
         unsafe { &*ml_kem_ct },
         unsafe { &*peer_signature },
+        unsafe { &*peer_confirmation.cast::<[u8; 48]>() },
         salt_slice,
         app_info_slice,
         &mut signature,
+        &mut confirmation,
     ) {
         Ok(()) => {
-            unsafe { core::ptr::write(out_signature, signature) };
+            unsafe {
+                core::ptr::write(out_signature, signature);
+                core::ptr::write(out_confirmation.cast::<[u8; 48]>(), confirmation);
+            }
             ShawncoreCryptoErr::Success
         }
         Err(e) => e.into(),
     }
 }
 
-/// Completes the encapsulating side: verifies the key-generating side's signature and, on
-/// success, lets the session carry traffic. The key must be the identity the session was bound to.
-/// A failed check leaves the session unconfirmed; call `..._zeroize` to abandon it.
+/// Completes the encapsulating side: verifies the key-generating side's signature (which covers its
+/// tag) and its key-confirmation tag and, on success, lets the session carry traffic. The key must
+/// be the identity the session was bound to. A bad signature leaves the session unconfirmed (call
+/// `..._zeroize` to abandon it); a valid signature with a wrong tag returns
+/// `KeyConfirmationFailed` and wipes the session.
 ///
 /// # Safety
-/// `manager`, `peer_verifying_key` and `peer_signature` must be valid, non-null, aligned and must
-/// not overlap.
+/// `manager`, `peer_verifying_key`, `peer_signature` and `peer_confirmation` (48 bytes) must be
+/// valid, non-null and, where typed, aligned, and must not overlap.
 #[no_mangle]
 #[cfg(feature = "ml-dsa")]
-pub unsafe extern "C" fn shawncore_crypto_session_manager_confirm_peer(
+pub unsafe extern "C" fn shawncore_crypto_session_manager_confirm_peer_v2(
     manager: *mut SessionManager,
     peer_verifying_key: *const PublicKey87,
     peer_signature: *const Signature87,
+    peer_confirmation: *const u8,
 ) -> ShawncoreCryptoErr {
-    if manager.is_null() || peer_verifying_key.is_null() || peer_signature.is_null() {
+    if manager.is_null()
+        || peer_verifying_key.is_null()
+        || peer_signature.is_null()
+        || peer_confirmation.is_null()
+    {
         return ShawncoreCryptoErr::InvalidState;
     }
     if !ptr_is_aligned(manager)
@@ -810,12 +842,17 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_confirm_peer(
             core::mem::size_of::<Signature87>(),
             false,
         ),
+        (peer_confirmation as usize, 48, false),
     ]) {
         return ShawncoreCryptoErr::InvalidLength;
     }
 
     let manager_ref = unsafe { &mut *manager };
-    match manager_ref.confirm_peer(unsafe { &*peer_verifying_key }, unsafe { &*peer_signature }) {
+    match manager_ref.confirm_peer(
+        unsafe { &*peer_verifying_key },
+        unsafe { &*peer_signature },
+        unsafe { &*peer_confirmation.cast::<[u8; 48]>() },
+    ) {
         Ok(()) => ShawncoreCryptoErr::Success,
         Err(e) => e.into(),
     }
@@ -2874,8 +2911,26 @@ mod authenticated_ffi_tests {
             .unwrap();
     }
 
+    fn encrypt_status(manager: &mut SessionManager) -> ShawncoreCryptoErr {
+        let mut nonce = [0u8; 12];
+        let mut tag = [0u8; 48];
+        let mut wire = [0u8; 5];
+        unsafe {
+            shawncore_crypto_session_manager_encrypt_packet(
+                manager,
+                core::ptr::null(),
+                0,
+                b"hello".as_ptr(),
+                wire.as_mut_ptr(),
+                5,
+                nonce.as_mut_ptr(),
+                tag.as_mut_ptr(),
+            )
+        }
+    }
+
     #[test]
-    fn c_abi_authenticated_handshake_round_trips_and_rejects_a_forged_reply() {
+    fn c_abi_authenticated_handshake_round_trips_and_reports_distinct_failures() {
         big_stack(|| {
             let (k_vk, k_sk) = ml_dsa_keygen(&[0x41; 32]).unwrap();
             let (e_vk, e_sk) = ml_dsa_keygen(&[0x42; 32]).unwrap();
@@ -2901,17 +2956,101 @@ mod authenticated_ffi_tests {
             let (ek, xk) = unsafe { (ek.assume_init(), xk.assume_init()) };
 
             let entropy64 = [0x22u8; 64];
-            let reply = |manager: &mut SessionManager, signer: &SigningKey87| {
+            let reply = |manager: &mut SessionManager, signer: &SigningKey87, salt: &[u8]| {
                 let mut ct = MaybeUninit::<Ciphertext1024>::uninit();
                 let mut xe = MaybeUninit::<X25519Public>::uninit();
                 let mut sig = MaybeUninit::<Signature87>::uninit();
+                let mut tag = [0u8; 48];
                 let status = unsafe {
-                    shawncore_crypto_session_manager_encapsulate_authenticated(
+                    shawncore_crypto_session_manager_encapsulate_authenticated_v2(
                         manager,
                         signer,
                         &k_vk,
                         &ek,
                         &xk,
+                        entropy64.as_ptr(),
+                        salt.as_ptr(),
+                        salt.len(),
+                        b"app".as_ptr(),
+                        3,
+                        ct.as_mut_ptr(),
+                        xe.as_mut_ptr(),
+                        sig.as_mut_ptr(),
+                        tag.as_mut_ptr(),
+                    )
+                };
+                assert_eq!(status, ShawncoreCryptoErr::Success);
+                unsafe { (ct.assume_init(), xe.assume_init(), sig.assume_init(), tag) }
+            };
+            let finalize = |keygen: &mut SessionManager, r: &(_, _, _, [u8; 48]), salt: &[u8]| {
+                let mut out = MaybeUninit::<Signature87>::uninit();
+                let mut out_tag = [0u8; 48];
+                let status = unsafe {
+                    shawncore_crypto_session_manager_finalize_authenticated_v2(
+                        keygen,
+                        &k_sk,
+                        &e_vk,
+                        &r.1,
+                        &r.0,
+                        &r.2,
+                        r.3.as_ptr(),
+                        salt.as_ptr(),
+                        salt.len(),
+                        b"app".as_ptr(),
+                        3,
+                        out.as_mut_ptr(),
+                        out_tag.as_mut_ptr(),
+                    )
+                };
+                (status, out, out_tag)
+            };
+
+            // An intermediary with its own identity is rejected and writes nothing.
+            let forged = reply(&mut mitm, &m_sk, b"salt");
+            let (status, _unwritten, _) = finalize(&mut keygen, &forged, b"salt");
+            assert_eq!(status, ShawncoreCryptoErr::VerificationFailed);
+
+            // A salt mismatch is an authentic peer with a different key: a distinct code, and the
+            // pending handshake is consumed.
+            let genuine = reply(&mut encap, &e_sk, b"salt");
+            let (status, _unwritten, _) = finalize(&mut keygen, &genuine, b"other");
+            assert_eq!(status, ShawncoreCryptoErr::KeyConfirmationFailed);
+            assert_eq!(
+                encrypt_status(&mut keygen),
+                ShawncoreCryptoErr::InvalidState
+            );
+            let (status, _, _) = finalize(&mut keygen, &genuine, b"salt");
+            assert_eq!(status, ShawncoreCryptoErr::InvalidState);
+
+            // Recovery with a fresh handshake.
+            let mut keygen = SessionManager::new();
+            let mut encap = SessionManager::new();
+            let mut ek2 = MaybeUninit::<PublicKey1024>::uninit();
+            let mut xk2 = MaybeUninit::<X25519Public>::uninit();
+            assert_eq!(
+                unsafe {
+                    shawncore_crypto_session_manager_initiate_handshake(
+                        &mut keygen,
+                        [0x12u8; 96].as_ptr(),
+                        ek2.as_mut_ptr(),
+                        xk2.as_mut_ptr(),
+                    )
+                },
+                ShawncoreCryptoErr::Success
+            );
+            let (ek2, xk2) = unsafe { (ek2.assume_init(), xk2.assume_init()) };
+            let mut ct = MaybeUninit::<Ciphertext1024>::uninit();
+            let mut xe = MaybeUninit::<X25519Public>::uninit();
+            let mut sig = MaybeUninit::<Signature87>::uninit();
+            let mut tag = [0u8; 48];
+            assert_eq!(
+                unsafe {
+                    shawncore_crypto_session_manager_encapsulate_authenticated_v2(
+                        &mut encap,
+                        &e_sk,
+                        &k_vk,
+                        &ek2,
+                        &xk2,
                         entropy64.as_ptr(),
                         b"salt".as_ptr(),
                         4,
@@ -2920,87 +3059,47 @@ mod authenticated_ffi_tests {
                         ct.as_mut_ptr(),
                         xe.as_mut_ptr(),
                         sig.as_mut_ptr(),
+                        tag.as_mut_ptr(),
                     )
-                };
-                assert_eq!(status, ShawncoreCryptoErr::Success);
-                unsafe { (ct.assume_init(), xe.assume_init(), sig.assume_init()) }
-            };
-            let finalize = |keygen: &mut SessionManager, ct, xe, sig| {
-                let mut out = MaybeUninit::<Signature87>::uninit();
-                let status = unsafe {
-                    shawncore_crypto_session_manager_finalize_authenticated(
-                        keygen,
-                        &k_sk,
-                        &e_vk,
-                        &xe,
-                        &ct,
-                        &sig,
-                        b"salt".as_ptr(),
-                        4,
-                        b"app".as_ptr(),
-                        3,
-                        out.as_mut_ptr(),
-                    )
-                };
-                (status, out)
-            };
-
-            // An intermediary with its own identity is rejected and writes nothing.
-            let (forged_ct, forged_xe, forged_sig) = reply(&mut mitm, &m_sk);
-            let (status, _unwritten) = finalize(&mut keygen, forged_ct, forged_xe, forged_sig);
-            assert_eq!(status, ShawncoreCryptoErr::VerificationFailed);
-
-            // The genuine reply still completes: the pending handshake survived.
-            let (ct, xe, sig) = reply(&mut encap, &e_sk);
-            let (status, out) = finalize(&mut keygen, ct, xe, sig);
+                },
+                ShawncoreCryptoErr::Success
+            );
+            let genuine = unsafe { (ct.assume_init(), xe.assume_init(), sig.assume_init(), tag) };
+            let (status, out, out_tag) = finalize(&mut keygen, &genuine, b"salt");
             assert_eq!(status, ShawncoreCryptoErr::Success);
             let keygen_signature = unsafe { out.assume_init() };
 
-            let mut nonce = [0u8; 12];
-            let mut tag = [0u8; 48];
-            let mut wire = [0u8; 5];
             assert_eq!(
-                unsafe {
-                    shawncore_crypto_session_manager_encrypt_packet(
-                        &mut encap,
-                        core::ptr::null(),
-                        0,
-                        b"hello".as_ptr(),
-                        wire.as_mut_ptr(),
-                        5,
-                        nonce.as_mut_ptr(),
-                        tag.as_mut_ptr(),
-                    )
-                },
+                encrypt_status(&mut encap),
                 ShawncoreCryptoErr::InvalidState,
                 "an unconfirmed session refuses traffic"
             );
-
+            let mut bad_tag = out_tag;
+            bad_tag[0] ^= 1;
             assert_eq!(
                 unsafe {
-                    shawncore_crypto_session_manager_confirm_peer(
+                    shawncore_crypto_session_manager_confirm_peer_v2(
                         &mut encap,
                         &k_vk,
                         &keygen_signature,
+                        bad_tag.as_ptr(),
                     )
                 },
-                ShawncoreCryptoErr::Success
+                ShawncoreCryptoErr::VerificationFailed,
+                "the tag is covered by the signature, so tampering is a signature failure"
             );
             assert_eq!(
                 unsafe {
-                    shawncore_crypto_session_manager_encrypt_packet(
+                    shawncore_crypto_session_manager_confirm_peer_v2(
                         &mut encap,
-                        core::ptr::null(),
-                        0,
-                        b"hello".as_ptr(),
-                        wire.as_mut_ptr(),
-                        5,
-                        nonce.as_mut_ptr(),
-                        tag.as_mut_ptr(),
+                        &k_vk,
+                        &keygen_signature,
+                        out_tag.as_ptr(),
                     )
                 },
                 ShawncoreCryptoErr::Success
             );
+            assert_eq!(encrypt_status(&mut encap), ShawncoreCryptoErr::Success);
         });
     }
 
@@ -3012,7 +3111,9 @@ mod authenticated_ffi_tests {
             let sig = Signature87([0; 4627]);
             let x = X25519Public([1; 32]);
             let ct = Ciphertext1024([2; 1568]);
+            let peer_tag = [0u8; 48];
             let mut out = Signature87([0; 4627]);
+            let mut out_tag = [0u8; 48];
             let mut raw = [0u8; core::mem::size_of::<SessionManager>() + 64];
             let misaligned = unsafe { raw.as_mut_ptr().add(1).cast::<SessionManager>() };
             let (null_state, bad_len) = (
@@ -3022,34 +3123,60 @@ mod authenticated_ffi_tests {
 
             let finalize = |m: *mut SessionManager,
                             peer_sig: *const Signature87,
+                            peer_tag: *const u8,
                             salt: *const u8,
                             salt_len: usize,
-                            out: *mut Signature87| unsafe {
-                shawncore_crypto_session_manager_finalize_authenticated(
+                            out: *mut Signature87,
+                            out_tag: *mut u8| unsafe {
+                shawncore_crypto_session_manager_finalize_authenticated_v2(
                     m,
                     &sk,
                     &vk,
                     &x,
                     &ct,
                     peer_sig,
+                    peer_tag,
                     salt,
                     salt_len,
                     core::ptr::null(),
                     0,
                     out,
+                    out_tag,
                 )
             };
+            let null = core::ptr::null::<u8>();
+            let tag = peer_tag.as_ptr();
+            let otag = out_tag.as_mut_ptr();
             assert_eq!(
-                finalize(core::ptr::null_mut(), &sig, core::ptr::null(), 0, &mut out),
+                finalize(core::ptr::null_mut(), &sig, tag, null, 0, &mut out, otag),
                 null_state
             );
             assert_eq!(
                 finalize(
                     &mut manager,
                     core::ptr::null(),
-                    core::ptr::null(),
+                    tag,
+                    null,
                     0,
-                    &mut out
+                    &mut out,
+                    otag
+                ),
+                null_state
+            );
+            assert_eq!(
+                finalize(&mut manager, &sig, null, null, 0, &mut out, otag),
+                null_state,
+                "null peer confirmation"
+            );
+            assert_eq!(
+                finalize(
+                    &mut manager,
+                    &sig,
+                    tag,
+                    null,
+                    0,
+                    core::ptr::null_mut(),
+                    otag
                 ),
                 null_state
             );
@@ -3057,50 +3184,51 @@ mod authenticated_ffi_tests {
                 finalize(
                     &mut manager,
                     &sig,
-                    core::ptr::null(),
+                    tag,
+                    null,
                     0,
+                    &mut out,
                     core::ptr::null_mut()
                 ),
+                null_state,
+                "null confirmation output"
+            );
+            assert_eq!(
+                finalize(misaligned, &sig, tag, null, 0, &mut out, otag),
                 null_state
             );
             assert_eq!(
-                finalize(misaligned, &sig, core::ptr::null(), 0, &mut out),
-                null_state
-            );
-            assert_eq!(
-                finalize(&mut manager, &sig, core::ptr::null(), 1, &mut out),
+                finalize(&mut manager, &sig, tag, null, 1, &mut out, otag),
                 bad_len
             );
-            // The output aliasing an input signature must be refused before any write.
+            // An output aliasing an input must be refused before any write.
             let alias = core::ptr::addr_of!(out);
             assert_eq!(
-                finalize(&mut manager, alias, core::ptr::null(), 0, &mut out),
+                finalize(&mut manager, alias, tag, null, 0, &mut out, otag),
                 bad_len
+            );
+            assert_eq!(
+                finalize(&mut manager, &sig, otag, null, 0, &mut out, otag),
+                bad_len,
+                "confirmation output aliasing the peer confirmation"
             );
             // No pending handshake: a well-formed call fails closed.
             assert_eq!(
-                finalize(&mut manager, &sig, core::ptr::null(), 0, &mut out),
+                finalize(&mut manager, &sig, tag, null, 0, &mut out, otag),
                 ShawncoreCryptoErr::InvalidState
             );
 
+            let confirm = |m: *mut SessionManager, s: *const Signature87, t: *const u8| unsafe {
+                shawncore_crypto_session_manager_confirm_peer_v2(m, &vk, s, t)
+            };
+            assert_eq!(confirm(core::ptr::null_mut(), &sig, tag), null_state);
+            assert_eq!(confirm(&mut manager, &sig, null), null_state);
             assert_eq!(
-                unsafe {
-                    shawncore_crypto_session_manager_confirm_peer(core::ptr::null_mut(), &vk, &sig)
-                },
-                null_state
-            );
-            assert_eq!(
-                unsafe { shawncore_crypto_session_manager_confirm_peer(&mut manager, &vk, &sig) },
+                confirm(&mut manager, &sig, tag),
                 ShawncoreCryptoErr::InvalidState
             );
             assert_eq!(
-                unsafe {
-                    shawncore_crypto_session_manager_confirm_peer(
-                        &mut manager,
-                        &vk,
-                        core::ptr::addr_of!(manager).cast(),
-                    )
-                },
+                confirm(&mut manager, core::ptr::addr_of!(manager).cast(), tag),
                 bad_len
             );
         });

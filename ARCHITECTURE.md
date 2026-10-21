@@ -206,55 +206,92 @@ one endpoint alone.
 
 Section 4.2 is key agreement only; it authenticates nobody, and an active
 intermediary can relay it (see SECURITY.md section 10). The authenticated variant
-keeps 4.2 intact and wraps it in the signed-transcript pattern of TLS 1.3 and
-SIGMA, using only ML-DSA-87 and SHA-384 already in the library. Roles map as
-**key-generating side = Responder**, **encapsulating side = Initiator**.
+(protocol **version 2**) keeps 4.2 intact and wraps it in the signed-transcript pattern
+of TLS 1.3 and SIGMA, adding explicit **key confirmation**, using only ML-DSA-87,
+HKDF-SHA384 and HMAC-SHA384 already in the library. Roles: **key-generating side (K)**
+and **encapsulating side (E)**; older text called them Responder and Initiator.
+
+Four properties are provided by four mechanisms and are not interchangeable:
+
+| Property | Mechanism |
+| --- | --- |
+| Identity authentication | ML-DSA-87 signature under a role-specific FIPS 204 context, verified against a trust anchor |
+| Key agreement | The hybrid exchange of 4.2 and HKDF-SHA384; the signed `binding` is its `info` |
+| Key confirmation | HMAC-SHA384 under a confirmation key expanded from the same PRK under its own label |
+| Authorization of application data | A session carries traffic only after the steps above succeeded on that side |
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant R as Responder (key-generating)
-    participant I as Initiator (encapsulating)
+    participant K as K (key-generating)
+    participant E as E (encapsulating)
 
-    Note over R,I: Each holds its own ML-DSA-87 signing key<br/>and the peer's verifying key (trust anchor)
-    R->>I: ek ‖ xK                      (initiate_handshake)
-    Note over I: encapsulate_authenticated<br/>binding → info → session keys (UNCONFIRMED)<br/>σE = Sign(skI, ctxI, transcript)
-    I->>R: ct ‖ xE ‖ σE
-    Note over R: finalize_authenticated<br/>Verify(vkI, ctxI, transcript, σE) BEFORE finalizing<br/>keys live; σK = Sign(skR, ctxR, transcript)
-    R->>I: σK
-    Note over I: confirm_peer<br/>pinned identity + Verify(vkR, ctxR, transcript, σK)<br/>session may now carry traffic
+    Note over K,E: Each holds its own ML-DSA-87 signing key<br/>and the peer's verifying key (trust anchor)
+    K->>E: ek ‖ xK                      (initiate_handshake)
+    Note over E: encapsulate_authenticated<br/>derive session + confirmation keys (UNCONFIRMED)<br/>tagE = HMAC(kcE, LE ‖ TH); σE = Sign(skE, ctxE, THE)
+    E->>K: ct ‖ xE ‖ σE ‖ tagE
+    Note over K: finalize_authenticated<br/>1 Verify σE (no state change on failure)<br/>2 derive keys  3 verify tagE  4 only then install keys<br/>tagK = HMAC(kcK, LK ‖ THE); σK = Sign(skK, ctxK, THK)
+    K->>E: σK ‖ tagK
+    Note over E: confirm_peer<br/>pinned identity, Verify σK, verify tagK<br/>session may now carry traffic
 ```
 
-**Encodings** (all hashes SHA-384; `be16/be32` big-endian lengths):
+**Encodings** (all hashes SHA-384; `be16/be32` big-endian lengths; every label begins
+`"ShawnCore-auth-v2 "`):
 
 | Value | Definition |
 | --- | --- |
-| `fp(vk)` | `SHA384("ShawnCore-auth-v1 identity" ‖ vk[2592])` |
-| `binding` | `SHA384("ShawnCore-auth-v1 binding" ‖ 0x01 ‖ be16(len suite) ‖ suite ‖ ek[1568] ‖ xK[32] ‖ fp(vkR) ‖ fp(vkI) ‖ be32(len info) ‖ info)` |
-| `transcript` | `SHA384("ShawnCore-auth-v1 transcript" ‖ binding ‖ ct[1568] ‖ xE[32])` |
-| session keys | The 4.2 derivation with `info := binding` (its internal transcript hashes `binding` again with `ct` and `xE`) |
-| `σE` | ML-DSA-87 deterministic signature of `transcript`, FIPS 204 context `"ShawnCore-auth-v1 encapsulating side"` |
-| `σK` | The same over `transcript`, context `"ShawnCore-auth-v1 key-generating side"` |
-| `suite` | `"ML-KEM-1024+X25519;HKDF-SHA384;ChaCha20+HMAC-SHA384;ML-DSA-87"`; there is no negotiation, so there is nothing to downgrade |
+| `fp(vk)` | `SHA384("…identity" ‖ vk[2592])` |
+| `binding` | `SHA384("…binding" ‖ 0x02 ‖ be16(len suite) ‖ suite ‖ ek[1568] ‖ xK[32] ‖ fp(vkK) ‖ fp(vkE) ‖ be32(len info) ‖ info)` |
+| `TH` | `SHA384("…transcript" ‖ binding ‖ ct[1568] ‖ xE[32])` |
+| session keys | The 4.2 derivation with `info := binding`; `inner := SHA384("ShawnCore-v1.3-hybrid-handshake" ‖ ct ‖ xE ‖ binding)`, `HKDF-Expand(PRK, inner, 128)`, byte-identical to the unauthenticated derivation |
+| `kcE ‖ kcK` | `HKDF-Expand(PRK, "…key confirmation" ‖ 0x00 ‖ inner, 96)`: the **same PRK**, a different label, 48 bytes per role |
+| `tagE` | `HMAC-SHA384(kcE, "…confirm encapsulating side" ‖ TH)` |
+| `THE` | `SHA384("…encapsulator digest" ‖ TH ‖ tagE)`; `σE` = ML-DSA-87 signature of `THE`, FIPS 204 context `"…encapsulating side"` |
+| `tagK` | `HMAC-SHA384(kcK, "…confirm key-generating side" ‖ THE)` |
+| `THK` | `SHA384("…key-generator digest" ‖ THE ‖ tagK)`; `σK` = signature of `THK`, context `"…key-generating side"` |
+| `suite` | `"ML-KEM-1024+X25519;HKDF-SHA384;ChaCha20+HMAC-SHA384;ML-DSA-87;HMAC-SHA384-KC"`; there is no negotiation, so there is nothing to downgrade |
 
-**State rules.** The Initiator's session is *unconfirmed* after
-`encapsulate_authenticated`: `encrypt_packet` and `decrypt_packet` return
-`InvalidState` until `confirm_peer` succeeds. `finalize_authenticated` verifies before it
-finalizes, so a forged reply costs one verification and leaves the pending handshake
-untouched. A valid signature with a failing derivation consumes the pending
-handshake. `confirm_peer` compares `fp(vk)` to the identity recorded at encapsulation in constant
-time, so a valid signature from a different key is rejected. A failed `confirm_peer` leaves the
-session unconfirmed; `zeroize_session` abandons it. The pending state (transcript and peer
-fingerprint, 96 bytes) is why `SessionManager` grew from 4,608 to 4,736 bytes.
+**The salt is not in the transcript.** `salt` is the HKDF salt and may be a secret
+pre-shared value; a value that is signed and sent would no longer be secret, and
+publishing a digest of it would let an eavesdropper test guesses offline. It still binds the
+session, because it is part of the PRK: a salt mismatch changes both confirmation keys, so the tag
+check fails and the handshake is rejected *during the handshake*, not at the first packet. The
+transcript hash alone cannot tell that two parties used different salts; the confirmation tag
+does. `app_info`, which is public context, is bound in the transcript.
 
-**Why this shape.** Signatures over the whole transcript bind both identities and every exchanged
-value, so no separate key-confirmation MAC is needed; distinct contexts stop one side's signature
-standing in for the other; the Responder's fresh ephemeral key inside the transcript is the
-freshness challenge; and putting the verification ahead of ML-KEM decapsulation means unauthenticated
-input cannot reach the expensive or secret-dependent path. The independent derivation in
-`validation/gen_session_vector.py` (OpenSSL + Python) reproduces every encoding above byte for byte.
-The design is **unreviewed**; its limits are listed in SECURITY.md section 10. The Lite configuration
-omits it with ML-DSA.
+**State rules.**
+
+- E is *unconfirmed* after `encapsulate_authenticated`: `encrypt_packet` and `decrypt_packet`
+  return `InvalidState` until `confirm_peer` succeeds.
+- K verifies σE first. A bad signature (any altered ciphertext, key, tag, signature or
+  `app_info`) is `VerificationFailed` and changes **nothing**, so a forgery cannot consume the
+  pending handshake. Only then does K decapsulate and derive; a wrong salt, a ciphertext that is
+  not the one E derived from, or a faulty authenticated peer fails the tag check as
+  `KeyConfirmationFailed`. K installs session keys only after the tag verifies, and any failure
+  after authentication consumes the pending handshake (fail closed; a fresh `initiate_handshake`
+  is required), which limits an authenticated peer to one decapsulation per handshake.
+- `confirm_peer` compares `fp(vk)` to the identity recorded at encapsulation in constant time,
+  verifies σK, then verifies tagK. A bad signature or identity leaves E unconfirmed and refusing
+  traffic (the genuine proof can still arrive; `zeroize_session` abandons it). A valid signature
+  with a wrong tag is `KeyConfirmationFailed` and wipes E's session.
+- The pending state on E (digest, peer fingerprint, one confirmation key, 144 bytes) is wiped, and
+  the key is flushed as zeros, when the handshake completes, fails or is abandoned. A completed
+  session cannot be re-finalized or re-confirmed (`InvalidState`), so counters cannot be reset.
+
+**Roles and directions.** Each role has its own confirmation key and its own MAC label; a tag from
+one role cannot verify as the other, and neither confirmation key equals any window of the session
+keys (both are tested). Packet keys remain directional (4.2).
+
+**Compatibility.** The unauthenticated API, its wire formats and its derivation are unchanged.
+Version 2 is not interoperable with the earlier signature-only draft, which was never tagged or
+released; its C symbols were renamed `…_authenticated_v2` and `…_confirm_peer_v2` so an old binary
+fails at link time rather than miscompiling, and error code 7 was added to the C enum.
+
+**What is and is not shown.** The independent derivation in `validation/gen_session_vector.py`
+(OpenSSL + Python, written from this section) reproduces every encoding above, both confirmation
+keys, both tags, both signatures and the resulting packets byte for byte. That is implementation
+fidelity. The composition is **new, unreviewed and not formally analyzed**; its limits and the
+review it needs are listed in SECURITY.md section 10. The Lite configuration omits it with ML-DSA.
 
 ---
 

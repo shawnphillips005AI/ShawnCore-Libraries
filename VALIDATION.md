@@ -24,20 +24,20 @@ hardware behavior, certification, production approval, or independent review.
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | PASS | Executed and passed. |
 | `cargo check --target aarch64-unknown-none --workspace --locked` | PASS | Executed and passed; compile check only, not target execution. |
 | `cargo audit` and `cargo audit --file fuzz/Cargo.lock` | PASS | cargo-audit 0.22.2 against 1,348 advisories: no advisories for either lockfile (54 and 52 crates). |
-| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 171 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
+| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 184 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
 
 ## TEST VALIDATION
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 171 #[test] functions passed in both profiles: 105 in `shawncore-pq-crypto` (54 unit, 8 known-answer, 3 regression-vector, 22 adversarial protocol, 4 OpenSSL cross-implementation, 5 ACVP, 9 authenticated handshake), 44 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 21 in the validation harness (host traces, layout contracts, version-drift guards and the 12-test spec-sheet suite). |
+| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 184 #[test] functions passed in both profiles: 118 in `shawncore-pq-crypto` (60 unit, 8 known-answer, 3 regression-vector, 22 adversarial protocol, 4 OpenSSL cross-implementation, 5 ACVP, 16 authenticated handshake), 44 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 21 in the validation harness (host traces, layout contracts, version-drift guards and the 12-test spec-sheet suite). |
 | `cargo test -p shawncore-pq-crypto --test adversarial_protocol --test openssl_interop --locked` | PASS | 22 active-attacker tests and 3 cross-implementation tests (see the sections below the table). |
 | `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 87 tests (49 unit, 8 known-answer, 22 adversarial protocol, 2 regression-vector, 2 OpenSSL cross-implementation, 4 ACVP); the ML-DSA tests are feature-gated out. |
 | `cargo test -p shawncore-validation --test spec_sheet --locked` | PASS | 12 tests: crypto and wire sizes, replay window (offset 63 accepted, 64 rejected), nonce format, uniform-entropy rejection, entropy queue capacity and mix bound, scheduler/state machine/TCB, DMA pool alignment, token and zeroization behavior, object sizes, the C header surface (function, type and callback counts, no secret-key serialization), and drift checks that the README, ARCHITECTURE, VALIDATION, RELEASE_MANIFEST, CI workflow and BENCHMARKS record state the same numbers. It found a mis-rounded ops/sec figure in the README on its first run. |
-| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (105 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (118 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
 | Repeated lib-test runs | PASS | The `shawncore-pq-crypto` unit-test binary ran 300 consecutive times with a 20 s hang timeout: 0 failures, 0 hangs. Before the test-callback fix the same loop hung in roughly 1 run in 17. |
 | `validation/run_tsan.sh` (nightly ThreadSanitizer) | PASS | Standalone workload of 3 rounds x 100,000 SPSC and ring-buffer transfers completed with no reported data race. |
-| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (105) and `shawncore-rtos-sync` (44) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
+| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (118) and `shawncore-rtos-sync` (44) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
 | `cargo +nightly miri test -p shawncore-rtos-sync` with `-Zmiri-symbolic-alignment-check` | PASS | 44 tests passed. With `-Zmiri-strict-provenance` the run stops at the first scheduler test: the scheduler API takes stack addresses as integers (`u64`) and casts them to pointers, which strict provenance rejects by design. Miri was not run on the lattice-heavy ML-KEM/ML-DSA tests or on the OpenSSL interop tests. It ran on all 44 `shawncore-rtos-sync` tests and on 24 `shawncore-pq-crypto` tests (entropy pool and queue, session counters, replay window, key-wipe observation, wire-codec pointer validation, and the null/oversized-length/misalignment FFI tests), all with `-Zmiri-symbolic-alignment-check`; the only diagnostic was the expected integer-to-pointer cast warning from the deliberately bogus never-dereferenced address in `absurd_lengths_are_rejected_before_any_dereference`. The earlier run caught undefined behavior in the test-only cache-flush dispatcher (an integer-to-function-pointer transmute), which is fixed. |
 
 Known-answer tests (`shawncore-pq-crypto/tests/known_answers.rs`) check HMAC-SHA384
@@ -122,32 +122,51 @@ models an active network attacker. Observed outcomes:
 
 ## Authenticated handshake
 
-`shawncore-pq-crypto/tests/authenticated_handshake.rs` (9 tests, full configuration only), two
-C-ABI tests in `src/ffi.rs`, and `openssl_interop.rs::authenticated_handshake_matches_an_independent_implementation`
-exercise the design in ARCHITECTURE.md section 4.5. All pass.
+Protocol version 2 (signed transcript plus explicit key confirmation).
+`shawncore-pq-crypto/tests/authenticated_handshake.rs` (16 tests, full configuration only), five
+KDF unit tests in `src/hybrid_kdf.rs`, one zeroization unit test in `src/session_manager.rs`, two
+C-ABI tests in `src/ffi.rs`, the C smoke binary, an `auth_handshake_fuzz` harness, and
+`openssl_interop.rs::authenticated_handshake_matches_an_independent_implementation` exercise the
+design in ARCHITECTURE.md section 4.5. All pass.
+
+An audit of the first, signature-only draft confirmed two protocol gaps by running them (a salt
+mismatch ended with both sides reporting success and then unable to communicate; a validly signed
+but unusable ciphertext was accepted by the key-generating side) before any fix was written. The
+version 2 tests below fail against that behavior: a salt mismatch must be a `KeyConfirmationFailed`
+during the handshake, and the mutant "finalize skips the tag check" is killed by five of them.
 
 | Attack or property | Outcome |
 | --- | --- |
 | Intermediary with its own identity answers the key-generating side | `VerificationFailed`; the pending handshake survives and the genuine reply then succeeds |
-| Tampered ciphertext, encapsulator X25519 key, signature, or application info | Each rejected with `VerificationFailed`; none consumes the pending handshake |
+| Tampered ciphertext, encapsulator X25519 key, signature, tag, or application info | Each rejected with `VerificationFailed`; none consumes the pending handshake |
 | Genuine reply checked against the wrong trust anchor | Rejected |
-| Forged keygen-side signature under the pinned identity, and a valid signature from a different identity | Both rejected by `confirm_peer`; the session stays unconfirmed and refuses traffic until the genuine signature arrives |
-| One key used on both sides: encapsulator signature reflected as the keygen proof, and keygen-role signature offered as the encapsulator signature | Both rejected: only the FIPS 204 context differs |
+| Different salts (or an empty salt on one side) | `KeyConfirmationFailed` during `finalize_authenticated`; nothing installed, pending handshake consumed, encapsulating side stays unconfirmed and silent, a fresh handshake with matching salts succeeds |
+| Validly signed reply whose ciphertext is not the one the signer derived from | `KeyConfirmationFailed`; no session on the key-generating side |
+| Forged keygen-side proof under the pinned identity, valid signature from a different identity, tampered proof tag | Rejected by `confirm_peer` with `VerificationFailed`; the session stays unconfirmed and refuses traffic until the genuine proof arrives |
+| Valid keygen-side signature over a wrong tag | `KeyConfirmationFailed`; the unconfirmed session is wiped, a repeat is `InvalidState` |
+| Encapsulator's tag reflected as the keygen proof (authentic signature) | `KeyConfirmationFailed`: confirmation keys and labels are separated by role |
 | Reply recorded from an earlier handshake replayed against a new ephemeral key | Rejected |
-| `confirm_peer` / `finalize_authenticated` with nothing pending; abandoned session | `InvalidState`, no side effects |
-| Unconfirmed encapsulating side sends or receives | `InvalidState` until `confirm_peer` succeeds |
-| Binding and transcript hashes | Differ for every changed input (ek, X25519 keys, either identity, role order, application info, ciphertext) |
-| C ABI | Round trip through the exported functions, forged reply rejected without writing outputs, null/misaligned/overlapping/short-salt arguments rejected, outputs written only on success |
-| Independent derivation (OpenSSL 3.5.8 ML-DSA with FIPS 204 contexts, ML-KEM, Python for hashes, X25519, HKDF and packet framing) | Identity keys, `binding`, `transcript`, both signatures and both packet directions byte-identical |
+| Second `confirm_peer`, second `finalize_authenticated`, replayed reply on a live session | `InvalidState`; keys and counters unchanged (next nonce continues) |
+| `confirm_peer` / `finalize_authenticated` with nothing pending; abandoned session | `InvalidState`, no side effects; a fresh handshake then succeeds |
+| Unconfirmed encapsulating side sends or receives; key-generating side before `finalize` | `InvalidState` |
+| Binding and digests | Differ for every changed input (ek, X25519 keys, either identity, role order, application info, ciphertext, either tag) |
+| Pending confirmation key | Observed flushed as 48 zero bytes, never unwiped, on abandon and on failed confirmation |
+| Confirmation expansion | First 128 bytes identical to the legacy derivation; neither confirmation key equals any window of the session keys; a different salt changes both keys; inputs zeroized |
+| C ABI | Round trip, forged reply rejected without writing outputs, `KEY_CONFIRMATION_FAILED` for a salt mismatch, null/misaligned/overlapping/short-salt arguments rejected, outputs written only on success; the C smoke binary does the same through the exported functions |
+| Independent derivation (OpenSSL 3.5.8 ML-DSA with FIPS 204 contexts, ML-KEM, Python for hashes, X25519, HKDF, HMAC and packet framing, written from the ARCHITECTURE.md encodings) | Identity keys, `binding`, `transcript`, both confirmation keys, both tags, both digests, both signatures and both packet directions byte-identical |
 
-Also run: `cargo test -p shawncore-pq-crypto --lib authenticated` (C-ABI tests). Miri was not run
-on these tests (ML-DSA is lattice-heavy). The design has had **no formal analysis and no
-independent review**; passing these tests shows the implementation matches its specification
-and resists the listed attacks, not that the protocol is secure.
+These authenticated-handshake vectors in `tests/vectors/openssl_interop.txt` are regression vectors
+for a custom protocol, **not** standards vectors: the design is this project's, and agreement shows
+two implementations of one specification agree. Also run: `cargo test -p shawncore-pq-crypto --lib
+authenticated` (C-ABI tests) and `cd fuzz && cargo +nightly fuzz run auth_handshake_fuzz --
+-runs=3000 -max_len=512` (3,000 executions, no finding). Miri was not run on these tests (ML-DSA is
+lattice-heavy). The design has had **no formal analysis and no independent review**; passing these
+tests shows the implementation matches its specification and resists the listed attacks, not that
+the protocol is secure.
 
 ## Test sensitivity (mutation testing)
 
-Twenty-four deliberate faults were applied one at a time to a disposable copy of the
+Thirty-nine deliberate faults (the eight against the superseded first draft are listed for history) were applied one at a time to a disposable copy of the
 source tree (`/tmp`, never the repository) and the relevant tests run. Every
 mutant was killed, and the copy's mutations were reverted after each run.
 
@@ -167,12 +186,16 @@ mutant was killed, and the copy's mutations were reverted after each run.
 | `zeroize_session` skips wiping a key | `zeroize_session_wipes_each_key_before_it_is_flushed` |
 | Failed finalize keeps the pending handshake | `failed_finalize_consumes_the_pending_handshake_and_cannot_be_retried` |
 | `lite` feature secretly enabling ML-DSA | `validation/check_archive.sh` (`[archive][FAIL] Lite archive exports ML-DSA symbols`) |
-| Authenticated handshake: peer signature ignored in `finalize_authenticated` or in `confirm_peer` | `c_abi_authenticated_handshake_round_trips_and_rejects_a_forged_reply`, `an_impersonator_of_the_keygen_side_cannot_confirm_the_session` and others |
-| Authenticated handshake: identity pin dropped from `confirm_peer` | `an_impersonator_of_the_keygen_side_cannot_confirm_the_session` |
-| Authenticated handshake: both roles share one signature context | `role_contexts_stop_one_sides_signature_standing_in_for_the_other` |
-| Authenticated handshake: unconfirmed session allowed to send | `c_abi_authenticated_handshake_round_trips_and_rejects_a_forged_reply` and others |
-| Authenticated handshake: application info, or the encapsulator identity, omitted from the binding | `the_binding_and_transcript_depend_on_every_input` |
-| Authenticated handshake: a forged reply consumes the pending handshake | `c_abi_authenticated_handshake_round_trips_and_rejects_a_forged_reply` and others |
+| Authenticated handshake v1 (superseded draft): the eight faults of the first draft | The draft's tests; the draft was replaced because it lacked key confirmation |
+| v2: `finalize_authenticated` skips the tag check | Five tests, including `a_validly_signed_but_unusable_exchange_fails_key_confirmation` |
+| v2: `confirm_peer` accepts any tag | `a_valid_signature_over_a_wrong_confirmation_tag_wipes_the_unconfirmed_session` and two others |
+| v2: encapsulator tag computed with the keygen label; keygen tag with the encapsulator key; both roles share one label | `confirmation_keys_and_labels_are_separated_by_role` and many round-trip tests |
+| v2: confirmation expansion reuses the session `info` | `confirmation_keys_are_distinct_and_independent_of_the_session_keys` |
+| v2: either digest drops its tag; binding drops `app_info`, the encapsulator identity or `ek`; transcript drops the ciphertext | `every_tampered_reply_field_fails_authentication_and_consumes_nothing`, `the_binding_and_digests_depend_on_every_input` |
+| v2: traffic allowed while unconfirmed | Four tests, including `an_impersonator_of_the_keygen_side_cannot_confirm_the_session` |
+| v2: failed `finalize_authenticated` keeps pending state | `different_salts_are_rejected_during_the_handshake_by_key_confirmation` |
+| v2: `confirm_peer` skips the identity pin | `an_impersonator_of_the_keygen_side_cannot_confirm_the_session` |
+| v2: pending confirmation key not zeroized | `pending_confirmation_key_is_wiped_and_flushed_on_abandon_and_on_failed_confirmation` |
 
 Gaps found and closed: the key-wipe mutant **survived** the pre-existing suite
 (confirmed by running the mutant with the new test skipped), and no test pinned
@@ -219,7 +242,7 @@ before dispatching cache maintenance.
 | C++ header and smoke executable | PASS | `make -C integration cxx` built `integration/cxx_smoke.cpp` with `-std=c++17 -Wall -Wextra -Werror -pedantic`, linked the release archive, and ran a self-test and an HMAC-SHA384 vector. The header also passes `-fsyntax-only` as C++11/17/20, C99, C11 `-pedantic` and with `SHAWNCORE_LITE`. |
 | C smoke executable | PASS | `make -C integration run` automatically built the release archive, then built and executed `integration/c_api_smoke.c`; exit status 0. |
 | C wire handshake | PASS | The smoke binary drives two session managers through a complete hybrid handshake with every public value passed through its wire codec, then an authenticated packet exchange and a replay rejection. |
-| C authenticated handshake | PASS | The same binary (full configuration) runs the signed handshake through the exported C functions: an intermediary with its own identity is rejected with `VERIFICATION_FAILED`, an unconfirmed initiator refuses to send, a signature from the wrong identity does not confirm, and packets flow only after `confirm_peer`. Clean under AddressSanitizer and Valgrind (0 errors, 0 bytes in use at exit); the file also passes `-fsyntax-only` with `SHAWNCORE_LITE`. |
+| C authenticated handshake | PASS | The same binary (full configuration) runs the signed handshake through the exported C functions: an intermediary with its own identity is rejected with `VERIFICATION_FAILED`, an unconfirmed initiator refuses to send, a signature from the wrong identity or a tampered tag does not confirm, mismatched salts give `KEY_CONFIRMATION_FAILED` with no usable session, and packets flow only after `confirm_peer_v2`. Clean under AddressSanitizer and Valgrind (0 errors, 0 bytes in use at exit); the file also passes `-fsyntax-only` with `SHAWNCORE_LITE`. |
 | Public-symbol check | PASS | Header declarations and archive exports were compared and matched exactly: 138 symbols, empty diff. |
 | Self-contained archive check | PASS | `validation/check_archive.sh`: for `aarch64-unknown-none`, the set of undefined symbols minus the set of archive-defined symbols is empty, and `nm` shows no `malloc`, `free`, `__rust_alloc`, libc I/O, or pthread references. |
 | Lite archive exclusions | PASS | `validation/check_archive.sh` builds the Lite archive in a scratch target directory and fails if it exports or contains any ML-DSA symbol or the `ED25519_BASEPOINT_TABLE` precomputed table, or if it loses ML-KEM. The same patterns are confirmed present in the full archive, so the check is not vacuous. |
@@ -258,7 +281,7 @@ evidence only for its harness and duration; it is not proof of security.
 | DMA/cache | REVIEWED | Cache callback transitions and the limits of page alignment/atomics were inspected; hardware coherency was not tested. |
 | Crypto | REVIEWED | AEAD lengths/authentication, X25519 checks, 128-byte hybrid KDF, directional key assignment, and cleanup paths were inspected. |
 | Session/replay | REVIEWED | Authentication precedes replay-state commitment; re-establishment resets state before replacement keys are installed. |
-| Handshake | REVIEWED | Unauthenticated by design: no peer identity, key confirmation, or full transcript binding. A test shows tampered ciphertext or mismatched `info` is detected only at the first packet. See SECURITY.md section 10. |
+| Handshake | REVIEWED | Unauthenticated by design (the plain handshake): no peer identity, key confirmation, or full transcript binding; the authenticated variant adds them. A test shows tampered ciphertext or mismatched `info` is detected only at the first packet. See SECURITY.md section 10. |
 | Package hygiene | PASS | `cargo package --list` for all three crates listed 45 source/metadata files with no generated artifact paths. |
 
 ## TARGET/HARDWARE VALIDATION
@@ -303,7 +326,7 @@ addresses, and `shawncore-pq-crypto` has only been run under Miri on its entropy
 
 ## Current Source Inventory
 
-The repository contains **171 Rust functions annotated with `#[test]`**. All 171 were
+The repository contains **184 Rust functions annotated with `#[test]`**. All 184 were
 executed and passed in the `cargo test --workspace --all-targets` runs recorded
 above.
 

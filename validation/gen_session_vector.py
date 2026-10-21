@@ -78,8 +78,9 @@ def seal(key64: bytes, aad: bytes, plaintext: bytes, sequence: int = 0):
     return ciphertext, hmac.new(mac_key, framed, hashlib.sha384).digest()
 
 
-AUTH_SUITE = b"ML-KEM-1024+X25519;HKDF-SHA384;ChaCha20+HMAC-SHA384;ML-DSA-87"
+AUTH_SUITE = b"ML-KEM-1024+X25519;HKDF-SHA384;ChaCha20+HMAC-SHA384;ML-DSA-87;HMAC-SHA384-KC"
 AUTH_APP_INFO = b"auth-app-info"
+AUTH_VERSION = b"ShawnCore-auth-v2 "
 
 
 def ml_dsa_identity(seed: bytes, name: str):
@@ -99,27 +100,55 @@ def ml_dsa_sign_ctx(name: str, message: bytes, context: bytes) -> bytes:
 
 def authenticated_section(kem_pk, kem_ct, pq_secret, keygen_x_pk, encap_x_pk, classical,
                           salt, aad, plain_e2k, plain_k2e):
-    """Re-derives the authenticated handshake (see auth_handshake.rs) outside Rust."""
+    """Re-derives the authenticated handshake, protocol version 2, outside Rust.
+
+    Written from the documented design (ARCHITECTURE.md 4.5), not from the Rust source:
+      binding    = SHA384(L"binding" || 2 || len(suite) || suite || ek || xK || fpK || fpE
+                          || len(app_info) || app_info)
+      TH         = SHA384(L"transcript" || binding || ct || xE)
+      tagE       = HMAC(kcE, L"confirm encapsulating side" || TH)
+      THE        = SHA384(L"encapsulator digest" || TH || tagE);   sigE = Sign(ctxE, THE)
+      tagK       = HMAC(kcK, L"confirm key-generating side" || THE)
+      THK        = SHA384(L"key-generator digest" || THE || tagK); sigK = Sign(ctxK, THK)
+      kcE || kcK = HKDF-Expand(PRK, L"key confirmation" || 0x00 || inner, 96)
+    where PRK = HMAC(salt, pq_secret || classical) and the session keys come from
+    HKDF-Expand(PRK, inner, 128) with inner = SHA384(handshake label || ct || xE || binding).
+    The salt appears nowhere in the transcript.
+    """
     k_pk = ml_dsa_identity(bytes([0x41]) * 32, "idk")
     e_pk = ml_dsa_identity(bytes([0x42]) * 32, "ide")
-    fp = lambda pk: hashlib.sha384(b"ShawnCore-auth-v1 identity" + pk).digest()
-    binding = hashlib.sha384(
-        b"ShawnCore-auth-v1 binding" + bytes([1]) + len(AUTH_SUITE).to_bytes(2, "big") + AUTH_SUITE
-        + kem_pk + keygen_x_pk + fp(k_pk) + fp(e_pk)
-        + len(AUTH_APP_INFO).to_bytes(4, "big") + AUTH_APP_INFO).digest()
-    transcript = hashlib.sha384(b"ShawnCore-auth-v1 transcript" + binding + kem_ct + encap_x_pk).digest()
-    sig_e = ml_dsa_sign_ctx("ide", transcript, b"ShawnCore-auth-v1 encapsulating side")
-    sig_k = ml_dsa_sign_ctx("idk", transcript, b"ShawnCore-auth-v1 key-generating side")
+    h = lambda *parts: hashlib.sha384(b"".join(parts)).digest()
+    fp = lambda pk: h(AUTH_VERSION + b"identity", pk)
+    binding = h(
+        AUTH_VERSION + b"binding", bytes([2]), len(AUTH_SUITE).to_bytes(2, "big"), AUTH_SUITE,
+        kem_pk, keygen_x_pk, fp(k_pk), fp(e_pk), len(AUTH_APP_INFO).to_bytes(4, "big"), AUTH_APP_INFO)
+    transcript = h(AUTH_VERSION + b"transcript", binding, kem_ct, encap_x_pk)
 
-    # The existing handshake runs with the binding as its `info`.
-    inner = hashlib.sha384(b"ShawnCore-v1.3-hybrid-handshake" + kem_ct + encap_x_pk + binding).digest()
+    # The existing handshake runs with the binding as its `info`; a second expansion of the same
+    # PRK, under its own label, yields one confirmation key per role.
+    inner = h(b"ShawnCore-v1.3-hybrid-handshake", kem_ct, encap_x_pk, binding)
     prk = hmac.new(salt, pq_secret + classical, hashlib.sha384).digest()
     okm = hkdf_expand(prk, inner, 128)
+    kc = hkdf_expand(prk, AUTH_VERSION + b"key confirmation" + b"\x00" + inner, 96)
+    kc_e, kc_k = kc[:48], kc[48:]
+    assert kc_e != kc_k and kc not in okm
+
+    mac = lambda key, label, digest: hmac.new(key, AUTH_VERSION + label + digest, hashlib.sha384).digest()
+    tag_e = mac(kc_e, b"confirm encapsulating side", transcript)
+    digest_e = h(AUTH_VERSION + b"encapsulator digest", transcript, tag_e)
+    sig_e = ml_dsa_sign_ctx("ide", digest_e, AUTH_VERSION + b"encapsulating side")
+    tag_k = mac(kc_k, b"confirm key-generating side", digest_e)
+    digest_k = h(AUTH_VERSION + b"key-generator digest", digest_e, tag_k)
+    sig_k = ml_dsa_sign_ctx("idk", digest_k, AUTH_VERSION + b"key-generating side")
+
     e2k_ct, e2k_tag = seal(okm[32:96], aad, plain_e2k)
     k2e_ct, k2e_tag = seal(okm[0:32] + okm[96:128], aad, plain_k2e)
     return [f"auth.{name} = {value.hex()}" for name, value in [
         ("app_info", AUTH_APP_INFO), ("keygen_identity_pk", k_pk), ("encap_identity_pk", e_pk),
-        ("binding", binding), ("transcript", transcript), ("sig_e", sig_e), ("sig_k", sig_k),
+        ("binding", binding), ("transcript", transcript),
+        ("confirm_key_e", kc_e), ("confirm_key_k", kc_k),
+        ("tag_e", tag_e), ("digest_e", digest_e), ("sig_e", sig_e),
+        ("tag_k", tag_k), ("digest_k", digest_k), ("sig_k", sig_k),
         ("e2k_ct", e2k_ct), ("e2k_tag", e2k_tag), ("k2e_ct", k2e_ct), ("k2e_tag", k2e_tag),
     ]]
 

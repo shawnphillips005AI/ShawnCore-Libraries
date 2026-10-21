@@ -161,7 +161,7 @@ static int wire_handshake_round_trip(void)
 /*
  * Authenticated handshake: the responder trusts the initiator's verifying key and vice versa.
  * An intermediary with its own identity must be rejected, the unconfirmed initiator must refuse
- * traffic, and only after confirm_peer may packets flow. Returns 0 on success.
+ * traffic, and only after confirm_peer_v2 may packets flow. Returns 0 on success.
  */
 static int authenticated_handshake_round_trip(void)
 {
@@ -169,6 +169,7 @@ static int authenticated_handshake_round_trip(void)
     static _Alignas(64) uint8_t vk_resp[90000], vk_init[90000], vk_mall[90000];
     static _Alignas(64) uint8_t sig_i[8192], sig_i_decoded[8192], sig_m[8192], sig_r[8192];
     static _Alignas(64) uint8_t mgr_resp[8192], mgr_init[8192], mgr_mall[8192];
+    static _Alignas(64) uint8_t mgr_salt_a[8192], mgr_salt_b[8192];
     static _Alignas(64) uint8_t pk_store[4096], xpk_store[256], ct_store[2048], peer_x_store[256];
     static _Alignas(64) uint8_t ct_m_store[2048], peer_x_m_store[256];
     static uint8_t sig_wire[4627];
@@ -177,7 +178,9 @@ static int authenticated_handshake_round_trip(void)
     uint8_t resp_entropy[96], init_entropy[64], mall_entropy[64];
     uint8_t plaintext[16], ciphertext[16], recovered[16], nonce[12], tag[48];
     static const uint8_t salt[] = {'s', 'a', 'l', 't'};
+    static const uint8_t other_salt[] = {'s', 'a', 'l', 't', '2'};
     static const uint8_t app[] = {'a', 'p', 'p'};
+    uint8_t tag_i[48], tag_r[48], tag_m[48];
 
     shawncore_crypto_ml_dsa_signingkey *rsk = (shawncore_crypto_ml_dsa_signingkey *)sk_resp;
     shawncore_crypto_ml_dsa_signingkey *isk = (shawncore_crypto_ml_dsa_signingkey *)sk_init;
@@ -192,6 +195,8 @@ static int authenticated_handshake_round_trip(void)
     shawncore_crypto_session_manager *resp = (shawncore_crypto_session_manager *)mgr_resp;
     shawncore_crypto_session_manager *init = (shawncore_crypto_session_manager *)mgr_init;
     shawncore_crypto_session_manager *mall = (shawncore_crypto_session_manager *)mgr_mall;
+    shawncore_crypto_session_manager *salt_a = (shawncore_crypto_session_manager *)mgr_salt_a;
+    shawncore_crypto_session_manager *salt_b = (shawncore_crypto_session_manager *)mgr_salt_b;
     shawncore_crypto_ml_kem_publickey *pk = (shawncore_crypto_ml_kem_publickey *)pk_store;
     shawncore_crypto_x25519_publickey *xpk = (shawncore_crypto_x25519_publickey *)xpk_store;
     shawncore_crypto_ml_kem_ciphertext *ct = (shawncore_crypto_ml_kem_ciphertext *)ct_store;
@@ -239,21 +244,21 @@ static int authenticated_handshake_round_trip(void)
     }
 
     /* An intermediary answers with its own identity; the responder must refuse it. */
-    if (shawncore_crypto_session_manager_encapsulate_authenticated(
+    if (shawncore_crypto_session_manager_encapsulate_authenticated_v2(
             mall, msk, rvk, pk, xpk, mall_entropy, salt, sizeof salt, app, sizeof app, ct_m,
-            peer_x_m, sigm) != SHAWNCORE_CRYPTO_SUCCESS) {
+            peer_x_m, sigm, tag_m) != SHAWNCORE_CRYPTO_SUCCESS) {
         return 105;
     }
-    if (shawncore_crypto_session_manager_finalize_authenticated(
-            resp, rsk, ivk, peer_x_m, ct_m, sigm, salt, sizeof salt, app, sizeof app, sigr) !=
-        SHAWNCORE_CRYPTO_VERIFICATION_FAILED) {
+    if (shawncore_crypto_session_manager_finalize_authenticated_v2(
+            resp, rsk, ivk, peer_x_m, ct_m, sigm, tag_m, salt, sizeof salt, app, sizeof app, sigr,
+            tag_r) != SHAWNCORE_CRYPTO_VERIFICATION_FAILED) {
         return 106;
     }
 
     /* The genuine initiator; its signature travels through the wire codec. */
-    if (shawncore_crypto_session_manager_encapsulate_authenticated(
+    if (shawncore_crypto_session_manager_encapsulate_authenticated_v2(
             init, isk, rvk, pk, xpk, init_entropy, salt, sizeof salt, app, sizeof app, ct, peer_x,
-            sigi) != SHAWNCORE_CRYPTO_SUCCESS) {
+            sigi, tag_i) != SHAWNCORE_CRYPTO_SUCCESS) {
         return 107;
     }
     if (shawncore_crypto_ml_dsa_signature_to_bytes(sigi, sig_wire, sizeof sig_wire) !=
@@ -270,16 +275,25 @@ static int authenticated_handshake_round_trip(void)
         return 109;
     }
 
-    if (shawncore_crypto_session_manager_finalize_authenticated(
-            resp, rsk, ivk, peer_x, ct, sigi2, salt, sizeof salt, app, sizeof app, sigr) !=
-        SHAWNCORE_CRYPTO_SUCCESS) {
+    if (shawncore_crypto_session_manager_finalize_authenticated_v2(
+            resp, rsk, ivk, peer_x, ct, sigi2, tag_i, salt, sizeof salt, app, sizeof app, sigr,
+            tag_r) != SHAWNCORE_CRYPTO_SUCCESS) {
         return 110;
     }
     /* A signature from the wrong identity must not confirm the session. */
-    if (shawncore_crypto_session_manager_confirm_peer(init, mvk, sigr) == SHAWNCORE_CRYPTO_SUCCESS) {
+    if (shawncore_crypto_session_manager_confirm_peer_v2(init, mvk, sigr, tag_r) ==
+        SHAWNCORE_CRYPTO_SUCCESS) {
         return 111;
     }
-    if (shawncore_crypto_session_manager_confirm_peer(init, rvk, sigr) != SHAWNCORE_CRYPTO_SUCCESS) {
+    /* A tampered key-confirmation tag is covered by the signature: a signature failure. */
+    tag_r[0] ^= 1;
+    if (shawncore_crypto_session_manager_confirm_peer_v2(init, rvk, sigr, tag_r) !=
+        SHAWNCORE_CRYPTO_VERIFICATION_FAILED) {
+        return 115;
+    }
+    tag_r[0] ^= 1;
+    if (shawncore_crypto_session_manager_confirm_peer_v2(init, rvk, sigr, tag_r) !=
+        SHAWNCORE_CRYPTO_SUCCESS) {
         return 112;
     }
 
@@ -297,9 +311,36 @@ static int authenticated_handshake_round_trip(void)
         }
     }
 
+    /*
+     * Different salts: the transcript does not contain the salt, so signatures verify and only
+     * key confirmation can notice. The responder must report that distinct error and must not
+     * end up with a usable session.
+     */
+    if (shawncore_crypto_session_manager_init(salt_a) != SHAWNCORE_CRYPTO_SUCCESS ||
+        shawncore_crypto_session_manager_init(salt_b) != SHAWNCORE_CRYPTO_SUCCESS ||
+        shawncore_crypto_session_manager_initiate_handshake(salt_a, resp_entropy, pk, xpk) !=
+            SHAWNCORE_CRYPTO_SUCCESS ||
+        shawncore_crypto_session_manager_encapsulate_authenticated_v2(
+            salt_b, isk, rvk, pk, xpk, init_entropy, salt, sizeof salt, app, sizeof app, ct, peer_x,
+            sigi, tag_i) != SHAWNCORE_CRYPTO_SUCCESS) {
+        return 116;
+    }
+    if (shawncore_crypto_session_manager_finalize_authenticated_v2(
+            salt_a, rsk, ivk, peer_x, ct, sigi, tag_i, other_salt, sizeof other_salt, app,
+            sizeof app, sigr, tag_r) != SHAWNCORE_CRYPTO_KEY_CONFIRMATION_FAILED) {
+        return 117;
+    }
+    if (shawncore_crypto_session_manager_encrypt_packet(
+            salt_a, NULL, 0, plaintext, ciphertext, sizeof plaintext, nonce, tag) ==
+        SHAWNCORE_CRYPTO_SUCCESS) {
+        return 118;
+    }
+
     shawncore_crypto_session_manager_destroy(resp);
     shawncore_crypto_session_manager_destroy(init);
     shawncore_crypto_session_manager_destroy(mall);
+    shawncore_crypto_session_manager_destroy(salt_a);
+    shawncore_crypto_session_manager_destroy(salt_b);
     shawncore_crypto_ml_dsa_signingkey_destroy(rsk);
     shawncore_crypto_ml_dsa_signingkey_destroy(isk);
     shawncore_crypto_ml_dsa_signingkey_destroy(msk);

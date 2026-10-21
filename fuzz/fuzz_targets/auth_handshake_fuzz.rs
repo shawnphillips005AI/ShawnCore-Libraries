@@ -38,8 +38,9 @@ fn fill(out: &mut [u8], data: &[u8], offset: usize) {
     }
 }
 
-// Arbitrary replies must never authenticate, must never disturb the pending handshake, and an
-// unconfirmed session must never carry traffic.
+// Arbitrary replies must never authenticate, must never disturb the pending handshake, a salt
+// mismatch must fail key confirmation without installing a session, and an unconfirmed session
+// must never carry traffic.
 fuzz_target!(|data: &[u8]| {
     let (keygen_id, encap_id) = identities();
     let mut keygen = SessionManager::new();
@@ -49,11 +50,15 @@ fuzz_target!(|data: &[u8]| {
     let mut forged_ct = Ciphertext1024([0; 1568]);
     let mut forged_xe = X25519Public([0; 32]);
     let mut forged_sig = Signature87([0; 4627]);
+    let mut forged_tag = [0u8; 48];
     fill(&mut forged_ct.0, data, 0);
     fill(&mut forged_xe.0, data, 1568);
     fill(&mut forged_sig.0, data, 1600);
+    fill(&mut forged_tag, data, 6227);
 
+    let app_info = data.get(..data.len().min(32)).unwrap_or(&[]);
     let mut unused = Signature87([0; 4627]);
+    let mut unused_tag = [0u8; 48];
     assert!(keygen
         .finalize_authenticated(
             &keygen_id.sk,
@@ -61,17 +66,19 @@ fuzz_target!(|data: &[u8]| {
             &forged_xe,
             &forged_ct,
             &forged_sig,
+            &forged_tag,
             b"salt",
-            data.get(..data.len().min(32)).unwrap_or(&[]),
+            app_info,
             &mut unused,
+            &mut unused_tag,
         )
         .is_err());
 
     // The genuine reply must still work: the forgery consumed nothing.
-    let app_info = data.get(..data.len().min(32)).unwrap_or(&[]);
     let mut ct = Ciphertext1024([0; 1568]);
     let mut xe = X25519Public([0; 32]);
     let mut sig_e = Signature87([0; 4627]);
+    let mut tag_e = [0u8; 48];
     encap
         .encapsulate_authenticated(
             &encap_id.sk,
@@ -84,9 +91,39 @@ fuzz_target!(|data: &[u8]| {
             &mut ct,
             &mut xe,
             &mut sig_e,
+            &mut tag_e,
         )
         .unwrap();
+
+    // A mismatched salt (chosen by the input) is an authentic peer with a different key.
+    let mut mismatched = SessionManager::new();
+    let (ek2, xk2) = mismatched.initiate_handshake(&[0x11; 96]).unwrap();
+    assert_eq!((ek2.to_bytes(), xk2.0), (ek.to_bytes(), xk.0));
+    let wrong_salt = [data.first().copied().unwrap_or(0) | 0x80; 5];
+    let outcome = mismatched.finalize_authenticated(
+        &keygen_id.sk,
+        &encap_id.vk,
+        &xe,
+        &ct,
+        &sig_e,
+        &tag_e,
+        &wrong_salt,
+        app_info,
+        &mut unused,
+        &mut unused_tag,
+    );
+    assert_eq!(
+        outcome,
+        Err(shawncore_pq_crypto::error::CryptoError::KeyConfirmationFailed)
+    );
+    let mut out = [0u8; 4];
+    let (mut nonce, mut tag) = ([0u8; 12], [0u8; 48]);
+    assert!(mismatched
+        .encrypt_packet(b"", b"data", &mut out, &mut nonce, &mut tag)
+        .is_err());
+
     let mut sig_k = Signature87([0; 4627]);
+    let mut tag_k = [0u8; 48];
     keygen
         .finalize_authenticated(
             &keygen_id.sk,
@@ -94,18 +131,20 @@ fuzz_target!(|data: &[u8]| {
             &xe,
             &ct,
             &sig_e,
+            &tag_e,
             b"salt",
             app_info,
             &mut sig_k,
+            &mut tag_k,
         )
         .unwrap();
 
     // An arbitrary proof must not confirm the encapsulating side, which must stay shut.
-    assert!(encap.confirm_peer(&keygen_id.vk, &forged_sig).is_err());
-    let mut out = [0u8; 4];
-    let (mut nonce, mut tag) = ([0u8; 12], [0u8; 48]);
+    assert!(encap
+        .confirm_peer(&keygen_id.vk, &forged_sig, &forged_tag)
+        .is_err());
     assert!(encap
         .encrypt_packet(b"", b"data", &mut out, &mut nonce, &mut tag)
         .is_err());
-    encap.confirm_peer(&keygen_id.vk, &sig_k).unwrap();
+    encap.confirm_peer(&keygen_id.vk, &sig_k, &tag_k).unwrap();
 });

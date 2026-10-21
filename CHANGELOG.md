@@ -9,26 +9,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [12.3.11] — 2026-10-21
 
-### Authenticated handshake (new, unreviewed)
+### Authenticated handshake, protocol version 2 (new, unreviewed)
 - **Added** (full configuration, `ml-dsa` feature): `encapsulate_authenticated`,
   `finalize_authenticated` and `confirm_peer` on `SessionManager`, the three C functions
-  `shawncore_crypto_session_manager_{encapsulate_authenticated,finalize_authenticated,confirm_peer}`
+  `shawncore_crypto_session_manager_{encapsulate_authenticated_v2,finalize_authenticated_v2,confirm_peer_v2}`
   (header: 135 to 138 symbols; the Lite header and archive stay at 119), the `auth_handshake`
-  module (transcript encodings), and `ml_dsa_sign_with_context` / `ml_dsa_verify_with_context` /
-  `SigningKey87::verifying_key`. Design: mutual ML-DSA-87 signatures over a SHA-384 transcript
-  binding version, suite, both parties' keys and identity fingerprints, application `info`, the
-  ciphertext and the encapsulating side's X25519 key, with role-specific FIPS 204 contexts; the
-  unconfirmed session refuses traffic; a forged reply is rejected before decapsulation and does not
-  consume the pending handshake. Specified in ARCHITECTURE.md 4.5, assessed in SECURITY.md 10.
-- **Unchanged:** the unauthenticated functions, every wire format and key format, and all feature
-  defaults. Existing integrators are unaffected unless they adopt the new calls.
-- **Changed:** `SessionManager` grew from 4,608 to 4,736 bytes (it now holds the pending
-  transcript and peer fingerprint). Hosts must already allocate from `_sizeof()`.
-- **Evidence:** 9 active-attacker tests, 2 C-ABI tests, a C smoke-test round trip through the
-  exported functions (clean under ASan and Valgrind), an `auth_handshake_fuzz` harness (3,000
-  executions, no finding), byte-identical agreement with an independent OpenSSL 3.5.8 / Python
-  derivation (binding, transcript, both signatures, packets), and 8 mutants detected. **Not**
-  formally analyzed and **not** independently reviewed; Miri was not run on it.
+  module (transcript, digest and confirmation-tag encodings), `derive_hybrid_key_with_confirmation`
+  and `confirmation_info` in `hybrid_kdf`, and `ml_dsa_sign_with_context` /
+  `ml_dsa_verify_with_context` / `SigningKey87::verifying_key`. Design: mutual ML-DSA-87
+  signatures over a SHA-384 transcript binding version, suite, both parties' keys and identity
+  fingerprints, application `info`, the ciphertext and the encapsulating side's X25519 key, with
+  role-specific FIPS 204 contexts, plus explicit HMAC-SHA384 key confirmation under per-role keys
+  expanded from the same PRK under their own label. Each signature covers the same side's tag. The
+  salt is deliberately not in the transcript (it may be a secret); a salt mismatch is caught by
+  the tags. The unconfirmed session refuses traffic; a forged reply is rejected before
+  decapsulation and does not consume the pending handshake. Specified in ARCHITECTURE.md 4.5,
+  assessed in SECURITY.md 10.
+- **Protocol revision (before any tag or release):** the first draft of this handshake verified
+  signatures only. An audit confirmed by execution that it accepted mismatched salts (both sides
+  reported success and then could not communicate) and accepted a validly signed but unusable
+  ciphertext on the key-generating side. It is replaced, not extended, so the signature-only draft
+  does not interoperate with version 2. The C functions are renamed with a `_v2` suffix so a
+  binary built against the draft fails at link time instead of calling a changed signature, and
+  `finalize`/`encapsulate`/`confirm` gained confirmation-tag parameters (a Rust compile break for
+  anyone who adopted the draft). A new error, `CryptoError::KeyConfirmationFailed` /
+  `SHAWNCORE_CRYPTO_KEY_CONFIRMATION_FAILED = 7`, reports an authentic peer whose derived key
+  differs; the C enum gained a value, so a host `switch` over it should handle 7.
+- **Unchanged:** the unauthenticated functions, every wire format and key format, the legacy
+  `derive_hybrid_key`, and all feature defaults. Existing integrators are unaffected unless they
+  adopted the draft.
+- **Changed:** the pending authentication state now holds the digest, the peer fingerprint and one
+  confirmation key and is wiped (and the key flushed as zeros) on completion, failure and
+  abandonment; `SessionManager` stays 4,736 bytes. Hosts must already allocate from `_sizeof()`.
+- **Evidence:** 16 active-attacker tests, 5 KDF unit tests, a zeroization observation test, 2 C-ABI
+  tests, a C smoke round trip through the exported functions including a salt mismatch, an
+  `auth_handshake_fuzz` harness (3,000 executions, no finding), byte-identical agreement with an
+  independent OpenSSL 3.5.8 / Python derivation (binding, transcript, confirmation keys, tags,
+  both signatures, packets; regression vectors for a custom protocol, not standards vectors), and
+  15 mutants detected. **Not** formally analyzed and **not** independently reviewed; Miri was not
+  run on it.
 
 ### Adversarial verification (second pass)
 - **Findings:** no new defect in exported behavior was found. Confirmed issues were

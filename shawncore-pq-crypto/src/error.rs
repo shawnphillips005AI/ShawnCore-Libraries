@@ -23,4 +23,7 @@ pub enum CryptoError {
     EntropyStarvation,
     /// Entropy operation is already in progress; retry without blocking.
     EntropyBusy,
+    /// A signature verified, but the peer's key-confirmation tag did not match the key this
+    /// side derived: the peer is authentic but does not share the session key.
+    KeyConfirmationFailed,
 }

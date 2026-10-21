@@ -58,13 +58,13 @@ Every claim below is reproducible from a clean checkout with
 | **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
 | **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
 | **138 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
-| **171 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 87-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
+| **184 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 92-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
 | **Known-answer tests for the classical primitives** | HMAC-SHA384 (RFC 4231), X25519 (RFC 7748 section 6.1), ChaCha20 (RFC 8439 keystream, cross-checked with OpenSSL), HKDF-SHA384, the hybrid KDF, and the AEAD framing, with vectors produced by independent implementations. |
 | **Official NIST ACVP sample vectors** | ML-KEM-1024 key generation, encapsulation, decapsulation and both key checks, and ML-DSA-87 key generation and signature verification, copied verbatim from usnistgov/ACVP-Server at a pinned commit; all 120 cases pass. Not a CAVP/CMVP validation. See [VALIDATION.md](VALIDATION.md). |
 | **Cross-implementation agreement with OpenSSL 3.5.8** | ML-KEM-1024 key generation from seed, deterministic encapsulation, decapsulation and implicit rejection, ML-DSA-87 key generation, deterministic signing and verification, and one complete hybrid session (transcript, key split, both packet directions) re-derived independently in Python, all byte-for-byte identical. Regenerate with [`validation/gen_openssl_vectors.sh`](validation/gen_openssl_vectors.sh). These are **not** NIST ACVP vectors. |
 | **Adversarial protocol tests** | Active-attacker tests for reflection, duplication, reordering, window edges, forged tags and sequence numbers, every single-bit flip, truncation, cross-session replay, failed-handshake retry, and a demonstration that an active intermediary can relay an unauthenticated handshake. |
-| **Authenticated handshake tests** | Nine active-attacker tests (impersonation, tampering with every transcript field, wrong trust anchor, role-context reuse, replay against a new session, unconfirmed-session refusal, out-of-order calls) plus C-ABI tests; binding, transcript, both ML-DSA signatures and the resulting packets are byte-identical to an independent OpenSSL/Python derivation. Unreviewed and not formally analyzed. |
-| **Test sensitivity** | 24 deliberate faults (accepting any tag, disabling replay detection, committing before authentication, boundary off-by-ones, dropped MAC and transcript coverage, skipped key wipes, a Lite feature leak, and eight faults in the authenticated handshake) were applied to a disposable copy; every one made the suite fail. One gap, an unobserved key wipe, was found and closed. |
+| **Authenticated handshake tests** | Sixteen active-attacker tests (impersonation, tampering with every transcript field and both tags, wrong trust anchor, salt mismatch, a validly signed but unusable exchange, a valid signature over a wrong tag, role and direction separation, replay, unconfirmed-session refusal, repeated and out-of-order calls, abandoned-handshake recovery) plus unit, C-ABI and C tests; binding, transcript, both confirmation keys and tags, both ML-DSA signatures and the resulting packets are byte-identical to an independent OpenSSL/Python derivation. Unreviewed and not formally analyzed. |
+| **Test sensitivity** | 39 deliberate faults (accepting any tag, disabling replay detection, committing before authentication, boundary off-by-ones, dropped MAC and transcript coverage, skipped key wipes, a Lite feature leak, eight faults in the first authenticated-handshake draft, since replaced, and fifteen in version 2) were applied to a disposable copy; every one made the suite fail. One gap, an unobserved key wipe, was found and closed. |
 | **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
 | **Fuzzed** | Four harnesses (`ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz`, `auth_handshake_fuzz`); the first three have retained regression corpora and a 10,000-execution CI job, the authenticated-handshake harness runs 3,000 executions (it signs and verifies ML-DSA per input). |
 | **ThreadSanitizer** | Standalone SPSC and ring-buffer stress workload, no reported race. |
@@ -85,7 +85,7 @@ Every claim below is reproducible from a clean checkout with
 | Digital signatures (optional) | ML-DSA-87 (FIPS 204) | Public key 2,592 B, signature 4,627 B on the wire; 32 B keygen seed |
 | Packet protection | ChaCha20 (RFC 8439, 96-bit nonce) + HMAC-SHA384, Encrypt-then-MAC | 32 B cipher key, 32 B MAC key, 48 B tag; MAC covers `len(aad) ‖ len(ct) ‖ nonce ‖ aad ‖ ct` |
 | Handshake transcript | SHA-384 over protocol label, ciphertext, sender X25519 key and caller info | 48 B, passed to HKDF as `info` |
-| Authenticated handshake (full configuration) | Mutual ML-DSA-87 signatures over a SHA-384 transcript that binds version, suite, both parties' public keys, both identity fingerprints, `info`, ciphertext and the encapsulating side's X25519 key; role-specific FIPS 204 contexts | Trust anchors provisioned out of band; session unconfirmed until the peer's signature verifies; unreviewed |
+| Authenticated handshake, version 2 (full configuration) | Mutual ML-DSA-87 signatures over a SHA-384 transcript that binds version, suite, both parties' public keys, both identity fingerprints, `info`, ciphertext and the encapsulating side's X25519 key; role-specific FIPS 204 contexts; explicit HMAC-SHA384 key confirmation under per-role keys expanded from the session PRK (this is what detects a `salt` mismatch) | Trust anchors provisioned out of band; session unconfirmed until the peer's signature and tag verify; unreviewed |
 
 ### Session behavior
 
@@ -97,7 +97,7 @@ Every claim below is reproducible from a clean checkout with
 | Replay window | 64 packets; authentication precedes any window update; sequences below the window are rejected |
 | Largest packet per nonce | $2^{38}-64$ bytes (ChaCha20 32-bit block-counter limit) |
 | Re-establishment | Zeroizes prior keys, counters and window before installing new keys |
-| Peer authentication | Opt-in via `*_authenticated` / `confirm_peer`; the plain handshake authenticates nobody |
+| Peer authentication | Opt-in via `*_authenticated_v2` / `confirm_peer_v2`; the plain handshake authenticates nobody |
 | Key material | No serialization entry point for secret keys; zeroized on every return path |
 
 ### Entropy
@@ -270,14 +270,15 @@ must pass the same `salt` and `app_info`.
 
 ```c
 /* Responder:  initiate_handshake(...)  -> send ek, x25519_pk                        */
-/* Initiator:  encapsulate_authenticated(s, my_sk, responder_vk, ek, x_pk, entropy,
-                   salt, salt_len, app_info, app_len, ct, my_x_pk, sig_i);
-               -> send ct, my_x_pk, sig_i   (session refuses traffic until confirmed) */
-/* Responder:  finalize_authenticated(s, my_sk, initiator_vk, my_x_pk, ct, sig_i,
-                   salt, salt_len, app_info, app_len, sig_r);
+/* Initiator:  encapsulate_authenticated_v2(s, my_sk, responder_vk, ek, x_pk, entropy,
+                   salt, salt_len, app_info, app_len, ct, my_x_pk, sig_i, tag_i[48]);
+               -> send ct, my_x_pk, sig_i, tag_i  (refuses traffic until confirmed)  */
+/* Responder:  finalize_authenticated_v2(s, my_sk, initiator_vk, my_x_pk, ct, sig_i,
+                   tag_i, salt, salt_len, app_info, app_len, sig_r, tag_r[48]);
                -> VERIFICATION_FAILED on a forged reply; handshake stays pending;
-               -> send sig_r                                                         */
-/* Initiator:  confirm_peer(s, responder_vk, sig_r)  -> session now usable           */
+               -> KEY_CONFIRMATION_FAILED on a salt mismatch; nothing installed;
+               -> send sig_r, tag_r                                                  */
+/* Initiator:  confirm_peer_v2(s, responder_vk, sig_r, tag_r) -> session now usable  */
 ```
 
 ---
@@ -305,10 +306,10 @@ serialization entry point and cannot be exported through the ABI.
 **Peer authentication is opt-in, and unreviewed.** The quick-start handshake above
 performs hybrid key agreement only and is open to an active man-in-the-middle. The
 full configuration also provides an **authenticated handshake**
-(`encapsulate_authenticated`, `finalize_authenticated`, `confirm_peer`): each side
-signs the whole exchange with its ML-DSA-87 identity key and verifies the peer
-against a verifying key you provisioned out of band, and an unconfirmed session
-refuses all traffic. It is a composition of standard components in the signed-
+(`encapsulate_authenticated`, `finalize_authenticated`, `confirm_peer`; C names end in
+`_v2`): each side signs the whole exchange with its ML-DSA-87 identity key, verifies the
+peer against a verifying key you provisioned out of band, and proves it derived the same
+session key with an HMAC key-confirmation tag; an unconfirmed session refuses all traffic. It is a composition of standard components in the signed-
 transcript pattern of TLS 1.3 and SIGMA, tested against active attackers and
 reproduced byte for byte by an independent OpenSSL/Python implementation, but it
 has had no formal analysis and no independent review. The Lite configuration has
@@ -426,7 +427,7 @@ The evidence behind each line is in [VALIDATION.md](VALIDATION.md).
 **IMPLEMENTED** — AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF and
 directional session keys, wire codecs, FFI surfaces, RTOS primitives, C HAL stubs.
 
-**TESTED** — 171 Rust #[test] functions covering crypto round trips and tampering,
+**TESTED** — 184 Rust #[test] functions covering crypto round trips and tampering,
 known-answer vectors for the classical primitives, wire round trips proving
 semantic equivalence after decode, FFI null/zero-length and overlap handling,
 session re-establishment and replay paths, queue reuse and corruption paths,
