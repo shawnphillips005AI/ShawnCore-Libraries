@@ -118,14 +118,14 @@ ffi_type_layout!(
 );
 
 fn valid_aligned_ptr<T>(ptr: *const T) -> bool {
-    !ptr.is_null() && (ptr as usize) % core::mem::align_of::<T>() == 0
+    !ptr.is_null() && (ptr as usize).is_multiple_of(core::mem::align_of::<T>())
 }
 
 fn valid_dma_region<T>(memory_base: *mut T, size_in_bytes: usize, element_count: usize) -> bool {
     let required_alignment = core::mem::align_of::<T>();
     if memory_base.is_null()
-        || (memory_base as usize) % 4096 != 0
-        || (memory_base as usize) % required_alignment != 0
+        || !(memory_base as usize).is_multiple_of(4096)
+        || !(memory_base as usize).is_multiple_of(required_alignment)
     {
         return false;
     }
@@ -155,7 +155,7 @@ fn ranges_overlap<T, U>(
 
 #[inline]
 fn ptr_is_aligned<T>(ptr: *const T) -> bool {
-    (ptr as usize) % core::mem::align_of::<T>() == 0
+    (ptr as usize).is_multiple_of(core::mem::align_of::<T>())
 }
 
 fn object_overlaps_backing<T, U>(object: *const T, backing: *const U, backing_len: usize) -> bool {

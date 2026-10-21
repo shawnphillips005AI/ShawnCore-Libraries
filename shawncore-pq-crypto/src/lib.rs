@@ -28,6 +28,47 @@ pub mod zeroize;
 #[cfg(test)]
 extern crate std;
 
+/// Shared host callbacks for unit tests. The callback registry is process-global,
+/// so every test registers this one dispatcher instead of racing on replacements.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use crate::ffi_callbacks::{
+        shawncore_crypto_register_cache_flush, shawncore_crypto_register_disable_interrupts,
+        shawncore_crypto_register_restore_interrupts,
+    };
+    use core::sync::atomic::{AtomicUsize, Ordering};
+
+    static CACHE_FLUSH_HOOK: AtomicUsize = AtomicUsize::new(0);
+
+    extern "C" fn cache_flush(ptr: *const u8, len: usize) {
+        let hook = CACHE_FLUSH_HOOK.load(Ordering::Acquire);
+        if hook != 0 {
+            // SAFETY: only `set_cache_flush_hook` stores a non-zero value, from a `fn` pointer.
+            let hook: fn(*const u8, usize) = unsafe { core::mem::transmute(hook) };
+            hook(ptr, len);
+        }
+    }
+
+    extern "C" fn disable_interrupts() -> usize {
+        0
+    }
+
+    extern "C" fn restore_interrupts(_: usize) {}
+
+    /// An unregistered callback halts by design, so tests that reach one must call this first.
+    pub(crate) fn install_callbacks() {
+        unsafe {
+            shawncore_crypto_register_cache_flush(Some(cache_flush));
+            shawncore_crypto_register_disable_interrupts(Some(disable_interrupts));
+            shawncore_crypto_register_restore_interrupts(Some(restore_interrupts));
+        }
+    }
+
+    pub(crate) fn set_cache_flush_hook(hook: Option<fn(*const u8, usize)>) {
+        CACHE_FLUSH_HOOK.store(hook.map_or(0, |f| f as usize), Ordering::Release);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::aead_wrapper::{
@@ -37,13 +78,13 @@ mod tests {
     use super::ffi::{
         shawncore_crypto_aead_decrypt, shawncore_crypto_aead_encrypt,
         shawncore_crypto_entropy_push, shawncore_crypto_hkdf_expand_sha384,
-        shawncore_crypto_hmac_sha384, shawncore_crypto_ml_dsa_sign, shawncore_crypto_ml_dsa_verify,
-        shawncore_crypto_session_manager_encapsulate_for_peer,
+        shawncore_crypto_hmac_sha384, shawncore_crypto_session_manager_encapsulate_for_peer,
         shawncore_crypto_session_manager_encrypt_packet,
         shawncore_crypto_session_manager_finalize_handshake,
         shawncore_crypto_session_manager_initiate_handshake, shawncore_crypto_x25519_keygen,
     };
-    use super::ffi_callbacks::shawncore_crypto_register_cache_flush;
+    #[cfg(feature = "ml-dsa")]
+    use super::ffi::{shawncore_crypto_ml_dsa_sign, shawncore_crypto_ml_dsa_verify};
     use super::ffi_error::ShawncoreCryptoErr;
     use super::hybrid_kdf::derive_hybrid_key;
     #[cfg(feature = "ml-dsa")]
@@ -52,12 +93,8 @@ mod tests {
     use super::session_manager::SessionManager;
     use super::x25519_wrapper::{x25519_diffie_hellman, x25519_keygen, X25519Public};
 
-    extern "C" fn test_cache_flush(_: *const u8, _: usize) {}
-
     fn install_test_callbacks() {
-        unsafe {
-            shawncore_crypto_register_cache_flush(Some(test_cache_flush));
-        }
+        crate::test_support::install_callbacks();
     }
 
     #[test]

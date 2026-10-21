@@ -14,7 +14,7 @@ use crate::zeroize::{secure_cache_flush, secure_zeroize};
 use chacha20::cipher::{KeyIvInit, StreamCipher};
 use chacha20::ChaCha20;
 use hkdf::Hkdf;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha384;
 use subtle::ConstantTimeEq;
 

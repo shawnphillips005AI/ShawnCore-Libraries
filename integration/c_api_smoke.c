@@ -164,6 +164,10 @@ int main(void)
     uint8_t nonce[12] = {0};
     uint8_t tag[48] = {0};
     uint8_t prk[48] = {0};
+    /* The null-rejection contract is exercised at runtime. The deliberate null
+       is kept in a volatile pointer so the compiler cannot reject it at
+       compile time via -Wnonnull on the [static 32] parameter. */
+    uint8_t *volatile null_chunk = NULL;
 
     if (shawncore_crypto_session_manager_sizeof() == 0 ||
         shawncore_crypto_ml_kem_publickey_alignof() == 0 ||
@@ -172,7 +176,7 @@ int main(void)
         shawncore_rtos_fft_result_sizeof() != sizeof(shawncore_rtos_fft_result)) {
         return 1;
     }
-    if (shawncore_crypto_entropy_push(NULL) != SHAWNCORE_CRYPTO_INVALID_STATE ||
+    if (shawncore_crypto_entropy_push(null_chunk) != SHAWNCORE_CRYPTO_INVALID_STATE ||
         shawncore_rtos_scheduler_init(NULL) != SHAWNCORE_RTOS_INVALID_MEMORY ||
         shawncore_rtos_scheduler_set_critical_task_mask(NULL, 0) != SHAWNCORE_RTOS_INVALID_MEMORY) {
         return 2;

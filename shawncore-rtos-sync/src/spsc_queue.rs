@@ -122,7 +122,9 @@ impl<T: Copy + Default, const N: usize> SpscQueue<T, N> {
         // The host contract requires page alignment, while Rust also requires the
         // allocation to satisfy the slot type's alignment.
         let required_alignment = core::mem::align_of::<CacheAlignedSlot<T>>();
-        if (base_ptr as usize) % 4096 != 0 || (base_ptr as usize) % required_alignment != 0 {
+        if !(base_ptr as usize).is_multiple_of(4096)
+            || !(base_ptr as usize).is_multiple_of(required_alignment)
+        {
             return Err(IpcError::InvalidMemory);
         }
 

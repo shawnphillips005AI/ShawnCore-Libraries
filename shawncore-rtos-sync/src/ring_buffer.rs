@@ -104,8 +104,8 @@ impl<T: Copy + Default, const N: usize> RingBuffer<T, N> {
             return Err(IpcError::InvalidMemory);
         }
 
-        if (base_ptr as usize) % 4096 != 0
-            || (base_ptr as usize) % core::mem::align_of::<CacheAlignedSlot<T>>() != 0
+        if !(base_ptr as usize).is_multiple_of(4096)
+            || !(base_ptr as usize).is_multiple_of(core::mem::align_of::<CacheAlignedSlot<T>>())
         {
             return Err(IpcError::InvalidMemory);
         }

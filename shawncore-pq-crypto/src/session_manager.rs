@@ -534,15 +534,10 @@ fn key_checksum(key: &[u8; 64]) -> u32 {
 mod tests {
     use super::{key_checksum, SessionManager};
     use crate::error::CryptoError;
-    use crate::ffi_callbacks::shawncore_crypto_register_cache_flush;
-
-    extern "C" fn test_cache_flush(_: *const u8, _: usize) {}
 
     #[test]
     fn key_integrity_detects_single_bit_corruption() {
-        unsafe {
-            shawncore_crypto_register_cache_flush(Some(test_cache_flush));
-        }
+        crate::test_support::install_callbacks();
         let mut manager = SessionManager {
             ml_kem_dk: None,
             x25519_sk: None,
@@ -566,9 +561,7 @@ mod tests {
 
     #[test]
     fn failed_encryption_does_not_consume_a_nonce() {
-        unsafe {
-            shawncore_crypto_register_cache_flush(Some(test_cache_flush));
-        }
+        crate::test_support::install_callbacks();
         let mut manager = SessionManager {
             ml_kem_dk: None,
             x25519_sk: None,

@@ -3,22 +3,50 @@
 // There is intentionally no #[test] harness: this process directly exercises the
 // concurrent ShawnCore queue implementations so sanitizer reports are attributable
 // to the validation code/library rather than libtest's internal event channel.
+//
+// This is a host-only workload. The workspace-wide
+// `cargo check --target aarch64-unknown-none --workspace` gate type-checks this
+// package for the bare-metal target as well, where host `std` is unavailable; on
+// bare-metal targets the binary compiles to an inert stub.
 
+#![cfg_attr(target_os = "none", no_std)]
+
+#[cfg(target_os = "none")]
+mod bare_metal {
+    use core::panic::PanicInfo;
+
+    #[panic_handler]
+    fn panic(_info: &PanicInfo<'_>) -> ! {
+        loop {}
+    }
+}
+
+#[cfg(not(target_os = "none"))]
 use shawncore_rtos_sync::ffi_callbacks::{
     shawncore_rtos_register_cache_flush, shawncore_rtos_register_cache_invalidate,
 };
+#[cfg(not(target_os = "none"))]
 use shawncore_rtos_sync::ring_buffer::RingBuffer;
+#[cfg(not(target_os = "none"))]
 use shawncore_rtos_sync::spsc_queue::{CacheAlignedSlot as SpscSlot, SpscQueue};
+#[cfg(not(target_os = "none"))]
 use std::mem::MaybeUninit;
+#[cfg(not(target_os = "none"))]
 use std::sync::Arc;
+#[cfg(not(target_os = "none"))]
 use std::thread;
 
+#[cfg(not(target_os = "none"))]
 const QUEUE_CAPACITY: usize = 64;
+#[cfg(not(target_os = "none"))]
 const TRANSFERS_PER_ROUND: u32 = 100_000;
+#[cfg(not(target_os = "none"))]
 const ROUNDS: usize = 3;
 
+#[cfg(not(target_os = "none"))]
 extern "C" fn cache_callback(_: *const u8, _: usize) {}
 
+#[cfg(not(target_os = "none"))]
 fn install_cache_callbacks() {
     unsafe {
         shawncore_rtos_register_cache_flush(Some(cache_callback));
@@ -26,9 +54,11 @@ fn install_cache_callbacks() {
     }
 }
 
+#[cfg(not(target_os = "none"))]
 #[repr(C, align(4096))]
 struct SlotStorage<const N: usize>(MaybeUninit<[SpscSlot<u32>; N]>);
 
+#[cfg(not(target_os = "none"))]
 fn run_spsc_round(round: usize) {
     let queue = Arc::new(SpscQueue::<u32, QUEUE_CAPACITY>::new());
     let mut storage = Box::new(SlotStorage::<QUEUE_CAPACITY>(MaybeUninit::uninit()));
@@ -68,6 +98,7 @@ fn run_spsc_round(round: usize) {
     assert_eq!(consumed, TRANSFERS_PER_ROUND, "SPSC round={round}");
 }
 
+#[cfg(not(target_os = "none"))]
 fn run_ring_round(round: usize) {
     let ring = Arc::new(RingBuffer::<u32, QUEUE_CAPACITY>::new());
     let mut storage = Box::new(SlotStorage::<QUEUE_CAPACITY>(MaybeUninit::uninit()));
@@ -107,6 +138,7 @@ fn run_ring_round(round: usize) {
     assert_eq!(consumed, TRANSFERS_PER_ROUND, "ring round={round}");
 }
 
+#[cfg(not(target_os = "none"))]
 fn main() {
     install_cache_callbacks();
 
@@ -119,3 +151,6 @@ fn main() {
 
     println!("[+] SPSC and ring-buffer stress workload completed");
 }
+
+#[cfg(target_os = "none")]
+fn main() {}

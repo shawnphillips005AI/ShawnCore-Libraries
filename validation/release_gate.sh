@@ -13,13 +13,14 @@ pass() {
 }
 
 fail() {
-    printf '%s\n' "[release-gate][FAIL] %s" "$1" >&2
+    printf '%s\n' "[release-gate][FAIL] $1" >&2
     exit 1
 }
 
 # 1. Formatting.
 step "format check"
 cargo fmt --all -- --check
+cargo fmt --manifest-path "$ROOT/fuzz/Cargo.toml" -- --check
 pass "format"
 
 # 2. Lint. Keep the gate deterministic and fail on warnings.
@@ -36,6 +37,11 @@ pass "workspace tests"
 step "ThreadSanitizer"
 "$ROOT/validation/run_tsan.sh"
 pass "ThreadSanitizer"
+
+# 4b. Rust-instrumented AddressSanitizer over the crypto and RTOS test suites.
+step "AddressSanitizer"
+"$ROOT/validation/run_asan.sh"
+pass "AddressSanitizer"
 
 # 5. Build the complete FFI release artifact with the full feature set.
 step "full FFI release build"
@@ -73,8 +79,26 @@ step "Lite FFI check"
 cargo check -p shawncore-ffi --no-default-features --features lite --locked
 pass "Lite FFI check"
 
-# 8. Check the gate itself before declaring success.
+step "Lite crypto tests"
+cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked
+pass "Lite crypto tests"
+
+# 8. Bare-metal type check, header/archive symbol parity, and archive self-containment.
+step "bare-metal check"
+cargo check --target aarch64-unknown-none --workspace --locked
+pass "bare-metal check"
+
+step "archive checks"
+bash "$ROOT/validation/check_archive.sh"
+pass "archive checks"
+
+step "C and C++ integration"
+make -C "$ROOT/integration" syntax run cxx
+pass "C and C++ integration"
+
+# 9. Check the gate itself before declaring success.
 bash -n "$ROOT/validation/release_gate.sh"
+bash -n "$ROOT/validation/check_archive.sh"
 pass "release gate syntax"
 
 pass "release gate complete"

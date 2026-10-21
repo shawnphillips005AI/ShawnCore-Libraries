@@ -6,12 +6,26 @@ synchronization for embedded systems, in `no_std` Rust with a C ABI.**
 ShawnCore gives firmware two things that are hard to get right and dangerous to
 get wrong: a hybrid ML-KEM-1024 + X25519 secure channel, and a set of lock-free
 RTOS primitives with analyzable worst-case behavior. It ships as a single
-self-contained static library with a C11 header.
+self-contained static library with a C header that compiles as C99, C11 and C++11 or later.
 
 > **Status:** release-candidate prototype for external technical evaluation.
 > Not certified, not hardware-qualified, not independently reviewed.
 > [VALIDATION.md](VALIDATION.md) records exactly what has been executed and what
 > has not.
+
+---
+
+## At a glance
+
+| | |
+|---|---|
+| **Key establishment** | ML-KEM-1024 + X25519, combined through HKDF-SHA384 into two independent directional keys |
+| **Packet protection** | ChaCha20 + HMAC-SHA384 Encrypt-then-MAC, per-direction nonce counters, 64-entry replay window |
+| **Signatures** | ML-DSA-87, optional (omitted by the `lite` configuration) |
+| **RTOS primitives** | O(1) bitmap scheduler, SPSC/ring queues, ABA-tagged DMA pool, interrupt-aware spinlocks, state machine |
+| **Integration** | One `staticlib`, one header for C99/C11 and C++ (135 functions, `SHAWNCORE_VERSION_*` macros), no libc, no heap, caller-allocated objects |
+| **Targets built** | Host (x86-64) and `aarch64-unknown-none` |
+| **Toolchain** | Rust 1.99.1, `no_std`, `panic = "abort"` |
 
 ---
 
@@ -35,19 +49,22 @@ repository are enumerated rather than implied.
 
 ## Verified properties
 
-Every claim below is reproducible from a clean checkout with the commands in
-[REVIEW.md](REVIEW.md).
+Every claim below is reproducible from a clean checkout with
+`bash validation/release_gate.sh` and the commands in [REVIEW.md](REVIEW.md).
 
 | | |
 |---|---|
-| **Zero external symbols** | The `aarch64-unknown-none` archive resolves entirely within itself. `memcpy`/`memset`/`memcmp` and soft-float builtins are bundled. No libc required. |
+| **Zero external symbols** | The `aarch64-unknown-none` archive resolves entirely within itself. `memcpy`/`memset`/`memcmp` and soft-float builtins are bundled. No libc required. Checked by [`validation/check_archive.sh`](validation/check_archive.sh). |
 | **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
 | **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
-| **134 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
-| **86 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. |
+| **135 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
+| **99 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 49-test suite. |
+| **Known-answer tests for the classical primitives** | HMAC-SHA384 (RFC 4231), X25519 (RFC 7748 section 6.1), HKDF-SHA384, the hybrid KDF, and the AEAD framing, with vectors produced by independent implementations. ML-KEM/ML-DSA have regression vectors only; see the open gates below. |
 | **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
-| **Fuzzed** | `ffi_aead_fuzz` with an 87-input regression corpus; CI runs 10,000 executions. |
-| **Bare-metal clean** | `cargo check --target aarch64-unknown-none` with `clippy -D warnings`. |
+| **Fuzzed** | Three harnesses (`ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz`) with retained regression corpora; CI runs 10,000 executions of each. |
+| **ThreadSanitizer** | Standalone SPSC and ring-buffer stress workload, no reported race. |
+| **Bare-metal clean** | `cargo check --target aarch64-unknown-none` and `clippy -D warnings` for the whole workspace. |
+| **Dependency advisories** | `cargo audit` reports no advisories for the root and fuzz lockfiles. |
 
 ---
 
@@ -96,30 +113,38 @@ Link the archive and include [`shawncore-ffi/include/shawncore.h`](shawncore-ffi
 shawncore_crypto_register_cache_flush(host_cache_flush);
 shawncore_crypto_register_panic_hook(host_panic);
 
-/* 2. Allocate the session object yourself — the library never allocates. */
+/* 2. Allocate the session object yourself; the library never allocates. */
 static _Alignas(64) uint8_t storage[8192];
 shawncore_crypto_session_manager *s = (void *)storage;
 assert(shawncore_crypto_session_manager_sizeof() <= sizeof storage);
 shawncore_crypto_session_manager_init(s);
 
-/* 3. Publish your hybrid public keys, in wire format. */
+/* 3. Responder: publish hybrid public keys in wire format. */
 shawncore_crypto_session_manager_initiate_handshake(s, entropy96, pk, xpk);
-
 uint8_t ek_wire[1568], x_wire[32];
 shawncore_crypto_ml_kem_publickey_to_bytes(pk,  ek_wire, sizeof ek_wire);
 shawncore_crypto_x25519_publickey_to_bytes(xpk, x_wire,  sizeof x_wire);
 link_send(ek_wire, sizeof ek_wire);
 link_send(x_wire,  sizeof x_wire);
 
-/* 4. Rebuild the peer's values from received bytes and finalize. */
+/* 4. Initiator: rebuild the peer keys from bytes, then encapsulate against them. */
+shawncore_crypto_ml_kem_publickey_from_bytes(ek_wire, sizeof ek_wire, peer_pk);
+shawncore_crypto_x25519_publickey_from_bytes(x_wire,  sizeof x_wire,  peer_xpk);
+shawncore_crypto_session_manager_encapsulate_for_peer(
+    s2, peer_pk, peer_xpk, entropy64, NULL, 0, NULL, 0, ct, my_xpk);
+
+/* 5. Responder: rebuild the reply from bytes and finalize. */
 shawncore_crypto_ml_kem_ciphertext_from_bytes(ct_wire, 1568, ct);
 shawncore_crypto_x25519_publickey_from_bytes(peer_wire, 32, peer);
 shawncore_crypto_session_manager_finalize_handshake(s, peer, ct, NULL, 0, NULL, 0);
 
-/* 5. Send. Nonces are assigned and tracked internally. */
+/* 6. Send. Nonces are assigned and tracked internally. */
 shawncore_crypto_session_manager_encrypt_packet(
     s, aad, aad_len, pt, ct_out, len, out_nonce, out_tag);
 ```
+
+Every call returns a typed status; check it. Entropy buffers must come from a
+qualified host source. The fragment above elides declarations and error handling.
 
 [`integration/c_api_smoke.c`](integration/c_api_smoke.c) runs this end to end —
 two session managers completing a full hybrid handshake with every public value
@@ -175,47 +200,97 @@ consumer, for the entire initialized lifetime. Not enforced at runtime.
 
 ---
 
+## Dependencies
+
+The wrappers delegate the primitives to RustCrypto crates and add zeroization,
+length/overlap validation, and the FFI boundary.
+
+| Primitive | Crate | Version |
+|---|---|---|
+| ML-KEM-1024 (FIPS 203) | `ml-kem` (`hazmat` for seed-based keygen and deterministic encapsulation) | 0.3.3 |
+| ML-DSA-87 (FIPS 204) | `ml-dsa` (optional) | 0.1.1 |
+| X25519 | `x25519-dalek` | 3.0 |
+| ChaCha20 | `chacha20` | 0.10 |
+| SHA-384, HMAC, HKDF | `sha2`, `hmac`, `hkdf` | 0.11, 0.13, 0.13 |
+| Constant-time compare, zeroize | `subtle`, `zeroize` | 2.6, 1.9 |
+
+The lockfiles are committed and `cargo audit` is part of CI. Constant-time
+behavior is a property of these dependencies and the target compiler output; it
+has not been measured here.
+
+## Footprint
+
+Measured on the `aarch64-unknown-none` FFI static archive with Rust 1.99.1.
+"Code + rodata" is the sum over all archive members before linker garbage
+collection, so it is an upper bound, not a firmware size. Measure the linked
+artifact on your target.
+
+| Profile | Archive bytes | Code + rodata bytes |
+|---|---:|---:|
+| `release` (full, ML-DSA enabled) | 6,839,576 | 623,429 |
+| `usv` (full, `opt-level = "z"`) | 6,670,822 | 282,485 |
+| `lite` (no ML-DSA, `opt-level = "z"`) | 6,521,938 | 251,130 |
+
+Static RAM in the archive is 4,489 bytes of `.bss`. Opaque object sizes are
+listed in [ARCHITECTURE.md](ARCHITECTURE.md#92-caller-allocated-opaque-objects).
+
+---
+
 ## Reproducible checks
+
+The full gate, including ThreadSanitizer (needs a nightly toolchain), the Lite
+configuration, and the archive checks:
+
+```text
+bash validation/release_gate.sh
+```
+
+The individual commands:
 
 ```text
 cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo test --workspace --all-targets
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo build --workspace --release
-cargo doc --workspace --no-deps
-cargo check --target aarch64-unknown-none --workspace
-cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz
-cargo check --manifest-path fuzz/Cargo.toml --bin rtos_stateful_fuzz
-make -C integration syntax
-make -C integration run
-make -C integration asan
-make -C integration valgrind
+cargo fmt --manifest-path fuzz/Cargo.toml -- --check
+cargo check --workspace --all-targets --locked
+cargo test --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo build --workspace --release --locked
+cargo doc --workspace --no-deps --locked
+cargo check --target aarch64-unknown-none --workspace --locked
+cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked
+cargo audit && cargo audit --file fuzz/Cargo.lock
+bash validation/check_archive.sh
+make -C integration syntax run cxx asan valgrind
 ```
 
-`rust-toolchain.toml` pins Rust `1.85.0`, the `rustfmt` and `clippy` components,
+`rust-toolchain.toml` pins Rust `1.99.1`, the `rustfmt` and `clippy` components,
 and the `aarch64-unknown-none` target.
 
 ---
 
 ## Validation status
 
+The evidence behind each line is in [VALIDATION.md](VALIDATION.md).
+
 **IMPLEMENTED** — AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF and
 directional session keys, wire codecs, FFI surfaces, RTOS primitives, C HAL stubs.
 
-**TESTED** — 86 Rust #[test] functions covering crypto round trips and tampering, wire
-round trips proving semantic equivalence after decode, FFI null/zero-length and
-overlap handling, session re-establishment and replay paths, queue reuse and
-corruption paths, DMA-pool exhaustion and stale-generation rejection, scheduler
-boundaries, state transitions, and the FFT one-cache-line ABI. A C11 integration
-binary compiles, links, and executes a full wire handshake against the release
-archive, clean under AddressSanitizer and Valgrind.
+**TESTED** — 99 Rust #[test] functions covering crypto round trips and tampering,
+known-answer vectors for the classical primitives, wire round trips proving
+semantic equivalence after decode, FFI null/zero-length and overlap handling,
+session re-establishment and replay paths, queue reuse and corruption paths,
+DMA-pool exhaustion and stale-generation rejection, scheduler boundaries, state
+transitions, and the FFT one-cache-line ABI. A C11 integration binary and a C++17
+smoke binary compile,
+links, and executes a full wire handshake against the release archive, clean
+under AddressSanitizer and Valgrind.
 
-**FUZZED** — `ffi_aead_fuzz` target with an 87-input regression corpus and a
-10,000-execution CI job. Compile checks are not reported as fuzz executions.
+**FUZZED** — three harnesses with retained regression corpora and a
+10,000-execution CI job per harness. Compile checks are not reported as fuzz
+executions, and a bounded campaign is not a security proof.
 
 **STATICALLY REVIEWED** — strict Clippy, formatting, workspace checks,
-documentation build, C syntax compilation, header/archive symbol parity, and a
+documentation build with warnings denied, C syntax compilation, header/archive
+symbol parity, archive self-containment, dependency advisory scan, and a
 bare-metal AArch64 type check, all in CI.
 
 **MODEL TESTED** — no formal model checking or exhaustive concurrency-state model
@@ -239,7 +314,7 @@ certification, CNSA approval, operational USV readiness, or comprehensive
 security assurance. The 32-bit DMA-pool free-list ABA tag can wrap after $2^{32}$
 free-list mutations; deployments must bound that operational lifetime or
 reinitialize the pool. No peer identity, PKI, trust-anchor, or revocation model
-is defined here — that protocol layer belongs to the integrator. Retained
+is defined here; that protocol layer belongs to the integrator. Retained
 regression tests do not establish target timing, cache, or physical-memory
 behavior.
 
@@ -256,29 +331,27 @@ certification or approval conclusion.
 
 | Document | Contents |
 |---|---|
-| [ARCHITECTURE.md](ARCHITECTURE.md) | Design rationale, diagrams, measured footprint, concurrency model |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Design rationale, diagrams, measured layouts, concurrency model |
 | [SECURITY.md](SECURITY.md) | Trust boundaries, threat model, host integration contract |
 | [REVIEW.md](REVIEW.md) | Reviewer quickstart and requested review scope |
 | [VALIDATION.md](VALIDATION.md) | Host-side validation record and open external gates |
+| [BENCHMARKS.md](BENCHMARKS.md) | Host benchmark methodology |
 | [CHANGELOG.md](CHANGELOG.md) | Release notes |
 
-## Distribution
+## License
 
-This repository is proprietary and all rights are reserved. The crates are
-intentionally excluded from registry publication; distribution, evaluation, and
-integration require a separate written agreement with the copyright holder.
+ShawnCore is dual-licensed; see [LICENSE](LICENSE) for the governing terms.
 
-## 💼 Commercial Licensing & Integration
-ShawnCore is available under a **Dual-License model**:
-1. **AGPLv3** for open-source evaluation and academic research.
-2. **Commercial License** for proprietary, closed-source defense and enterprise applications.
+1. **GNU Affero General Public License v3 (or later)** for open-source evaluation
+   and research.
+2. **Commercial license** for use in closed-source or proprietary products
+   without the AGPL's copyleft obligations.
 
-If you are an Engineering Director or Principal Architect looking to integrate Post-Quantum Cryptography and lock-free RTOS primitives into your platform, please reach out to discuss commercial licensing, hardware PoC integration, or acquisition.
-
-
-### Validation-count note
-
-`patch.py` detects `86` Rust functions annotated with `#[test]`. This is a source-tree count, not a claim that all tests have been executed on hardware. Runtime, hardware, interoperability, and independent security validation remain distinct gates.
+The crates are `publish = false` and are not distributed through a package
+registry. For commercial licensing or integration support, contact the
+copyright holder, Shawn Phillips, directly. Licensing does not alter the
+validation status above: no hardware qualification, certification, or
+independent review is implied by either license.
 
 ## Lite MCU Build
 
@@ -288,6 +361,7 @@ full/default configuration.
 The full/default configuration keeps ML-DSA enabled. The Lite configuration
 omits ML-DSA at compile/link time while retaining ML-KEM, X25519, authenticated
 encryption, session management, entropy handling, and RTOS synchronization.
+The C header hides the ML-DSA declarations when `SHAWNCORE_LITE` is defined.
 
 Build the Lite crypto crate:
 

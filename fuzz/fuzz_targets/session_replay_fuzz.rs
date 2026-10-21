@@ -5,10 +5,11 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 use libfuzzer_sys::fuzz_target;
 use shawncore_pq_crypto::ffi::{
     shawncore_crypto_hmac_sha384, shawncore_crypto_session_manager_decrypt_packet,
-    shawncore_crypto_session_manager_destroy, shawncore_crypto_session_manager_encapsulate_for_peer,
-    shawncore_crypto_session_manager_encrypt_packet, shawncore_crypto_session_manager_finalize_handshake,
-    shawncore_crypto_session_manager_init, shawncore_crypto_session_manager_initiate_handshake,
-    shawncore_crypto_session_manager_zeroize,
+    shawncore_crypto_session_manager_destroy,
+    shawncore_crypto_session_manager_encapsulate_for_peer,
+    shawncore_crypto_session_manager_encrypt_packet,
+    shawncore_crypto_session_manager_finalize_handshake, shawncore_crypto_session_manager_init,
+    shawncore_crypto_session_manager_initiate_handshake, shawncore_crypto_session_manager_zeroize,
 };
 use shawncore_pq_crypto::ffi_callbacks::shawncore_crypto_register_cache_flush;
 use shawncore_pq_crypto::ffi_error::ShawncoreCryptoErr;
@@ -135,7 +136,14 @@ fn exercise_callback_replacement() {
     unsafe { shawncore_crypto_register_cache_flush(Some(cache_callback_a)) };
     let before_a = CALLBACK_A_COUNT.load(Ordering::Relaxed);
     assert_eq!(
-        unsafe { shawncore_crypto_hmac_sha384(key.as_ptr(), message.as_ptr(), message.len(), output.as_mut_ptr()) },
+        unsafe {
+            shawncore_crypto_hmac_sha384(
+                key.as_ptr(),
+                message.as_ptr(),
+                message.len(),
+                output.as_mut_ptr(),
+            )
+        },
         ShawncoreCryptoErr::Success
     );
     assert!(CALLBACK_A_COUNT.load(Ordering::Relaxed) > before_a);
@@ -144,7 +152,14 @@ fn exercise_callback_replacement() {
     let after_a = CALLBACK_A_COUNT.load(Ordering::Relaxed);
     let before_b = CALLBACK_B_COUNT.load(Ordering::Relaxed);
     assert_eq!(
-        unsafe { shawncore_crypto_hmac_sha384(key.as_ptr(), message.as_ptr(), message.len(), output.as_mut_ptr()) },
+        unsafe {
+            shawncore_crypto_hmac_sha384(
+                key.as_ptr(),
+                message.as_ptr(),
+                message.len(),
+                output.as_mut_ptr(),
+            )
+        },
         ShawncoreCryptoErr::Success
     );
     assert_eq!(CALLBACK_A_COUNT.load(Ordering::Relaxed), after_a);
@@ -439,7 +454,10 @@ fuzz_target!(|input: &[u8]| {
                         Recipient::Initiator => Recipient::Responder,
                         Recipient::Responder => Recipient::Initiator,
                     };
-                    assert_ne!(decrypt(&mut pair, &wrong_direction), ShawncoreCryptoErr::Success);
+                    assert_ne!(
+                        decrypt(&mut pair, &wrong_direction),
+                        ShawncoreCryptoErr::Success
+                    );
                     assert_eq!(decrypt(&mut pair, &packet), ShawncoreCryptoErr::Success);
                     packets[index].delivered = true;
                 }

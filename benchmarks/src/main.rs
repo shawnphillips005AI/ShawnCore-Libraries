@@ -1,26 +1,55 @@
 // Copyright (c) 2026 Shawn Phillips. All Rights Reserved.
 // Dual-licensed under AGPLv3 and Commercial License.
 
+//! Host-only benchmark driver. The workspace-wide
+//! `cargo check --target aarch64-unknown-none --workspace` gate type-checks this
+//! package for the bare-metal target as well, where host `std` is unavailable.
+//! On bare-metal targets this driver compiles to an inert stub; the measured
+//! workload only exists on host targets.
+
+#![cfg_attr(target_os = "none", no_std)]
+
+#[cfg(target_os = "none")]
+mod bare_metal {
+    use core::panic::PanicInfo;
+
+    #[panic_handler]
+    fn panic(_info: &PanicInfo<'_>) -> ! {
+        loop {}
+    }
+}
+
+#[cfg(not(target_os = "none"))]
 use std::hint::black_box;
+#[cfg(not(target_os = "none"))]
 use std::time::{Duration, Instant};
 
+#[cfg(not(target_os = "none"))]
 use shawncore_pq_crypto::aead_wrapper::{
     aead_decrypt, aead_encrypt, hkdf_expand_sha384, hmac_sha384, AEAD_TAG_SIZE,
 };
+#[cfg(not(target_os = "none"))]
 use shawncore_pq_crypto::ffi_callbacks::shawncore_crypto_register_cache_flush;
+#[cfg(not(target_os = "none"))]
 use shawncore_pq_crypto::hybrid_kdf::derive_hybrid_key;
+#[cfg(not(target_os = "none"))]
 use shawncore_pq_crypto::ml_dsa_wrapper::{ml_dsa_keygen, ml_dsa_sign, ml_dsa_verify};
+#[cfg(not(target_os = "none"))]
 use shawncore_pq_crypto::ml_kem_wrapper::{ml_kem_decapsulate, ml_kem_encapsulate, ml_kem_keygen};
+#[cfg(not(target_os = "none"))]
 use shawncore_pq_crypto::x25519_wrapper::{x25519_diffie_hellman, x25519_keygen};
 
+#[cfg(not(target_os = "none"))]
 extern "C" fn bench_cache_flush(_: *const u8, _: usize) {}
 
+#[cfg(not(target_os = "none"))]
 fn install_callbacks() {
     unsafe {
         shawncore_crypto_register_cache_flush(Some(bench_cache_flush));
     }
 }
 
+#[cfg(not(target_os = "none"))]
 fn iterations(default: u64) -> u64 {
     std::env::var("SHAWNCORE_BENCH_ITERS")
         .ok()
@@ -29,6 +58,7 @@ fn iterations(default: u64) -> u64 {
         .unwrap_or(default)
 }
 
+#[cfg(not(target_os = "none"))]
 fn measure<F>(mut f: F, iters: u64) -> Duration
 where
     F: FnMut(),
@@ -41,12 +71,14 @@ where
     start.elapsed()
 }
 
+#[cfg(not(target_os = "none"))]
 fn report(name: &str, iters: u64, total: Duration) {
     let nanos = total.as_nanos() as f64 / iters as f64;
     let ops = 1_000_000_000.0 / nanos;
     println!("| {name} | {iters} | {:.3} | {:.2} |", nanos, ops);
 }
 
+#[cfg(not(target_os = "none"))]
 fn main() {
     install_callbacks();
 
@@ -74,10 +106,11 @@ fn main() {
     let (x_pk_a, x_sk_a) = x25519_keygen(&X_SEED_A);
     let (_x_pk_b, x_sk_b) = x25519_keygen(&X_SEED_B);
 
-    println!("ShawnCore Benchmarks v12.3.10");
+    println!("ShawnCore Benchmarks v{}", env!("CARGO_PKG_VERSION"));
     println!(
-        "Rust target: {}",
-        std::env::var("TARGET").unwrap_or_else(|_| "host target".into())
+        "Platform: {}-{}",
+        std::env::consts::ARCH,
+        std::env::consts::OS
     );
     println!("Benchmark payload: 1024 bytes");
     println!(
@@ -272,3 +305,6 @@ fn main() {
     println!();
     println!("Tip: set SHAWNCORE_BENCH_ITERS=1000 for longer runs.");
 }
+
+#[cfg(target_os = "none")]
+fn main() {}

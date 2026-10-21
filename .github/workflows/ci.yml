@@ -7,48 +7,73 @@ on:
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+  RUSTDOCFLAGS: -D warnings
+
 jobs:
   rust:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.85.0
+      - uses: dtolnay/rust-toolchain@1.99.1
         with:
           components: rustfmt, clippy
           targets: aarch64-unknown-none
       - uses: actions/cache@v4
         with:
-          path: ~/.cargo/registry
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/bin/cargo-audit
           key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
       - run: cargo fmt --all -- --check
-      - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
-      - name: Audit root dependency lockfile
-        run: cargo audit --locked
-      - name: Audit fuzz dependency lockfile
-        run: cargo audit --locked --file fuzz/Cargo.lock
-      - run: cargo test --workspace --all-targets --locked
-      - run: cargo test --workspace --all-targets --release
-      - run: cargo check --workspace --all-targets --locked
-      - run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - run: cargo fmt --manifest-path fuzz/Cargo.toml -- --check
       - name: RustSec dependency audit
         run: |
-          cargo install cargo-audit --version 0.22.1 --locked
-          cargo audit --locked
-          cargo audit --manifest-path fuzz/Cargo.toml --locked
-      - run: cargo check --target aarch64-unknown-none --workspace --locked
+          command -v cargo-audit >/dev/null || cargo install cargo-audit --version 0.22.2 --locked
+          cargo audit
+          cargo audit --file fuzz/Cargo.lock
+      - run: cargo check --workspace --all-targets --locked
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-targets --locked
+      - run: cargo test --workspace --all-targets --release --locked
       - run: cargo build --workspace --release --locked
-      - run: cargo doc --workspace --no-deps
-      - run: cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz
-      - run: cargo check --manifest-path fuzz/Cargo.toml --bin session_replay_fuzz
-      - run: cargo check --manifest-path fuzz/Cargo.toml --bin rtos_stateful_fuzz
+      - run: cargo doc --workspace --no-deps --locked
+      - run: cargo check --target aarch64-unknown-none --workspace --locked
+      - name: Lite configuration
+        run: |
+          cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked
+          cargo check -p shawncore-ffi --no-default-features --features lite --locked
+      - name: Fuzz targets compile
+        run: |
+          cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz --locked
+          cargo check --manifest-path fuzz/Cargo.toml --bin session_replay_fuzz --locked
+          cargo check --manifest-path fuzz/Cargo.toml --bin rtos_stateful_fuzz --locked
+      - name: Header/archive parity and bare-metal archive self-containment
+        run: bash validation/check_archive.sh
+
+  c-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.99.1
+      - name: Install Valgrind
+        run: sudo apt-get update && sudo apt-get install -y valgrind
       - run: make -C integration syntax
       - run: make -C integration run
+      - run: make -C integration cxx
       - run: make -C integration asan
-      - run: |
-          grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_[:space:]*]*[[:space:]]+shawncore_(crypto|rtos)_[A-Za-z0-9_]+[[:space:]]*\(' shawncore-ffi/include/shawncore.h | sed -E 's/.*[[:space:]](shawncore_(crypto|rtos)_[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/' | sort -u > /tmp/shawncore-header-function-symbols
-          nm -g --defined-only target/release/libshawncore_ffi.a | awk '{print $3}' | grep -E '^shawncore_(crypto|rtos)_' | sort -u > /tmp/shawncore-archive-symbols
-          diff -u /tmp/shawncore-header-function-symbols /tmp/shawncore-archive-symbols
+      - run: make -C integration valgrind
+
+  sanitizers:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - run: bash validation/run_tsan.sh
+      - run: bash validation/run_asan.sh
 
   fuzz:
     runs-on: ubuntu-latest

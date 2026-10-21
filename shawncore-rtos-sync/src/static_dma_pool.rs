@@ -111,7 +111,8 @@ impl<T: Copy, const N: usize, const BITMAP_WORDS: usize> StaticDmaPool<T, N, BIT
         {
             return Err(AllocatorError::AddressOutOfBounds);
         }
-        if (base_ptr as usize) % 4096 != 0 || (base_ptr as usize) % core::mem::align_of::<T>() != 0
+        if !(base_ptr as usize).is_multiple_of(4096)
+            || !(base_ptr as usize).is_multiple_of(core::mem::align_of::<T>())
         {
             return Err(AllocatorError::InvalidAlignment);
         }

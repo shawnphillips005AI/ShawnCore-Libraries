@@ -1,12 +1,12 @@
 [package]
 name = "shawncore-validation"
-version = "12.3.10"
-edition = "2021"
-rust-version = "1.85"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
 description = "Host-side validation harness for ShawnCore"
-repository = "https://github.com/shawnphillips005AI/ShawnCore-Libraries"
-license-file = "../LICENSE"
-publish = false
+repository.workspace = true
+license-file.workspace = true
+publish.workspace = true
 
 [dependencies]
 shawncore-pq-crypto = { path = "../shawncore-pq-crypto" }

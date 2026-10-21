@@ -11,9 +11,10 @@ listed there are unresolved.
 
 ## Reporting a Vulnerability
 
-This repository is proprietary and has no public issue tracker for security
-matters. Report suspected vulnerabilities directly to the copyright holder
-through the channel established in your written agreement. Do not file
+This repository has no public issue tracker for security matters. Report
+suspected vulnerabilities directly to the copyright holder, Shawn Phillips, by a
+private channel (for example the contact established in your licensing
+agreement or a private GitHub security advisory on the repository). Do not file
 security reports as public issues.
 
 ## Trust Boundaries
@@ -51,7 +52,7 @@ of their dependencies and of the host contract:
 | Single-algorithm cryptanalytic break | Hybrid construction: ML-KEM-1024 and X25519 secrets are both fed into HKDF-SHA384 extract, so recovering the session key requires breaking both. |
 | Handshake transcript confusion | The KDF `info` binds a fixed protocol label, the ML-KEM ciphertext, the sender X25519 public key, and application info. |
 | Degenerate X25519 keys | Contributory-behavior / all-zero shared-secret checks reject low-order and invalid peer points. |
-| Malformed FFI arguments | Null, zero-length, misaligned, oversized, and overlapping-buffer arguments return typed error codes rather than dereferencing. Fixed-length buffers use C99 `[static N]` bounds to enforce compile-time length and non-null checks. |
+| Malformed FFI arguments | Null, zero-length, misaligned, oversized, and overlapping-buffer arguments return typed error codes rather than dereferencing. Fixed-length buffers use C99 `[static N]` bounds (a plain `[N]` under C++ or MSVC) so C compilers can diagnose null or short arguments at compile time. |
 | Panic unwinding into C | Release and dev profiles set `panic = "abort"`; the facade crate owns the single `no_std` panic handler, which invokes the host hook and then spins. |
 | RNG exhaustion / starvation DoS | Fortuna-style accumulator pool with domain-separated output and post-supply state evolution; starvation is a typed error, not a silent weak key. |
 | ISR deadlock on shared state | Interrupt-aware spinlocks disable and restore interrupts through host callbacks around the critical section. |
@@ -95,8 +96,11 @@ in portable `no_std` Rust at all.
 - The 32-bit DMA-pool free-list ABA tag wraps after $2^{32}$ free-list
   mutations. Deployments must bound the operational lifetime between
   reinitializations or re-initialize the pool.
-- ML-KEM and ML-DSA known-answer tests and external interoperability testing
-  have not been run. Algorithm identifiers refer to the FIPS 203 and FIPS 204
+- ML-KEM and ML-DSA external known-answer tests (NIST ACVP) and interoperability
+  testing have not been run. The repository carries RFC-derived known-answer
+  tests for the classical primitives and regression vectors that pin the current
+  `ml-kem`/`ml-dsa` output; the latter detect dependency drift and are not
+  conformance evidence. Algorithm identifiers refer to the FIPS 203 and FIPS 204
   standards by name only; they are not certification claims.
 - No Rust-instrumented AddressSanitizer result exists; the sanitizer build was
   blocked by a dependency resolution failure. See [VALIDATION.md](VALIDATION.md).
@@ -220,8 +224,10 @@ buffer contents must not be used.
 
 ### 9. Wire codecs do not authenticate
 
-`*_from_bytes` validates length and structure only. A well-formed encoding of the
-correct length always decodes. Binding a public key to a peer identity — through
+`*_from_bytes` validates length and structure only. For ML-KEM public keys the
+structure check includes the FIPS 203 modulus check, so a non-canonical encoding
+is rejected. Any other well-formed encoding of the correct length decodes, and
+none of the decoders authenticates a peer. Binding a public key to a peer identity — through
 ML-DSA signatures over a transcript, a pre-provisioned trust anchor, or an
 out-of-band channel — is your protocol layer's responsibility. Without it the
 handshake is unauthenticated and open to an active man-in-the-middle.

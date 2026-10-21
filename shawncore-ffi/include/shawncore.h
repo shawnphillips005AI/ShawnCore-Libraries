@@ -5,7 +5,7 @@
 #define SHAWNCORE_H
 
 /*
- * C11 interface for libshawncore_ffi.a.
+ * C99/C11 and C++ interface for libshawncore_ffi.a.
  *
  * Opaque objects must be allocated with the matching sizeof/alignof functions,
  * initialized exactly once, and destroyed only after concurrent users stop.
@@ -27,10 +27,27 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Keep in step with the crate version; validation/tests/ffi_layout_contracts.rs checks it. */
+#define SHAWNCORE_VERSION_MAJOR 12
+#define SHAWNCORE_VERSION_MINOR 3
+#define SHAWNCORE_VERSION_PATCH 11
+#define SHAWNCORE_VERSION_STRING "12.3.11"
+
 #if defined(_MSC_VER)
 #define SHAWNCORE_ALIGNAS(bytes) __declspec(align(bytes))
 #else
 #define SHAWNCORE_ALIGNAS(bytes) __attribute__((aligned(bytes)))
+#endif
+
+/*
+ * Fixed-length array parameters. C99/C11 compilers see `[static n]`, which lets
+ * them diagnose null or short arguments; C++ and MSVC do not accept that syntax
+ * and see a plain `[n]`. The callee's contract is the same either way.
+ */
+#if defined(__cplusplus) || defined(_MSC_VER)
+#define SHAWNCORE_MIN_LEN(n) n
+#else
+#define SHAWNCORE_MIN_LEN(n) static n
 #endif
 
 #ifdef __cplusplus
@@ -102,7 +119,7 @@ shawncore_crypto_err shawncore_crypto_session_manager_init(shawncore_crypto_sess
 shawncore_crypto_err shawncore_crypto_session_manager_destroy(shawncore_crypto_session_manager *manager);
 shawncore_crypto_err shawncore_crypto_session_manager_initiate_handshake(
     shawncore_crypto_session_manager *manager,
-    const uint8_t entropy[static 96],
+    const uint8_t entropy[SHAWNCORE_MIN_LEN(96)],
     shawncore_crypto_ml_kem_publickey *out_ml_kem_pk,
     shawncore_crypto_x25519_publickey *out_x25519_pk);
 shawncore_crypto_err shawncore_crypto_session_manager_finalize_handshake(
@@ -117,7 +134,7 @@ shawncore_crypto_err shawncore_crypto_session_manager_encapsulate_for_peer(
     shawncore_crypto_session_manager *manager,
     const shawncore_crypto_ml_kem_publickey *peer_ml_kem_pk,
     const shawncore_crypto_x25519_publickey *peer_x25519_pk,
-    const uint8_t entropy[static 64],
+    const uint8_t entropy[SHAWNCORE_MIN_LEN(64)],
     const uint8_t *salt,
     size_t salt_len,
     const uint8_t *info,
@@ -132,16 +149,16 @@ shawncore_crypto_err shawncore_crypto_session_manager_encrypt_packet(
     const uint8_t *plaintext,
     uint8_t *ciphertext,
     size_t data_len,
-    uint8_t out_nonce[static 12],
-    uint8_t out_tag[static 48]);
+    uint8_t out_nonce[SHAWNCORE_MIN_LEN(12)],
+    uint8_t out_tag[SHAWNCORE_MIN_LEN(48)]);
 shawncore_crypto_err shawncore_crypto_session_manager_decrypt_packet(
     shawncore_crypto_session_manager *manager,
     const uint8_t *aad,
     size_t aad_len,
     const uint8_t *ciphertext,
     size_t data_len,
-    const uint8_t nonce[static 12],
-    const uint8_t tag[static 48],
+    const uint8_t nonce[SHAWNCORE_MIN_LEN(12)],
+    const uint8_t tag[SHAWNCORE_MIN_LEN(48)],
     uint8_t *plaintext);
 
 size_t shawncore_crypto_ml_kem_publickey_sizeof(void);
@@ -153,14 +170,14 @@ size_t shawncore_crypto_ml_kem_sharedkey_alignof(void);
 size_t shawncore_crypto_ml_kem_ciphertext_sizeof(void);
 size_t shawncore_crypto_ml_kem_ciphertext_alignof(void);
 shawncore_crypto_err shawncore_crypto_ml_kem_keygen(
-    const uint8_t entropy[static 64],
+    const uint8_t entropy[SHAWNCORE_MIN_LEN(64)],
     shawncore_crypto_ml_kem_publickey *out_pk,
     shawncore_crypto_ml_kem_decapskey *out_dk);
 shawncore_crypto_err shawncore_crypto_ml_kem_decapskey_destroy(shawncore_crypto_ml_kem_decapskey *dk);
 /* Outputs must not overlap pk, entropy, or each other. */
 shawncore_crypto_err shawncore_crypto_ml_kem_encapsulate(
     const shawncore_crypto_ml_kem_publickey *pk,
-    const uint8_t entropy[static 32],
+    const uint8_t entropy[SHAWNCORE_MIN_LEN(32)],
     shawncore_crypto_ml_kem_sharedkey *out_shared,
     shawncore_crypto_ml_kem_ciphertext *out_ct);
 shawncore_crypto_err shawncore_crypto_ml_kem_decapsulate(
@@ -201,7 +218,7 @@ size_t shawncore_crypto_x25519_secret_alignof(void);
 size_t shawncore_crypto_x25519_sharedsecret_sizeof(void);
 size_t shawncore_crypto_x25519_sharedsecret_alignof(void);
 shawncore_crypto_err shawncore_crypto_x25519_keygen(
-    const uint8_t entropy[static 32],
+    const uint8_t entropy[SHAWNCORE_MIN_LEN(32)],
     shawncore_crypto_x25519_publickey *out_pk,
     shawncore_crypto_x25519_secret *out_sk);
 shawncore_crypto_err shawncore_crypto_x25519_secret_destroy(shawncore_crypto_x25519_secret *sk);
@@ -277,38 +294,38 @@ shawncore_crypto_err shawncore_crypto_ml_dsa_signature_from_bytes(
 
 #endif /* SHAWNCORE_LITE */
 shawncore_crypto_err shawncore_crypto_hmac_sha384(
-    const uint8_t key[static 32],
+    const uint8_t key[SHAWNCORE_MIN_LEN(32)],
     const uint8_t *data,
     size_t data_len,
-    uint8_t out_mac[static 48]);
+    uint8_t out_mac[SHAWNCORE_MIN_LEN(48)]);
 shawncore_crypto_err shawncore_crypto_hkdf_expand_sha384(
-    const uint8_t prk[static 48],
+    const uint8_t prk[SHAWNCORE_MIN_LEN(48)],
     const uint8_t *info,
     size_t info_len,
     uint8_t *out,
     size_t out_len);
 /* The nonce must be unique for every encryption under a given key pair. */
 shawncore_crypto_err shawncore_crypto_aead_encrypt(
-    const uint8_t enc_key[static 32],
-    const uint8_t mac_key[static 32],
-    const uint8_t nonce[static 12],
+    const uint8_t enc_key[SHAWNCORE_MIN_LEN(32)],
+    const uint8_t mac_key[SHAWNCORE_MIN_LEN(32)],
+    const uint8_t nonce[SHAWNCORE_MIN_LEN(12)],
     const uint8_t *aad,
     size_t aad_len,
     const uint8_t *plaintext,
     uint8_t *ciphertext,
     size_t data_len,
-    uint8_t out_mac[static 48]);
+    uint8_t out_mac[SHAWNCORE_MIN_LEN(48)]);
 shawncore_crypto_err shawncore_crypto_aead_decrypt(
-    const uint8_t enc_key[static 32],
-    const uint8_t mac_key[static 32],
-    const uint8_t nonce[static 12],
+    const uint8_t enc_key[SHAWNCORE_MIN_LEN(32)],
+    const uint8_t mac_key[SHAWNCORE_MIN_LEN(32)],
+    const uint8_t nonce[SHAWNCORE_MIN_LEN(12)],
     const uint8_t *aad,
     size_t aad_len,
     const uint8_t *ciphertext,
-    const uint8_t mac[static 48],
+    const uint8_t mac[SHAWNCORE_MIN_LEN(48)],
     uint8_t *plaintext,
     size_t data_len);
-shawncore_crypto_err shawncore_crypto_entropy_push(const uint8_t chunk[static 32]);
+shawncore_crypto_err shawncore_crypto_entropy_push(const uint8_t chunk[SHAWNCORE_MIN_LEN(32)]);
 shawncore_crypto_err shawncore_crypto_entropy_mix(void);
 
 /*

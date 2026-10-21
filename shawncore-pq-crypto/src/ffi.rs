@@ -1290,7 +1290,7 @@ wire_codec!(
 
 #[inline]
 fn ptr_is_aligned<T>(ptr: *const T) -> bool {
-    (ptr as usize) % core::mem::align_of::<T>() == 0
+    (ptr as usize).is_multiple_of(core::mem::align_of::<T>())
 }
 
 fn ranges_overlap<T, U>(
@@ -1749,13 +1749,10 @@ pub extern "C" fn shawncore_crypto_self_test() -> ShawncoreCryptoErr {
 #[cfg(test)]
 mod wire_codec_tests {
     use super::*;
-    use crate::ffi_callbacks::shawncore_crypto_register_cache_flush;
     use core::mem::MaybeUninit;
 
-    extern "C" fn test_cache_flush(_: *const u8, _: usize) {}
-
     fn install_callbacks() {
-        unsafe { shawncore_crypto_register_cache_flush(Some(test_cache_flush)) };
+        crate::test_support::install_callbacks();
     }
 
     /// Decoding an encoded ML-KEM key must yield a key that encapsulates to a secret
@@ -1949,8 +1946,11 @@ mod wire_codec_tests {
         assert_eq!(shawncore_crypto_ml_kem_publickey_encoded_len(), 1568);
         assert_eq!(shawncore_crypto_ml_kem_ciphertext_encoded_len(), 1568);
         assert_eq!(shawncore_crypto_x25519_publickey_encoded_len(), 32);
-        assert_eq!(shawncore_crypto_ml_dsa_publickey_encoded_len(), 2592);
-        assert_eq!(shawncore_crypto_ml_dsa_signature_encoded_len(), 4627);
+        #[cfg(feature = "ml-dsa")]
+        {
+            assert_eq!(shawncore_crypto_ml_dsa_publickey_encoded_len(), 2592);
+            assert_eq!(shawncore_crypto_ml_dsa_signature_encoded_len(), 4627);
+        }
     }
 
     #[test]

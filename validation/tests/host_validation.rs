@@ -194,7 +194,7 @@ fn dma_trace(seed: u64) {
                     assert!(index < N);
                     assert!(live
                         .iter()
-                        .all(|entry| entry.map_or(true, |(i, _)| i != index)));
+                        .all(|entry| entry.is_none_or(|(i, _)| i != index)));
                     live[slot_hint] = Some((index, generation));
                 }
                 Err(AllocatorError::OutOfMemory) => {

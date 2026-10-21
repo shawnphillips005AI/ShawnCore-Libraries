@@ -64,7 +64,9 @@ fn valid_stack_pointer(tcb: &Tcb, rsp: u64) -> bool {
         return false;
     };
     tcb.stack_base != 0
-        && tcb.stack_base % core::mem::align_of::<u64>() as u64 == 0
+        && tcb
+            .stack_base
+            .is_multiple_of(core::mem::align_of::<u64>() as u64)
         && tcb.stack_size >= core::mem::size_of::<u64>()
         && rsp >= first_usable_rsp
         && rsp <= stack_end
@@ -371,7 +373,9 @@ mod tests {
         scheduler.task_check_in(1);
 
         // Corrupt the canary while preserving a structurally valid task stack.
-        stack[0] = 0xDEAD_BEEF;
+        // Write through the raw pointer: the scheduler observes the stack via
+        // `stack_base`, not via the local binding.
+        unsafe { *stack.as_mut_ptr() = 0xDEAD_BEEF };
 
         let result = unsafe { scheduler.schedule_tick(rsp) };
         assert_eq!(result, 0);

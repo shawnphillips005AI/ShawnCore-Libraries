@@ -1,10 +1,4 @@
 
-### Bounded entropy mixing
-
-`EntropyPool::mix_entropy()` processes at most `MAX_MIX_CHUNKS_PER_CALL` queue entries per invocation. This keeps host or ISR-triggered mixing bounded even when the entropy queue has accumulated many chunks; remaining input stays queued for a subsequent invocation. The expensive SHA-384 work remains outside the interrupt-masked pool-state critical section.
-
-FFI buffer overlap helpers conservatively reject output/input aliasing, including checked address-range overflow. DMA stale-generation behavior is covered by repeated rapid-reuse regression tests; the generation tag protects allocation identity but does not make post-free pointer use safe.
-
 # Architecture
 
 This document explains how ShawnCore is built and, more importantly, **why the
@@ -58,7 +52,7 @@ graph TD
         HAL["Platform HAL<br/>cache · IRQ · clock · watchdog · RNG"]
     end
 
-    subgraph ABI["C ABI surface — 134 exported symbols"]
+    subgraph ABI["C ABI surface — 135 exported symbols"]
         HDR["shawncore.h"]
     end
 
@@ -129,6 +123,10 @@ Every object the library operates on is **caller-allocated**. That is why the
 ABI exposes `_sizeof()` / `_alignof()` for each opaque type instead of a
 constructor that returns a pointer. There is no hidden allocation anywhere in
 the call graph, which is what makes the memory footprint statically bounded.
+
+The check is automated in [`validation/check_archive.sh`](validation/check_archive.sh),
+which also diffs the header's declared functions against the archive's exported
+symbols.
 
 ---
 
@@ -490,20 +488,21 @@ size_t align = shawncore_crypto_session_manager_alignof();
 /* host allocates; library never does */
 ```
 
-Measured layouts on the reference build:
+Measured layouts on the reference build (Rust 1.99.1, 12.3.11; read from the
+archive with the `_sizeof()` / `_alignof()` functions):
 
 | Object | Size (B) | Align (B) |
 |---|---:|---:|
 | `session_manager` | 4,608 | 64 |
 | `ml_kem_publickey` | 2,112 | 64 |
-| `ml_kem_decapskey` | 4,224 | 64 |
+| `ml_kem_decapskey` | 4,288 | 64 |
 | `ml_kem_ciphertext` | 1,600 | 64 |
 | `ml_dsa_publickey` | 73,856 | 64 |
 | `ml_dsa_signingkey` | 104,640 | 64 |
 | `ml_dsa_signature` | 4,672 | 64 |
 | `x25519_publickey` / `secret` / `sharedsecret` | 64 | 64 |
 | `scheduler` | 1,088 | 64 |
-| `dmapool2k` | 4,416 | 64 |
+| `dmapool2k` | 4,160 | 64 |
 | `spsc_fft` / `spsc_telemetry` / `ringbuffer_ew` | 256 | 64 |
 | `tcb` / `state_machine` / `latency_tracker` / `fft_result` | 64 | 64 |
 
@@ -534,7 +533,9 @@ shawncore_crypto_ml_kem_publickey_from_bytes(wire, sizeof wire, pk); /* recv   *
 ```
 
 Length is checked against the codec's own `_encoded_len()`, and buffers are
-rejected if they overlap the object. **Secret material is deliberately not
+rejected if they overlap the object. Decoding validates length and structure
+only. For ML-KEM public keys, structure includes the FIPS 203 modulus check, so
+a non-canonical encoding is rejected; no decoder authenticates the peer. **Secret material is deliberately not
 exportable**: decapsulation keys, signing keys, and shared secrets have no
 serialization entry point, so private key material cannot leave the enclave
 through this ABI at all.
@@ -579,14 +580,16 @@ Stated here so it is not inferred from silence:
 - Cache coherency, DMA visibility, and barrier correctness on a real board.
 - ISR, NMI, FIQ, and watchdog behavior under fault conditions.
 - Hardware entropy quality.
-- ML-KEM / ML-DSA known-answer and external interoperability testing.
+- ML-KEM / ML-DSA external known-answer and interoperability testing. Regression
+  vectors pin the current dependency output, and RFC-derived known-answer tests
+  cover the classical primitives, but neither is a NIST ACVP result.
 - Side-channel behavior of the compiled artifact on the target core.
 - Peer identity, PKI, trust anchors, and revocation — no identity model is
   defined here.
 - Independent security review.
 
-Each of these is tracked as an explicit gate in [VALIDATION.md](VALIDATION.md)
-with a `BLOCKED` status and a stated reason. None of them is marked passed.
+Each of these is tracked as an explicit open gate in [VALIDATION.md](VALIDATION.md)
+with a `NOT EXECUTED` status and a stated reason. None of them is marked passed.
 
 ## 12. Interface-Boundary Invariants
 
@@ -639,6 +642,14 @@ including concurrent C callers and backing-buffer ownership transitions.
 ### Watchdog fail-safe ordering
 
 The scheduler validates current-task stack integrity and the selected next task/context before servicing the hardware watchdog. A detected canary or scheduler-context fault returns without refreshing the watchdog, preserving the watchdog as a fault-recovery mechanism rather than servicing it immediately before fault reporting.
+
+### Bounded entropy mixing
+
+`EntropyPool::mix_entropy()` processes at most `MAX_MIX_CHUNKS_PER_CALL` queue entries per invocation. This keeps host or ISR-triggered mixing bounded even when the entropy queue has accumulated many chunks; remaining input stays queued for a subsequent invocation. The expensive SHA-384 work remains outside the interrupt-masked pool-state critical section.
+
+### FFI aliasing and DMA reuse
+
+FFI buffer overlap helpers conservatively reject output/input aliasing, including checked address-range overflow. DMA stale-generation behavior is covered by repeated rapid-reuse regression tests; the generation tag protects allocation identity but does not make post-free pointer use safe.
 
 ## 13. USV Deployment Profile
 

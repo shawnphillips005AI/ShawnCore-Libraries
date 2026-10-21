@@ -13,7 +13,7 @@
 
 use crate::error::CryptoError;
 use crate::zeroize::secure_cache_flush;
-use ml_kem::{Encoded, EncodedSizeUser, KemCore, MlKem1024};
+use ml_kem::{Decapsulate, DecapsulationKey1024, EncapsulationKey1024, Key, KeyExport, Seed};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
 /// Wire-format length of an ML-KEM-1024 encapsulation key (FIPS 203 `ek`).
@@ -26,7 +26,7 @@ pub const ML_KEM_CIPHERTEXT_BYTES: usize = 1568;
 /// Used by the peer to encapsulate a shared secret.
 #[repr(C, align(64))]
 #[derive(Clone)]
-pub struct PublicKey1024(pub ml_kem::kem::EncapsulationKey<ml_kem::MlKem1024Params>);
+pub struct PublicKey1024(pub EncapsulationKey1024);
 
 /// Secret decapsulation key for ML-KEM-1024.
 /// Used to decapsulate the shared secret from a received ciphertext.
@@ -34,9 +34,7 @@ pub struct PublicKey1024(pub ml_kem::kem::EncapsulationKey<ml_kem::MlKem1024Para
 /// `ZeroizeOnDrop` itself; `Clone` is explicitly omitted to prevent key material duplication.
 #[repr(C, align(64))]
 #[derive(Zeroize, ZeroizeOnDrop)]
-pub struct DecapsKey1024(
-    #[zeroize(skip)] pub ml_kem::kem::DecapsulationKey<ml_kem::MlKem1024Params>,
-);
+pub struct DecapsKey1024(#[zeroize(skip)] pub DecapsulationKey1024);
 
 /// Shared secret established via ML-KEM-1024.
 /// Automatically zeroized upon being dropped to prevent key material leakage. `Clone` is explicitly omitted.
@@ -58,20 +56,21 @@ impl PublicKey1024 {
     #[must_use]
     pub fn to_bytes(&self) -> [u8; ML_KEM_PUBLICKEY_BYTES] {
         let mut out = [0u8; ML_KEM_PUBLICKEY_BYTES];
-        out.copy_from_slice(self.0.as_bytes().as_slice());
+        out.copy_from_slice(self.0.to_bytes().as_slice());
         out
     }
 
     /// Reconstructs a key from its FIPS 203 `ek` wire encoding.
     ///
-    /// Decoding does not authenticate the peer. Any byte string of the correct
-    /// length decodes; binding a key to an identity belongs to the caller's protocol layer.
+    /// Decoding validates length and the FIPS 203 modulus check on the encoded
+    /// polynomial coefficients. It does not authenticate the peer; binding a key
+    /// to an identity belongs to the caller's protocol layer.
     pub fn from_bytes(bytes: &[u8; ML_KEM_PUBLICKEY_BYTES]) -> Result<Self, CryptoError> {
-        let encoded = Encoded::<ml_kem::kem::EncapsulationKey<ml_kem::MlKem1024Params>>::try_from(
-            bytes.as_slice(),
-        )
-        .map_err(|_| CryptoError::InvalidLength)?;
-        Ok(Self(ml_kem::kem::EncapsulationKey::from_bytes(&encoded)))
+        let encoded = Key::<EncapsulationKey1024>::try_from(bytes.as_slice())
+            .map_err(|_| CryptoError::InvalidLength)?;
+        EncapsulationKey1024::new(&encoded)
+            .map(Self)
+            .map_err(|_| CryptoError::InvalidState)
     }
 }
 
@@ -83,14 +82,9 @@ impl PublicKey1024 {
 /// # Returns
 /// A tuple containing the `PublicKey1024` and `DecapsKey1024`.
 pub fn ml_kem_keygen(entropy: &[u8; 64]) -> Result<(PublicKey1024, DecapsKey1024), CryptoError> {
-    // Both conversions are infallible: `entropy` is a fixed 64-byte array split at 32.
-    let mut d = [0u8; 32];
-    let mut z = [0u8; 32];
-    d.copy_from_slice(&entropy[..32]);
-    z.copy_from_slice(&entropy[32..]);
-    let (dk, ek) = <MlKem1024 as KemCore>::generate_deterministic(&d.into(), &z.into());
-    d.zeroize();
-    z.zeroize();
+    // The seed is `d || z` per FIPS 203; the dependency consumes it by value.
+    let dk = DecapsulationKey1024::from_seed(Seed::from(*entropy));
+    let ek = dk.encapsulation_key().clone();
     Ok((PublicKey1024(ek), DecapsKey1024(dk)))
 }
 
@@ -107,15 +101,7 @@ pub fn ml_kem_encapsulate(
     entropy: &[u8; 32],
 ) -> Result<(SharedKey1024, Ciphertext1024), CryptoError> {
     let mut m: [u8; 32] = *entropy;
-    let encapsulation =
-        ml_kem::EncapsulateDeterministic::encapsulate_deterministic(&ek.0, &m.into());
-    let (ct, ss) = match encapsulation {
-        Ok(value) => value,
-        Err(_) => {
-            m.zeroize();
-            return Err(CryptoError::InvalidState);
-        }
-    };
+    let (ct, ss) = ek.0.encapsulate_deterministic(&m.into());
     m.zeroize();
 
     let mut shared = SharedKey1024([0u8; 32]);
@@ -143,8 +129,7 @@ pub fn ml_kem_decapsulate(
 ) -> Result<SharedKey1024, CryptoError> {
     // Decapsulation timing behavior is a property of the selected `ml-kem`
     // dependency and has not been independently measured here.
-    let ss = ml_kem::kem::Decapsulate::decapsulate(&dk.0, &ct.0.into())
-        .map_err(|_| CryptoError::InvalidState)?;
+    let ss = Decapsulate::decapsulate(&dk.0, &ct.0.into());
 
     let mut shared = SharedKey1024([0u8; 32]);
     shared.0.copy_from_slice(ss.as_ref());

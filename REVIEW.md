@@ -57,21 +57,27 @@ uses the complementary assignment.
 
 ## Requirements
 
-- Rust 1.85.0, the `rustfmt` and `clippy` components, and the
+- Rust 1.99.1, the `rustfmt` and `clippy` components, and the
   `aarch64-unknown-none` target, all selected by `rust-toolchain.toml`.
-- A C11 compiler for C integration checks.
-- Optional: Rust nightly plus `cargo-fuzz`, Clang/ASan, and Valgrind.
+- A C11 compiler and a C++17 compiler for the C and C++ integration checks.
+- Optional: Rust nightly plus `cargo-fuzz` (ThreadSanitizer, fuzzing, Miri),
+  Clang/ASan, Valgrind, and `cargo-audit`.
 
-From the repository root, run the basic Rust validation:
+From the repository root, `bash validation/release_gate.sh` runs the complete
+host gate (format, clippy, tests, ThreadSanitizer, release build, feature-set
+check, Lite tests, bare-metal check, and header/archive checks). The basic Rust
+validation on its own:
 
 ```text
 cargo fmt --all -- --check
-cargo check --workspace --all-targets
-cargo test --workspace --all-targets
-cargo clippy --workspace --all-targets --all-features -- -D warnings
-cargo build --workspace --release
-cargo doc --workspace --no-deps
-cargo check --target aarch64-unknown-none --workspace
+cargo check --workspace --all-targets --locked
+cargo test --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo build --workspace --release --locked
+cargo doc --workspace --no-deps --locked
+cargo check --target aarch64-unknown-none --workspace --locked
+cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked
+cargo audit && cargo audit --file fuzz/Cargo.lock
 ```
 
 ## C FFI Checks
@@ -102,11 +108,13 @@ valgrind --error-exitcode=1 --leak-check=full /tmp/shawncore-c-api-smoke
 ```text
 cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz
 cd fuzz
-cargo +nightly fuzz run ffi_aead_fuzz -- -runs=1000 -max_len=512
+cargo +nightly fuzz run ffi_aead_fuzz -- -runs=10000 -max_len=512
+cargo +nightly fuzz run session_replay_fuzz -- -runs=10000 -max_len=512
+cargo +nightly fuzz run rtos_stateful_fuzz -- -runs=10000 -max_len=512
 ```
 
-The retained corpus is intentional regression input. A bounded smoke run is not
-a security proof; CI configures a separate 10,000-execution fuzz job.
+The retained corpora are intentional regression input. A bounded smoke run is not
+a security proof; CI runs the same 10,000-execution campaign for each harness.
 
 ## Requested Technical Review
 

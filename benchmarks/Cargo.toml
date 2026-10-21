@@ -1,9 +1,12 @@
 [package]
 name = "shawncore-benchmarks"
-version = "12.3.10"
-edition = "2021"
-rust-version = "1.85"
-publish = false
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+description = "Host-side benchmark harness for ShawnCore"
+repository.workspace = true
+license-file.workspace = true
+publish.workspace = true
 
 [dependencies]
 shawncore-pq-crypto = { path = "../shawncore-pq-crypto" }

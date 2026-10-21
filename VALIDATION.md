@@ -1,11 +1,13 @@
-> **VALIDATION DISCLAIMER:** The evidence recorded in this document reflects **host-environment simulation and testing only**. Target-specific hardware validation—including DMA coherency, ISR safety, cache maintenance, and silicon-specific timing—has not been executed. Historical host-level test passes must not be confused with or substituted for required on-device commercial validation.
+> **VALIDATION DISCLAIMER:** The evidence recorded in this document reflects **host-environment simulation and testing only**. Target-specific hardware validation, including DMA coherency, ISR safety, cache maintenance, and silicon-specific timing, has not been executed. Host-level passes must not be substituted for on-device validation.
 
 # Validation Record
 
-This record documents the host-side validation evidence currently carried by the 12.3.10 release-candidate. Historical 12.3.10 execution results remain identified as historical evidence. This document does not claim a fresh 12.3.10 test run unless explicitly marked as executed.
-Ubuntu 24.04.4 development container. The repository pins
-Rust 1.85.0, the `rustfmt`/`clippy` components, and the `aarch64-unknown-none`
-target in `rust-toolchain.toml`.
+This record documents the host-side validation evidence for the 12.3.11
+release-candidate. Every row below was executed for 12.3.11 on 2026-10-21 unless
+it is explicitly marked historical. Environment: Ubuntu 24.04.5 development
+container, x86-64 host, Rust 1.99.1 (pinned in `rust-toolchain.toml` with
+`rustfmt`, `clippy` and the `aarch64-unknown-none` target) plus the nightly
+toolchain for ThreadSanitizer, AddressSanitizer, Miri and fuzzing.
 
 This is host-side evidence for a prototype. It does not establish target
 hardware behavior, certification, production approval, or independent review.
@@ -14,19 +16,36 @@ hardware behavior, certification, production approval, or independent review.
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo fmt --all -- --check` | PASS | Actually executed and passed. |
-| `cargo fmt --manifest-path fuzz/Cargo.toml -- --check` | PASS | Actually executed and passed. |
-| `cargo check --workspace --all-targets` | PASS | Actually executed and passed. |
-| `cargo clippy --workspace --all-targets --all-features -- -D warnings` | PASS | Actually executed and passed. |
-| `cargo build --workspace --release` | PASS | Actually executed and passed. |
-| `cargo doc --workspace --no-deps` | PASS | Actually executed and passed. |
-| `cargo check --target aarch64-unknown-none --workspace` | PASS | Actually executed and passed; compile check only, not target execution. |
+| `cargo fmt --all -- --check` | PASS | Executed and passed. |
+| `cargo fmt --manifest-path fuzz/Cargo.toml -- --check` | PASS | Executed and passed. |
+| `cargo check --workspace --all-targets --locked` | PASS | Executed and passed. |
+| `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | PASS | Executed and passed. |
+| `cargo build --workspace --release --locked` | PASS | Executed and passed. |
+| `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | PASS | Executed and passed. |
+| `cargo check --target aarch64-unknown-none --workspace --locked` | PASS | Executed and passed; compile check only, not target execution. |
+| `cargo audit` and `cargo audit --file fuzz/Cargo.lock` | PASS | cargo-audit 0.22.2 against 1,348 advisories: no advisories for either lockfile (54 and 52 crates). |
 
 ## TEST VALIDATION
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets` | PASS | Historical 12.3.10 execution evidence: 56 unit tests (31 crypto, 25 RTOS); the FFI facade had no unit tests. The current source tree contains 86 #[test] functions; a fresh 12.3.10 execution is not claimed by this record.  [historical execution evidence]|
+| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 99 #[test] functions passed in both profiles: 53 in `shawncore-pq-crypto` (42 unit, 8 known-answer, 3 regression-vector), 37 in `shawncore-rtos-sync`, 9 in the validation harness (including the version-drift guards). |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 49 tests (39 unit, 8 known-answer, 2 regression-vector); the ML-DSA tests are feature-gated out. |
+| Repeated lib-test runs | PASS | The `shawncore-pq-crypto` unit-test binary ran 300 consecutive times with a 20 s hang timeout: 0 failures, 0 hangs. Before the test-callback fix the same loop hung in roughly 1 run in 17. |
+| `validation/run_tsan.sh` (nightly ThreadSanitizer) | PASS | Standalone workload of 3 rounds x 100,000 SPSC and ring-buffer transfers completed with no reported data race. |
+| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (53) and `shawncore-rtos-sync` (37) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
+| `cargo +nightly miri test -p shawncore-rtos-sync` with `-Zmiri-symbolic-alignment-check` | PASS | 37 tests passed. With `-Zmiri-strict-provenance` the run stops at the first scheduler test: the scheduler API takes stack addresses as integers (`u64`) and casts them to pointers, which strict provenance rejects by design. Miri was not run on `shawncore-pq-crypto`. |
+
+Known-answer tests (`shawncore-pq-crypto/tests/known_answers.rs`) check HMAC-SHA384
+against RFC 4231 cases 1 and 2, X25519 against the RFC 7748 section 6.1 vectors,
+and HKDF-SHA384, the 128-byte hybrid KDF and the Encrypt-then-MAC framing against
+vectors computed with Python `hmac`/`hashlib` and OpenSSL ChaCha20; a bit-flip
+sweep rejects every single-bit change to a valid tag. These passed against the old
+and the upgraded dependency set alike.
+
+Regression vectors (`tests/pq_regression_vectors.rs`) pin ML-KEM-1024 and ML-DSA-87
+output captured from `ml-kem` 0.2.3 and `ml-dsa` 0.1.1; `ml-kem` 0.3.3 reproduces
+them byte for byte. They detect dependency drift and are **not** NIST ACVP vectors.
 
 The executed tests cover AEAD and in-place round trips, authentication failure,
 FFI null/zero-length/overlap handling, session re-establishment, replay,
@@ -51,13 +70,14 @@ before dispatching cache maintenance.
 | Command or check | Result | Evidence |
 | --- | --- | --- |
 | C11 HAL syntax check | PASS | `make -C integration syntax` executed and passed. |
+| C++ header and smoke executable | PASS | `make -C integration cxx` built `integration/cxx_smoke.cpp` with `-std=c++17 -Wall -Wextra -Werror -pedantic`, linked the release archive, and ran a self-test and an HMAC-SHA384 vector. The header also passes `-fsyntax-only` as C++11/17/20, C99, C11 `-pedantic` and with `SHAWNCORE_LITE`. |
 | C smoke executable | PASS | `make -C integration run` automatically built the release archive, then built and executed `integration/c_api_smoke.c`; exit status 0. |
 | C wire handshake | PASS | The smoke binary drives two session managers through a complete hybrid handshake with every public value passed through its wire codec, then an authenticated packet exchange and a replay rejection. |
-| Public-symbol check | PASS | Header declarations and archive exports were compared and matched exactly: 134 symbols, empty diff. |
-| Self-contained archive check | PASS | For `aarch64-unknown-none`, the set of undefined symbols minus the set of archive-defined symbols is empty; `nm` shows no `malloc`, `free`, `__rust_alloc`, libc I/O, or pthread references. |
+| Public-symbol check | PASS | Header declarations and archive exports were compared and matched exactly: 135 symbols, empty diff. |
+| Self-contained archive check | PASS | `validation/check_archive.sh`: for `aarch64-unknown-none`, the set of undefined symbols minus the set of archive-defined symbols is empty, and `nm` shows no `malloc`, `free`, `__rust_alloc`, libc I/O, or pthread references. |
 | AddressSanitizer C smoke | PASS | `make -C integration asan` built with `-fsanitize=address` and executed with `ASAN_OPTIONS=detect_leaks=1`; no findings. |
 | Valgrind C smoke | PASS | `make -C integration valgrind` reported `ERROR SUMMARY: 0 errors from 0 contexts` and `in use at exit: 0 bytes in 0 blocks`. |
-| Rust-instrumented AddressSanitizer | RESERVED FOR COMMERCIAL PARTNERS | Attempted, but nightly failed to resolve `zeroize_derive` in sanitizer build mode (`E0463`). No Rust ASan result is claimed. |
+| Rust-instrumented AddressSanitizer | PASS | See `validation/run_asan.sh` above. The earlier `zeroize_derive` (`E0463`) failure came from sanitizing proc-macros; an explicit `--target` avoids it. |
 
 The C smoke test checks ABI size/alignment, selected null errors, zero-length
 AEAD/HKDF calls, wire codec rejection of null and wrong-length arguments, a full
@@ -69,14 +89,14 @@ is not target C ABI or hardware integration validation.
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo check --manifest-path fuzz/Cargo.toml --bin ffi_aead_fuzz` | PASS | Actually executed and passed. |
-| `cd fuzz && cargo +nightly fuzz run ffi_aead_fuzz -- -runs=1000 -max_len=512` | PASS | Actually executed: 1,000 executions seeded from 87 retained corpus files completed with no crash, no timeout, and no new artifact written. |
-| `cargo check --manifest-path fuzz/Cargo.toml --bin rtos_stateful_fuzz` | PASS | Actually executed and passed. |
+| `cargo check --manifest-path fuzz/Cargo.toml --bin <target> --locked` (3 targets) | PASS | Executed and passed for `ffi_aead_fuzz`, `session_replay_fuzz` and `rtos_stateful_fuzz`. |
+| `cd fuzz && cargo +nightly fuzz run ffi_aead_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 91 retained corpus files; no crash, timeout or artifact. |
+| `cd fuzz && cargo +nightly fuzz run session_replay_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 256 retained corpus files (544 s); no crash, timeout or artifact. |
+| `cd fuzz && cargo +nightly fuzz run rtos_stateful_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 225 retained corpus files; no crash, timeout or artifact. |
 
-CI configures separate 10,000-execution campaigns for the AEAD and RTOS
-stateful harnesses. The CI campaigns were not run for this local record. The
-smoke campaign is evidence only for its harness and duration; it is not proof
-of security.
+Corpus inputs discovered during these runs were not added to the repository. The
+same three 10,000-execution campaigns are configured in CI. A bounded campaign is
+evidence only for its harness and duration; it is not proof of security.
 
 ## STATIC REVIEW
 
@@ -97,12 +117,12 @@ any certification or approval conclusion.
 
 | Gate | Result | Reason |
 | --- | --- | --- |
-| AArch64 target behavior and ABI | RESERVED FOR COMMERCIAL PARTNERS | The target compiled, but no target board or target C execution was available. |
-| DMA/cache coherency and ownership | RESERVED FOR COMMERCIAL PARTNERS | Requires target memory map, device, cache-maintenance implementation, and board tests. |
-| Interrupt, ISR/NMI/FIQ, watchdog, and stack behavior | RESERVED FOR COMMERCIAL PARTNERS | Requires approved HAL, RTOS integration, and hardware fault-path tests. |
-| Hardware entropy quality | RESERVED FOR COMMERCIAL PARTNERS | Requires qualified source and target health testing. |
-| ML-KEM/ML-DSA KATs and interoperability | RESERVED FOR COMMERCIAL PARTNERS | No external KAT/interoperability suite was executed. |
-| Independent security review | RESERVED FOR COMMERCIAL PARTNERS | No independent review has been performed or claimed. |
+| AArch64 target behavior and ABI | NOT EXECUTED | The target compiled, but no target board or target C execution was available. |
+| DMA/cache coherency and ownership | NOT EXECUTED | Requires target memory map, device, cache-maintenance implementation, and board tests. |
+| Interrupt, ISR/NMI/FIQ, watchdog, and stack behavior | NOT EXECUTED | Requires approved HAL, RTOS integration, and hardware fault-path tests. |
+| Hardware entropy quality | NOT EXECUTED | Requires qualified source and target health testing. |
+| ML-KEM/ML-DSA ACVP known-answer tests and interoperability | NOT EXECUTED | No external KAT or interoperability suite was run. Regression vectors exist but are not conformance evidence. |
+| Independent security review | NOT EXECUTED | No independent review has been performed or claimed. |
 
 ## NOT YET VALIDATED
 
@@ -114,26 +134,26 @@ explicitly outside the evidence collected in this host-side validation record.
 `.gitignore` excludes `target/`, `fuzz/target/`, fuzz crash artifacts, generated
 documentation/packaging output, compiled object/library files, and editor/OS
 metadata. Intentional fuzz corpus files and the fuzz lockfile are retained.
-`git diff --check` and the editor diagnostic check completed without reported
-errors.
+`git diff --check` completed without reported errors.
 
 The tracked source tree contains no generated build output. `target/` and
 `fuzz/target/` are ignored local build directories and are not part of the
-distribution set; they were removed from the working tree during release
-cleanup, so reproducing this evidence requires rebuilding from source. Before
-external distribution, commit the intended source set so the recipient can
+distribution set, so reproducing this evidence requires rebuilding from source.
+Before external distribution, commit the intended source set so the recipient can
 reproduce this evidence from the delivered revision.
-
-## 🚀 Commercial Hardware Validation Opportunity
-*Note to Enterprise Evaluators:* ShawnCore is currently passing all host-side validation, ASan, and Fuzzing gates. The final bare-metal target validation (cache coherency and DMA callbacks) is reserved for commercial hardware partners. If you are evaluating ShawnCore for a proprietary flight-controller or RTOS architecture, please reach out to discuss a hardware Proof-of-Concept (PoC) integration.
 
 ## MIRI
 
-Miri: PASS (maintainer-reported) — `cargo +nightly miri test --workspace --all-targets` with `MIRIFLAGS="-Zmiri-strict-provenance -Zmiri-symbolic-alignment-check"` completed without reported failures.
+See the TEST VALIDATION table. The earlier maintainer-reported claim of a
+workspace-wide pass with `-Zmiri-strict-provenance` was not reproduced and is no
+longer carried forward: strict provenance rejects the scheduler's integer stack
+addresses, and `shawncore-pq-crypto` has not been run under Miri for this record.
 
 ## Current Source Inventory
 
-The current repository source tree contains **86 Rust functions annotated with `#[test]`**. This is a source-tree inventory, not a claim that all 62 tests were freshly executed for this release. Historical command results retain their original execution context.
+The repository contains **99 Rust functions annotated with `#[test]`**. All 99 were
+executed and passed in the `cargo test --workspace --all-targets` runs recorded
+above.
 
 ## Lite Validation Matrix
 

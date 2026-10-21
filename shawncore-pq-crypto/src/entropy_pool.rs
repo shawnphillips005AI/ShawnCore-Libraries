@@ -330,10 +330,7 @@ mod tests {
     static ENTROPY_TEST_SERIAL_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     use super::*;
-    use crate::ffi_callbacks::{
-        shawncore_crypto_register_cache_flush, shawncore_crypto_register_disable_interrupts,
-        shawncore_crypto_register_restore_interrupts,
-    };
+    use crate::test_support;
     use core::ptr;
     use core::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
     use std::sync::mpsc;
@@ -343,13 +340,7 @@ mod tests {
     static REENTRY_CACHE_RANGE: AtomicPtr<u8> = AtomicPtr::new(ptr::null_mut());
     static REENTERED: AtomicBool = AtomicBool::new(false);
 
-    extern "C" fn disable_interrupts() -> usize {
-        0
-    }
-
-    extern "C" fn restore_interrupts(_: usize) {}
-
-    extern "C" fn reentrant_cache_flush(ptr: *const u8, _: usize) {
+    fn reentrant_cache_flush(ptr: *const u8, _: usize) {
         if ptr != REENTRY_CACHE_RANGE.load(Ordering::Acquire)
             || REENTERED.swap(true, Ordering::AcqRel)
         {
@@ -440,6 +431,11 @@ mod tests {
 
     #[test]
     fn mix_entropy_is_bounded_per_invocation() {
+        // Shares the global queue and consumer gate with the serialized tests.
+        let _entropy_test_guard = ENTROPY_TEST_SERIAL_LOCK
+            .lock()
+            .expect("entropy test lock poisoned");
+        test_support::install_callbacks();
         let pool = EntropyPool::new();
         let mut pushed = 0usize;
         for value in 0u8..=8u8 {
@@ -461,11 +457,8 @@ mod tests {
         let _entropy_test_guard = ENTROPY_TEST_SERIAL_LOCK
             .lock()
             .expect("entropy test lock poisoned");
-        unsafe {
-            shawncore_crypto_register_disable_interrupts(Some(disable_interrupts));
-            shawncore_crypto_register_restore_interrupts(Some(restore_interrupts));
-            shawncore_crypto_register_cache_flush(Some(reentrant_cache_flush));
-        }
+        test_support::install_callbacks();
+        test_support::set_cache_flush_hook(Some(reentrant_cache_flush));
         REENTERED.store(false, Ordering::Release);
         REENTRY_CACHE_RANGE.store(REENTRY_TEST_POOL.pool.data.get().cast(), Ordering::Release);
 
@@ -482,5 +475,6 @@ mod tests {
         handle.join().unwrap();
         assert!(REENTERED.load(Ordering::Acquire));
         REENTRY_CACHE_RANGE.store(ptr::null_mut(), Ordering::Release);
+        test_support::set_cache_flush_hook(None);
     }
 }

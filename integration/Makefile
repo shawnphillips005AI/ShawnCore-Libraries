@@ -3,6 +3,7 @@
 # Targets:
 #   make            - build and run the smoke test (default)
 #   make syntax     - syntax-only check of the HAL stub file
+#   make cxx        - build and run the C++ smoke test (header must parse as C++)
 #   make smoke      - build the smoke executable
 #   make run        - run the smoke executable
 #   make asan       - build and run the smoke executable under AddressSanitizer
@@ -18,8 +19,10 @@
 
 ROOT      := $(abspath $(dir $(lastword $(MAKEFILE_LIST)))/..)
 CC        ?= cc
+CXX       ?= c++
 CARGO     ?= cargo
 CSTD      ?= -std=c11
+CXXSTD    ?= -std=c++17
 CWARN     ?= -Wall -Wextra -Werror
 INCLUDE   := -I $(ROOT)/shawncore-ffi/include
 PROFILE   ?= release
@@ -37,9 +40,11 @@ endif
 SMOKE_SRC := $(ROOT)/integration/c_api_smoke.c
 HAL_SRC   := $(ROOT)/integration/hal_stubs.c
 SMOKE_BIN := $(BUILDDIR)/shawncore-c-api-smoke
+CXX_SRC   := $(ROOT)/integration/cxx_smoke.cpp
+CXX_BIN   := $(BUILDDIR)/shawncore-cxx-smoke
 ASAN_BIN  := $(BUILDDIR)/shawncore-c-api-smoke-asan
 
-.PHONY: all syntax rustlib smoke run asan valgrind clean
+.PHONY: all syntax rustlib smoke run cxx asan valgrind clean
 
 all: run
 
@@ -60,6 +65,12 @@ $(SMOKE_BIN): rustlib $(SMOKE_SRC) | $(BUILDDIR)
 run: $(SMOKE_BIN)
 	$(SMOKE_BIN)
 
+$(CXX_BIN): rustlib $(CXX_SRC) | $(BUILDDIR)
+	$(CXX) $(CXXSTD) $(CWARN) -pedantic $(INCLUDE) $(CXX_SRC) $(STATICLIB) -o $@
+
+cxx: $(CXX_BIN)
+	$(CXX_BIN)
+
 $(ASAN_BIN): rustlib $(SMOKE_SRC) | $(BUILDDIR)
 	$(CC) $(CSTD) $(CWARN) -fsanitize=address -fno-omit-frame-pointer \
 		$(INCLUDE) $(SMOKE_SRC) $(STATICLIB) -o $@
@@ -71,4 +82,4 @@ valgrind: $(SMOKE_BIN)
 	valgrind --error-exitcode=1 --leak-check=full $(SMOKE_BIN)
 
 clean:
-	rm -f $(SMOKE_BIN) $(ASAN_BIN)
+	rm -f $(SMOKE_BIN) $(ASAN_BIN) $(CXX_BIN)

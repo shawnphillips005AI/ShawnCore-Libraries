@@ -7,7 +7,72 @@ qualification, or production readiness.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased]
+## [12.3.11] — 2026-10-21
+
+### Changed
+- Upgraded the pinned Rust toolchain from 1.85.0 to 1.99.1 (`rust-toolchain.toml`,
+  crate `rust-version` fields, CI workflow, and documentation).
+- Host-only tooling (`shawncore-benchmarks`, `tsan-host-validation`) now compiles to
+  an inert stub on bare-metal targets so the documented
+  `cargo check --target aarch64-unknown-none --workspace` gate covers the whole
+  workspace again; the validation placeholder library is now `#![no_std]`.
+- C smoke test routes its deliberate null argument through a volatile pointer so
+  `-Wnonnull` on C11 `[static N]` parameters does not reject the test at compile
+  time; the runtime null-rejection contract is still exercised.
+- Upgraded dependencies: `ml-kem` 0.2.3 to 0.3.3, `x25519-dalek` 2.0 to 3.0,
+  `sha2` 0.10 to 0.11, `hmac`/`hkdf` 0.12 to 0.13, plus in-range lockfile updates.
+  Every known-answer and regression vector listed below was recorded or checked
+  before the upgrade and is byte-identical after it.
+- `ml_kem_wrapper` is ported to the `ml-kem` 0.3 API. `PublicKey1024::from_bytes`
+  (and `shawncore_crypto_ml_kem_publickey_from_bytes`) now applies the FIPS 203
+  modulus check and rejects non-canonical encodings.
+- CI is reorganized into `rust`, `c-integration`, `tsan` and `fuzz` jobs. The
+  duplicated `cargo audit` steps and the invalid `cargo audit --manifest-path`
+  invocation are removed; Lite tests, Valgrind, ThreadSanitizer, `cargo doc` with
+  warnings denied, and the archive checks now run in CI.
+- `validation/release_gate.sh` now also checks the fuzz crate formatting, runs the
+  Lite crypto tests and the bare-metal check, and invokes the new
+  `validation/check_archive.sh` (header/archive symbol parity and aarch64 archive
+  self-containment). Its `fail()` helper printed a literal `%s` and is fixed.
+
+### Added
+- `shawncore.h` is now valid C++ (it declared `extern "C"` but did not parse as
+  C++). Fixed-length parameters use `SHAWNCORE_MIN_LEN(n)`, which expands to
+  `static n` for C99/C11 and to `n` under C++ and MSVC. The function surface is
+  unchanged (135 symbols). `integration/cxx_smoke.cpp` (`make -C integration cxx`)
+  builds, links and runs from C++17 in CI and in the release gate.
+- `SHAWNCORE_VERSION_MAJOR`/`MINOR`/`PATCH`/`STRING` in the header, with
+  `validation/tests/release_metadata.rs` failing if the header, the crate version,
+  `RELEASE_MANIFEST.txt` or the newest changelog heading disagree.
+- Package version, edition, `rust-version`, repository and `publish` are defined once
+  in `[workspace.package]` and inherited by every crate. The redundant path-dependency
+  version pins in `shawncore-ffi` are removed.
+- The benchmark banner reports the crate version and the host platform instead of a
+  hard-coded version and a `TARGET` variable that is unset at run time.
+- Known-answer tests (`shawncore-pq-crypto/tests/known_answers.rs`) for
+  HMAC-SHA384 (RFC 4231), X25519 (RFC 7748), HKDF-SHA384, the hybrid KDF, and the
+  AEAD framing, with vectors produced by independent implementations, plus a
+  per-bit tag-tamper sweep.
+- Regression vectors (`tests/pq_regression_vectors.rs`) that pin ML-KEM-1024 and
+  ML-DSA-87 output across dependency upgrades. They are not NIST ACVP vectors.
+
+### Fixed
+- Resolved Rust 1.99 clippy `-D warnings` regressions: `unnecessary_map_or` in the
+  DMA trace validation, `unused_assignments` on the scheduler stack-canary
+  corruption write (now an explicit raw-pointer write), and `manual_is_multiple_of`
+  in the alignment checks.
+- Unit tests could hang or fail intermittently. An unregistered cache-flush
+  callback halts by design, and several entropy tests reached it before any test
+  had registered one; one entropy test also raced the global queue consumer gate.
+  All pq-crypto unit tests now register one shared dispatcher
+  (`test_support`), and the unserialized entropy test takes the serial lock.
+- The Lite test configuration did not compile because unit tests referenced
+  ML-DSA unconditionally. ML-DSA-only test code is now feature-gated.
+- Corrected stale layout sizes, symbol counts, test counts and fuzz-corpus counts
+  in the documentation, removed a misplaced section and a reference to a
+  nonexistent `patch.py`, and aligned the licensing text with `LICENSE`.
+- Removed a duplicated preamble and duplicated `12.3.10` section heading from this
+  changelog.
 
 ### Lite MCU footprint profile
 - Added and documented a constrained-MCU Lite configuration.
@@ -19,16 +84,6 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Completed entropy SPSC ordinary-memory payload access.
 - Preserved volatile access only for explicit secret zeroization.
 - Added regression coverage for FIFO ordering and slot scrubbing.
-
-## [12.3.10] — 2026-09-11
-
-
-All notable changes to this project are documented here. This project is a
-prototype under external technical evaluation; version numbers track the
-internal release-candidate line and do not imply certification, hardware
-qualification, or production readiness.
-
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [12.3.10] — 2026-09-11
 
