@@ -100,8 +100,12 @@ in portable `no_std` Rust at all.
   dependency's precomputed-table path. Table selection timing is a property of
   `curve25519-dalek` and the target compiler output and has not been measured
   here, the same as every other constant-time property in this repository.
-- NIST ACVP known-answer tests for ML-KEM and ML-DSA have not been run. What
-  exists instead: byte-for-byte agreement with OpenSSL 3.5.8 (an independent
+- Official NIST ACVP sample vectors for ML-KEM-1024 (key generation,
+  encapsulation, decapsulation, key checks) and ML-DSA-87 (key generation,
+  signature verification) pass, but ML-DSA signature generation, non-empty-context
+  signing and pre-hash modes are not exercised and no CAVP/CMVP algorithm
+  validation has been performed. What exists beyond that: byte-for-byte agreement
+  with OpenSSL 3.5.8 (an independent
   implementation) for ML-KEM-1024 key generation, deterministic encapsulation,
   decapsulation and implicit rejection, ML-DSA-87 key generation, deterministic
   signing and verification, and one complete session derivation re-implemented in

@@ -58,8 +58,9 @@ Every claim below is reproducible from a clean checkout with
 | **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
 | **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
 | **135 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
-| **154 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 83-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
+| **159 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 87-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
 | **Known-answer tests for the classical primitives** | HMAC-SHA384 (RFC 4231), X25519 (RFC 7748 section 6.1), ChaCha20 (RFC 8439 keystream, cross-checked with OpenSSL), HKDF-SHA384, the hybrid KDF, and the AEAD framing, with vectors produced by independent implementations. |
+| **Official NIST ACVP sample vectors** | ML-KEM-1024 key generation, encapsulation, decapsulation and both key checks, and ML-DSA-87 key generation and signature verification, copied verbatim from usnistgov/ACVP-Server at a pinned commit; all 120 cases pass. Not a CAVP/CMVP validation. See [VALIDATION.md](VALIDATION.md). |
 | **Cross-implementation agreement with OpenSSL 3.5.8** | ML-KEM-1024 key generation from seed, deterministic encapsulation, decapsulation and implicit rejection, ML-DSA-87 key generation, deterministic signing and verification, and one complete hybrid session (transcript, key split, both packet directions) re-derived independently in Python, all byte-for-byte identical. Regenerate with [`validation/gen_openssl_vectors.sh`](validation/gen_openssl_vectors.sh). These are **not** NIST ACVP vectors. |
 | **Adversarial protocol tests** | Active-attacker tests for reflection, duplication, reordering, window edges, forged tags and sequence numbers, every single-bit flip, truncation, cross-session replay, failed-handshake retry, and a demonstration that an active intermediary can relay an unauthenticated handshake. |
 | **Test sensitivity** | 16 deliberate faults (accepting any tag, disabling replay detection, committing before authentication, boundary off-by-ones, dropped MAC and transcript coverage, skipped key wipes, a Lite feature leak) were applied to a disposable copy; every one made the suite fail. One gap, an unobserved key wipe, was found and closed. |
@@ -396,7 +397,7 @@ The evidence behind each line is in [VALIDATION.md](VALIDATION.md).
 **IMPLEMENTED** — AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF and
 directional session keys, wire codecs, FFI surfaces, RTOS primitives, C HAL stubs.
 
-**TESTED** — 154 Rust #[test] functions covering crypto round trips and tampering,
+**TESTED** — 159 Rust #[test] functions covering crypto round trips and tampering,
 known-answer vectors for the classical primitives, wire round trips proving
 semantic equivalence after decode, FFI null/zero-length and overlap handling,
 session re-establishment and replay paths, queue reuse and corruption paths,

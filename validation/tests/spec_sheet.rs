@@ -535,6 +535,23 @@ fn platform_requirement_and_independent_evidence_are_enforced_and_documented() {
             "vector {key} missing"
         );
     }
+    let acvp = read("shawncore-pq-crypto/tests/vectors/acvp_fips203_204.txt");
+    for family in [
+        "mlkem.keygen.",
+        "mlkem.encap.",
+        "mlkem.decap.",
+        "mlkem.ekcheck.",
+        "mlkem.dkcheck.",
+        "mldsa.keygen.",
+        "mldsa.sigver.",
+    ] {
+        assert!(acvp.contains(family), "ACVP family {family} missing");
+    }
+    assert_doc_contains(
+        &read("VALIDATION.md"),
+        "VALIDATION.md",
+        "usnistgov/ACVP-Server",
+    );
     assert_doc_contains(&read("VALIDATION.md"), "VALIDATION.md", "OpenSSL 3.5.8");
     assert_doc_contains(&read("SECURITY.md"), "SECURITY.md", "unauthenticated");
 }

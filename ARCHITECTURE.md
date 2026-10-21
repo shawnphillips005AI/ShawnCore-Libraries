@@ -580,9 +580,11 @@ Stated here so it is not inferred from silence:
 - Cache coherency, DMA visibility, and barrier correctness on a real board.
 - ISR, NMI, FIQ, and watchdog behavior under fault conditions.
 - Hardware entropy quality.
-- ML-KEM / ML-DSA external known-answer and interoperability testing. Regression
-  vectors pin the current dependency output, and RFC-derived known-answer tests
-  cover the classical primitives, but neither is a NIST ACVP result.
+- ML-KEM / ML-DSA CAVP/CMVP validation and interoperability with a second peer
+  over a real link. Official ACVP sample vectors for ML-KEM-1024 and ML-DSA-87
+  key generation and verification pass (see VALIDATION.md); regression vectors and
+  OpenSSL cross-implementation vectors add drift and interoperability evidence, but
+  none of this is an algorithm validation.
 - Side-channel behavior of the compiled artifact on the target core.
 - Peer identity, PKI, trust anchors, and revocation — no identity model is
   defined here.

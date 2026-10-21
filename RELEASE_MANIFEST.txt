@@ -2,7 +2,7 @@ ShawnCore-Libraries Release Manifest
 ====================================
 
 Release: 12.3.11
-Generated UTC: 2026-10-21T18:50:00+00:00
+Generated UTC: 2026-10-21T19:02:53+00:00
 
 Toolchain
 ---------
@@ -11,7 +11,7 @@ cargo: cargo 1.99.1 (5f94df478 2026-08-27)
 
 Repository inventory
 --------------------
-Rust #[test] functions (source inventory): 154
+Rust #[test] functions (source inventory): 159
 Exported C symbols (header/archive parity): 135
 
 Locally verifiable release hygiene
@@ -23,8 +23,8 @@ Dependency advisories (cargo audit, root and fuzz lockfiles): PASS (none reporte
 
 Validation evidence
 -------------------
-Tests: EXECUTED — 154 tests pass in debug and release; 83 in the Lite configuration.
-Known-answer tests: EXECUTED — HMAC-SHA384 (RFC 4231), X25519 (RFC 7748), ChaCha20 (RFC 8439 keystream), HKDF-SHA384, hybrid KDF and AEAD framing (independently computed vectors). ML-KEM/ML-DSA: regression vectors plus byte-for-byte agreement with OpenSSL 3.5.8; NIST ACVP not run.
+Tests: EXECUTED — 159 tests pass in debug and release; 87 in the Lite configuration.
+Known-answer tests: EXECUTED — HMAC-SHA384 (RFC 4231), X25519 (RFC 7748), ChaCha20 (RFC 8439 keystream), HKDF-SHA384, hybrid KDF and AEAD framing (independently computed vectors). ML-KEM/ML-DSA: official NIST ACVP sample vectors (ML-KEM-1024 keygen/encap/decap/key checks, ML-DSA-87 keygen/verify; 120 cases), regression vectors, and byte-for-byte agreement with OpenSSL 3.5.8. No CAVP/CMVP validation.
 Cross-implementation: EXECUTED — ML-KEM-1024 keygen/encapsulation/decapsulation/implicit rejection, ML-DSA-87 keygen/deterministic signature/verification and one full session derivation agree with OpenSSL 3.5.8 / an independent Python re-implementation.
 Adversarial protocol tests: EXECUTED — 22 active-attacker tests; the unauthenticated handshake is demonstrated to be relayable by an intermediary.
 Mutation testing: EXECUTED — 16 deliberate faults on a disposable copy, all detected; one pre-existing gap (unobserved key wipe) found and closed.
@@ -38,7 +38,7 @@ AddressSanitizer (C smoke): EXECUTED — PASS.
 Valgrind (C smoke): EXECUTED — 0 errors and no allocations left in use at exit.
 Hardware validation: NOT CLAIMED
 Independent security review: NOT CLAIMED
-Interoperability/KAT cross-validation: PARTIAL — OpenSSL 3.5.8 agreement on host; NIST ACVP and interoperability with a second peer over a real link NOT CLAIMED
+Interoperability/KAT cross-validation: PARTIAL — ACVP sample vectors and OpenSSL 3.5.8 agreement on host; ML-DSA signature generation vectors, algorithm validation and interoperability with a second peer over a real link NOT CLAIMED
 Formal verification/certification: NOT CLAIMED
 
 Interface-boundary review priorities

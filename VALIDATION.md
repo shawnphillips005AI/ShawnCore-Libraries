@@ -24,20 +24,20 @@ hardware behavior, certification, production approval, or independent review.
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | PASS | Executed and passed. |
 | `cargo check --target aarch64-unknown-none --workspace --locked` | PASS | Executed and passed; compile check only, not target execution. |
 | `cargo audit` and `cargo audit --file fuzz/Cargo.lock` | PASS | cargo-audit 0.22.2 against 1,348 advisories: no advisories for either lockfile (54 and 52 crates). |
-| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 154 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
+| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 159 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
 
 ## TEST VALIDATION
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 154 #[test] functions passed in both profiles: 88 in `shawncore-pq-crypto` (52 unit, 8 known-answer, 3 regression-vector, 22 adversarial protocol, 3 OpenSSL cross-implementation), 44 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 21 in the validation harness (host traces, layout contracts, version-drift guards and the 12-test spec-sheet suite). |
+| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 159 #[test] functions passed in both profiles: 93 in `shawncore-pq-crypto` (52 unit, 8 known-answer, 3 regression-vector, 22 adversarial protocol, 3 OpenSSL cross-implementation, 5 ACVP), 44 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 21 in the validation harness (host traces, layout contracts, version-drift guards and the 12-test spec-sheet suite). |
 | `cargo test -p shawncore-pq-crypto --test adversarial_protocol --test openssl_interop --locked` | PASS | 22 active-attacker tests and 3 cross-implementation tests (see the sections below the table). |
-| `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 83 tests (49 unit, 8 known-answer, 22 adversarial protocol, 2 regression-vector, 2 OpenSSL cross-implementation); the ML-DSA tests are feature-gated out. |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 87 tests (49 unit, 8 known-answer, 22 adversarial protocol, 2 regression-vector, 2 OpenSSL cross-implementation, 4 ACVP); the ML-DSA tests are feature-gated out. |
 | `cargo test -p shawncore-validation --test spec_sheet --locked` | PASS | 12 tests: crypto and wire sizes, replay window (offset 63 accepted, 64 rejected), nonce format, uniform-entropy rejection, entropy queue capacity and mix bound, scheduler/state machine/TCB, DMA pool alignment, token and zeroization behavior, object sizes, the C header surface (function, type and callback counts, no secret-key serialization), and drift checks that the README, ARCHITECTURE, VALIDATION, RELEASE_MANIFEST, CI workflow and BENCHMARKS record state the same numbers. It found a mis-rounded ops/sec figure in the README on its first run. |
-| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (88 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (93 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
 | Repeated lib-test runs | PASS | The `shawncore-pq-crypto` unit-test binary ran 300 consecutive times with a 20 s hang timeout: 0 failures, 0 hangs. Before the test-callback fix the same loop hung in roughly 1 run in 17. |
 | `validation/run_tsan.sh` (nightly ThreadSanitizer) | PASS | Standalone workload of 3 rounds x 100,000 SPSC and ring-buffer transfers completed with no reported data race. |
-| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (88) and `shawncore-rtos-sync` (44) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
+| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (93) and `shawncore-rtos-sync` (44) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
 | `cargo +nightly miri test -p shawncore-rtos-sync` with `-Zmiri-symbolic-alignment-check` | PASS | 44 tests passed. With `-Zmiri-strict-provenance` the run stops at the first scheduler test: the scheduler API takes stack addresses as integers (`u64`) and casts them to pointers, which strict provenance rejects by design. Miri was not run on the lattice-heavy ML-KEM/ML-DSA tests or on the OpenSSL interop tests. It ran on all 44 `shawncore-rtos-sync` tests and on 24 `shawncore-pq-crypto` tests (entropy pool and queue, session counters, replay window, key-wipe observation, wire-codec pointer validation, and the null/oversized-length/misalignment FFI tests), all with `-Zmiri-symbolic-alignment-check`; the only diagnostic was the expected integer-to-pointer cast warning from the deliberately bogus never-dereferenced address in `absurd_lengths_are_rejected_before_any_dereference`. The earlier run caught undefined behavior in the test-only cache-flush dispatcher (an integer-to-function-pointer transmute), which is fixed. |
 
 Known-answer tests (`shawncore-pq-crypto/tests/known_answers.rs`) check HMAC-SHA384
@@ -49,7 +49,30 @@ and the upgraded dependency set alike.
 
 Regression vectors (`tests/pq_regression_vectors.rs`) pin ML-KEM-1024 and ML-DSA-87
 output captured from `ml-kem` 0.2.3 and `ml-dsa` 0.1.1; `ml-kem` 0.3.3 reproduces
-them byte for byte. They detect dependency drift and are **not** NIST ACVP vectors.
+them byte for byte. They detect dependency drift and are not conformance vectors; the official ACVP vectors are in the next section.
+
+## Official ACVP known-answer tests
+
+`shawncore-pq-crypto/tests/acvp_kat.rs` runs the **official NIST ACVP-Server sample
+vectors** (usnistgov/ACVP-Server, commit `975de31eb83d87039ec88934fdc47d8c312b892d`, vector
+set id 42), copied verbatim into `tests/vectors/acvp_fips203_204.txt` by
+`validation/fetch_acvp_vectors.py` with the source file hashes recorded in its header. All pass:
+
+| Set | Cases | Checked |
+| --- | ---: | --- |
+| ML-KEM-1024 key generation | 25 | Encapsulation key and the 3,168-byte expanded decapsulation key from `d`, `z` |
+| ML-KEM-1024 encapsulation | 25 | Ciphertext and shared secret from `ek`, `m` |
+| ML-KEM-1024 decapsulation | 10 | Shared secret from the supplied expanded key and ciphertext |
+| ML-KEM-1024 encapsulation-key check | 10 | Accept/reject verdict of `PublicKey1024::from_bytes` (FIPS 203 modulus check) |
+| ML-KEM-1024 decapsulation-key check | 10 | Accept/reject verdict when loading the expanded key |
+| ML-DSA-87 key generation | 25 | Public key from the 32-byte seed |
+| ML-DSA-87 signature verification (external, pure) | 15 | Every accept/reject verdict, with the vector's context string |
+
+These are the published sample vectors, not a CAVP/CMVP validation or FIPS certificate, and
+they say nothing about timing. Not exercised because the library has no entry point for
+them: ML-DSA signature generation from an expanded key, non-empty-context signing and
+pre-hash modes. Expanded-form decapsulation keys are deprecated in the `ml-kem` crate and are
+used here only because ACVP supplies them.
 
 ## Cross-implementation vectors
 
@@ -216,7 +239,7 @@ any certification or approval conclusion.
 | DMA/cache coherency and ownership | NOT EXECUTED | Requires target memory map, device, cache-maintenance implementation, and board tests. |
 | Interrupt, ISR/NMI/FIQ, watchdog, and stack behavior | NOT EXECUTED | Requires approved HAL, RTOS integration, and hardware fault-path tests. |
 | Hardware entropy quality | NOT EXECUTED | Requires qualified source and target health testing. |
-| ML-KEM/ML-DSA ACVP known-answer tests and interoperability | NOT EXECUTED | No external KAT or interoperability suite was run. Regression vectors exist but are not conformance evidence. |
+| ML-KEM/ML-DSA full ACVP coverage, CAVP/CMVP validation, and interoperability with a second peer over a real link | NOT EXECUTED | Official ACVP sample vectors for ML-KEM-1024 and ML-DSA-87 key generation and verification were run (see "Official ACVP known-answer tests"); ML-DSA signature generation, non-empty-context signing and pre-hash modes are not exercised, and no algorithm validation was performed. |
 | Independent security review | NOT EXECUTED | No independent review has been performed or claimed. |
 
 ## NOT YET VALIDATED
@@ -246,7 +269,7 @@ addresses, and `shawncore-pq-crypto` has only been run under Miri on its entropy
 
 ## Current Source Inventory
 
-The repository contains **154 Rust functions annotated with `#[test]`**. All 154 were
+The repository contains **159 Rust functions annotated with `#[test]`**. All 159 were
 executed and passed in the `cargo test --workspace --all-targets` runs recorded
 above.
 

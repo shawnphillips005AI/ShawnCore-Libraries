@@ -20,7 +20,11 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   clear `compile_error!` on targets without 64-bit pointers and native 64-bit
   atomics. `thumbv7em-none-eabihf` previously failed with scattered `AtomicU64` and
   shift-overflow errors.
-- **Evidence added:** 22 active-attacker protocol tests; cross-implementation
+- **Evidence added:** official NIST ACVP-Server sample vectors for ML-KEM-1024
+  (key generation, encapsulation, decapsulation, both key checks) and ML-DSA-87
+  (key generation, signature verification), 120 cases, all passing
+  (`tests/acvp_kat.rs`, fetched by `validation/fetch_acvp_vectors.py` at a pinned
+  commit); 22 active-attacker protocol tests; cross-implementation
   vectors against OpenSSL 3.5.8 (ML-KEM-1024, ML-DSA-87 and a complete session
   re-derived in Python) with reproducible generators; wraparound, boundary and
   fail-closed tests for the SPSC queue, ring buffer and DMA pool (including
