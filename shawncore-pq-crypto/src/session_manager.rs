@@ -314,12 +314,7 @@ impl SessionManager {
         Ok(())
     }
 
-    /// Assigns a unique RFC 8439 nonce to the next outbound packet.
-    ///
-    /// This advances `tx_counter`. Callers using `encrypt_packet` must not
-    /// call this method first for the same packet; `encrypt_packet` consumes
-    /// its own transmit nonce only when encryption succeeds.
-    /// Allocates the next transmit nonce and advances `tx_counter`.
+    /// Assigns the next RFC 8439 transmit nonce and advances `tx_counter`.
     ///
     /// `encrypt_packet` allocates and advances its own nonce internally. Do not
     /// call this method for a packet that will also be passed to `encrypt_packet`,

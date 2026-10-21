@@ -58,7 +58,7 @@ Every claim below is reproducible from a clean checkout with
 | **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
 | **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
 | **135 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
-| **99 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 49-test suite. |
+| **100 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 49-test suite. |
 | **Known-answer tests for the classical primitives** | HMAC-SHA384 (RFC 4231), X25519 (RFC 7748 section 6.1), HKDF-SHA384, the hybrid KDF, and the AEAD framing, with vectors produced by independent implementations. ML-KEM/ML-DSA have regression vectors only; see the open gates below. |
 | **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
 | **Fuzzed** | Three harnesses (`ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz`) with retained regression corpora; CI runs 10,000 executions of each. |
@@ -227,9 +227,9 @@ artifact on your target.
 
 | Profile | Archive bytes | Code + rodata bytes |
 |---|---:|---:|
-| `release` (full, ML-DSA enabled) | 6,839,576 | 623,429 |
-| `usv` (full, `opt-level = "z"`) | 6,670,822 | 282,485 |
-| `lite` (no ML-DSA, `opt-level = "z"`) | 6,521,938 | 251,130 |
+| `release` (full, ML-DSA enabled) | 6,839,704 | 623,457 |
+| `usv` (full, `opt-level = "z"`) | 6,670,662 | 282,497 |
+| `lite` (no ML-DSA, `opt-level = "z"`) | 6,522,042 | 251,154 |
 
 Static RAM in the archive is 4,489 bytes of `.bss`. Opaque object sizes are
 listed in [ARCHITECTURE.md](ARCHITECTURE.md#92-caller-allocated-opaque-objects).
@@ -274,7 +274,7 @@ The evidence behind each line is in [VALIDATION.md](VALIDATION.md).
 **IMPLEMENTED** — AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF and
 directional session keys, wire codecs, FFI surfaces, RTOS primitives, C HAL stubs.
 
-**TESTED** — 99 Rust #[test] functions covering crypto round trips and tampering,
+**TESTED** — 100 Rust #[test] functions covering crypto round trips and tampering,
 known-answer vectors for the classical primitives, wire round trips proving
 semantic equivalence after decode, FFI null/zero-length and overlap handling,
 session re-establishment and replay paths, queue reuse and corruption paths,

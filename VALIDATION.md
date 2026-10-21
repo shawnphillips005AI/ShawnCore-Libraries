@@ -24,18 +24,18 @@ hardware behavior, certification, production approval, or independent review.
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | PASS | Executed and passed. |
 | `cargo check --target aarch64-unknown-none --workspace --locked` | PASS | Executed and passed; compile check only, not target execution. |
 | `cargo audit` and `cargo audit --file fuzz/Cargo.lock` | PASS | cargo-audit 0.22.2 against 1,348 advisories: no advisories for either lockfile (54 and 52 crates). |
-| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 99 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
+| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 100 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
 
 ## TEST VALIDATION
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 99 #[test] functions passed in both profiles: 53 in `shawncore-pq-crypto` (42 unit, 8 known-answer, 3 regression-vector), 37 in `shawncore-rtos-sync`, 9 in the validation harness (including the version-drift guards). |
+| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 100 #[test] functions passed in both profiles: 53 in `shawncore-pq-crypto` (42 unit, 8 known-answer, 3 regression-vector), 37 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 9 in the validation harness (including the version-drift guards). |
 | `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 49 tests (39 unit, 8 known-answer, 2 regression-vector); the ML-DSA tests are feature-gated out. |
 | Repeated lib-test runs | PASS | The `shawncore-pq-crypto` unit-test binary ran 300 consecutive times with a 20 s hang timeout: 0 failures, 0 hangs. Before the test-callback fix the same loop hung in roughly 1 run in 17. |
 | `validation/run_tsan.sh` (nightly ThreadSanitizer) | PASS | Standalone workload of 3 rounds x 100,000 SPSC and ring-buffer transfers completed with no reported data race. |
 | `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (53) and `shawncore-rtos-sync` (37) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
-| `cargo +nightly miri test -p shawncore-rtos-sync` with `-Zmiri-symbolic-alignment-check` | PASS | 37 tests passed. With `-Zmiri-strict-provenance` the run stops at the first scheduler test: the scheduler API takes stack addresses as integers (`u64`) and casts them to pointers, which strict provenance rejects by design. Miri was not run on `shawncore-pq-crypto`. |
+| `cargo +nightly miri test -p shawncore-rtos-sync` with `-Zmiri-symbolic-alignment-check` | PASS | 37 tests passed. With `-Zmiri-strict-provenance` the run stops at the first scheduler test: the scheduler API takes stack addresses as integers (`u64`) and casts them to pointers, which strict provenance rejects by design. Miri was not run on the lattice-heavy `shawncore-pq-crypto` tests; it ran on `shawncore-rtos-sync` (37 tests) and on the crypto crate's entropy-pool, entropy-queue and session-state unit tests (12), all with `-Zmiri-symbolic-alignment-check`. That run caught undefined behavior in the test-only cache-flush dispatcher (an integer-to-function-pointer transmute), which is fixed. |
 
 Known-answer tests (`shawncore-pq-crypto/tests/known_answers.rs`) check HMAC-SHA384
 against RFC 4231 cases 1 and 2, X25519 against the RFC 7748 section 6.1 vectors,
@@ -94,6 +94,7 @@ is not target C ABI or hardware integration validation.
 | `cd fuzz && cargo +nightly fuzz run ffi_aead_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 91 retained corpus files; no crash, timeout or artifact. |
 | `cd fuzz && cargo +nightly fuzz run session_replay_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 256 retained corpus files (544 s); no crash, timeout or artifact. |
 | `cd fuzz && cargo +nightly fuzz run rtos_stateful_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 225 retained corpus files; no crash, timeout or artifact. |
+| `cd fuzz && cargo +nightly fuzz run <ffi_aead_fuzz\|rtos_stateful_fuzz> -- -runs=500000 -max_len=512 -seed=7` | PASS | Extended campaigns: 500,000 executions each (93 s and 48 s); no crash, timeout or artifact. |
 
 Corpus inputs discovered during these runs were not added to the repository. The
 same three 10,000-execution campaigns are configured in CI. A bounded campaign is
@@ -148,11 +149,11 @@ reproduce this evidence from the delivered revision.
 See the TEST VALIDATION table. The earlier maintainer-reported claim of a
 workspace-wide pass with `-Zmiri-strict-provenance` was not reproduced and is no
 longer carried forward: strict provenance rejects the scheduler's integer stack
-addresses, and `shawncore-pq-crypto` has not been run under Miri for this record.
+addresses, and `shawncore-pq-crypto` has only been run under Miri on its entropy and session-state tests.
 
 ## Current Source Inventory
 
-The repository contains **99 Rust functions annotated with `#[test]`**. All 99 were
+The repository contains **100 Rust functions annotated with `#[test]`**. All 100 were
 executed and passed in the `cargo test --workspace --all-targets` runs recorded
 above.
 

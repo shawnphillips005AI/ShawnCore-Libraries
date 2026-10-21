@@ -36,15 +36,16 @@ pub(crate) mod test_support {
         shawncore_crypto_register_cache_flush, shawncore_crypto_register_disable_interrupts,
         shawncore_crypto_register_restore_interrupts,
     };
-    use core::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Mutex;
 
-    static CACHE_FLUSH_HOOK: AtomicUsize = AtomicUsize::new(0);
+    type FlushHook = fn(*const u8, usize);
+
+    static CACHE_FLUSH_HOOK: Mutex<Option<FlushHook>> = Mutex::new(None);
 
     extern "C" fn cache_flush(ptr: *const u8, len: usize) {
-        let hook = CACHE_FLUSH_HOOK.load(Ordering::Acquire);
-        if hook != 0 {
-            // SAFETY: only `set_cache_flush_hook` stores a non-zero value, from a `fn` pointer.
-            let hook: fn(*const u8, usize) = unsafe { core::mem::transmute(hook) };
+        // Copy the hook out first: it may re-enter this callback, so the lock must not be held.
+        let hook = *CACHE_FLUSH_HOOK.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hook) = hook {
             hook(ptr, len);
         }
     }
@@ -64,8 +65,8 @@ pub(crate) mod test_support {
         }
     }
 
-    pub(crate) fn set_cache_flush_hook(hook: Option<fn(*const u8, usize)>) {
-        CACHE_FLUSH_HOOK.store(hook.map_or(0, |f| f as usize), Ordering::Release);
+    pub(crate) fn set_cache_flush_hook(hook: Option<FlushHook>) {
+        *CACHE_FLUSH_HOOK.lock().unwrap_or_else(|e| e.into_inner()) = hook;
     }
 }
 

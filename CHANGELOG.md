@@ -60,6 +60,12 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   ML-DSA-87 output across dependency upgrades. They are not NIST ACVP vectors.
 
 ### Fixed
+- The facade's panic handler now has the reentrancy guard that 12.3.8 documented but
+  the code never contained: a panic raised from inside a host panic hook halts in
+  the spin loop instead of recursing into the hook until the stack overflows.
+- The test-only cache-flush dispatcher converted an integer back into a function
+  pointer, which Miri reports as undefined behavior; it now holds the hook in a
+  `Mutex`.
 - Resolved Rust 1.99 clippy `-D warnings` regressions: `unnecessary_map_or` in the
   DMA trace validation, `unused_assignments` on the scheduler stack-canary
   corruption write (now an explicit raw-pointer write), and `manual_is_multiple_of`
