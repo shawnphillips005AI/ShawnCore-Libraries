@@ -420,6 +420,17 @@ fingerprints are bound, and the signatures travel in the clear. There is no revo
 rotation or provisioning mechanism; those are platform policy. Freshness depends on the key-
 generating side's entropy being fresh. Signing is deterministic (see Known Limitations).
 
+*Availability limits that cannot be removed inside the library* (analysis in
+[ANALYSIS.md](ANALYSIS.md), findings F7 to F9). The first message (`ek`, `xK`) is not authenticated,
+and the library cannot authenticate it. (1) An encapsulating manager that receives a second first
+message replaces its pending handshake, so a network attacker who can reach it can abort an
+in-progress handshake; use one `SessionManager` per attempt and do not share one between peers. This
+is pinned by `a_second_unauthenticated_first_message_evicts_the_pending_handshake`. (2) The
+encapsulating side performs an ML-KEM encapsulation and an ML-DSA signature for every first message
+it is given, so unauthenticated input costs it a signature each; rate limit attempts and bound the
+number of concurrent ones. (3) `initiate_handshake` wipes a live session at once; keep the old
+session in its own manager if traffic must continue during re-keying.
+
 *Integrator obligations.* Provision each side's trust anchor through a channel you trust. Supply
 unpredictable entropy and never reuse it. Give both sides identical `salt` and `app_info`; a
 mismatch is reported as `KeyConfirmationFailed` (salt) or `VerificationFailed` (`app_info`). Treat a

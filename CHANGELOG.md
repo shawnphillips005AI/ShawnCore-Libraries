@@ -9,6 +9,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [12.3.11] — 2026-10-21
 
+### Protocol analysis and documentation audit
+- **Added:** [ANALYSIS.md](ANALYSIS.md) (assumptions, claims with arguments and evidence, state
+  machine, findings F1 to F14, next steps for a reviewer); `validation/formal/handshake_model.py`
+  (bounded symbolic model with negative controls and redundancy probes);
+  `shawncore-pq-crypto/tests/attacker_enumeration.rs` (600 attacker-choice combinations against the
+  real code, plus a test that pins the pending-handshake eviction limitation);
+  `validation/check_docs.py` (dangling references and overclaim guard). All four run in the release
+  gate or the test suite. None of this is a formal verification, and ProVerif and Tamarin were not
+  available.
+- **Findings recorded, not changed:** an unauthenticated first message can evict a pending
+  handshake on the encapsulating side, costs it a signature, and one manager holds one pending
+  handshake (SECURITY.md section 10). No protocol or wire change was made.
+- **Upgrade assessment:** every direct dependency was already at its latest release and the
+  toolchain at current stable; nothing was upgraded.
+- **Documentation corrected:** a dangling function name, the gate descriptions in REVIEW.md and
+  README.md, and test counts (202 tests; Lite 100).
+
 ### C ABI boundary audit
 - **Fixed** (details and reproductions in VALIDATION.md, "C ABI boundary audit"): lengths above
   `PTRDIFF_MAX` and ranges that wrap the address space reached `slice::from_raw_parts` in the crypto

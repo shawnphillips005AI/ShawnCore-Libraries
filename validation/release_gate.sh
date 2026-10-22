@@ -130,6 +130,14 @@ step "header signatures"
 python3 "$ROOT/validation/check_header_signatures.py"
 pass "header signatures"
 
+step "bounded protocol model"
+python3 "$ROOT/validation/formal/handshake_model.py"
+pass "bounded protocol model"
+
+step "documentation references"
+python3 "$ROOT/validation/check_docs.py"
+pass "documentation references"
+
 step "C and C++ integration"
 make -C "$ROOT/integration" syntax run cxx asan
 if command -v valgrind >/dev/null 2>&1; then

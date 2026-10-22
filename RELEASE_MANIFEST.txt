@@ -2,7 +2,7 @@ ShawnCore-Libraries Release Manifest
 ====================================
 
 Release: 12.3.11
-Generated UTC: 2026-10-21T20:07:50+00:00
+Generated UTC: 2026-10-22T22:05:08+00:00
 
 Toolchain
 ---------
@@ -11,7 +11,7 @@ cargo: cargo 1.99.1 (5f94df478 2026-08-27)
 
 Repository inventory
 --------------------
-Rust #[test] functions (source inventory): 199
+Rust #[test] functions (source inventory): 202
 Exported C symbols (header/archive parity): 138
 
 Locally verifiable release hygiene
@@ -23,11 +23,12 @@ Dependency advisories (cargo audit, root and fuzz lockfiles): PASS (none reporte
 
 Validation evidence
 -------------------
-Tests: EXECUTED — 199 tests pass in debug and release; 100 in the Lite configuration.
+Tests: EXECUTED — 202 tests pass in debug and release; 100 in the Lite configuration.
 Known-answer tests: EXECUTED — HMAC-SHA384 (RFC 4231), X25519 (RFC 7748), ChaCha20 (RFC 8439 keystream), HKDF-SHA384, hybrid KDF and AEAD framing (independently computed vectors). ML-KEM/ML-DSA: official NIST ACVP sample vectors (ML-KEM-1024 keygen/encap/decap/key checks, ML-DSA-87 keygen/verify; 120 cases), regression vectors, and byte-for-byte agreement with OpenSSL 3.5.8. No CAVP/CMVP validation.
 Cross-implementation: EXECUTED — ML-KEM-1024 keygen/encapsulation/decapsulation/implicit rejection, ML-DSA-87 keygen/deterministic signature/verification and one full session derivation agree with OpenSSL 3.5.8 / an independent Python re-implementation.
 Adversarial protocol tests: EXECUTED — 22 active-attacker tests; the unauthenticated handshake is demonstrated to be relayable by an intermediary.
 Authenticated handshake: IMPLEMENTED AND TESTED — signed-transcript design with explicit key confirmation, protocol version 2 (ARCHITECTURE.md 4.5), 16 attacker tests, unit and C-ABI tests, byte-identical to an independent OpenSSL/Python derivation (including confirmation keys and tags), 15 mutants detected. NOT formally analyzed, NOT independently reviewed.
+Bounded protocol analysis: EXECUTED — validation/formal/handshake_model.py (symbolic model, ten scenarios, three negative controls detected) and tests/attacker_enumeration.rs (600 attacker-choice combinations against the real code); see ANALYSIS.md. Not ProVerif/Tamarin, not a proof, NOT a formal verification.
 Mutation testing: EXECUTED — validation/run_mutants.py, 23 faults on a disposable copy, all detected (reproducible from the archive); an earlier set of 24 faults came from a script that was not kept.
 Platform: 64-bit with native 64-bit atomics required (compile_error! otherwise); 32-bit Cortex-M confirmed unsupported.
 ThreadSanitizer: EXECUTED — standalone SPSC/ring-buffer workload, no reported race.

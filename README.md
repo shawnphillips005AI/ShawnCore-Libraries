@@ -58,12 +58,13 @@ Every claim below is reproducible from a clean checkout with
 | **Zero heap** | No `malloc`, no `__rust_alloc`, no allocator linked. Every object is caller-allocated via published `_sizeof()`/`_alignof()`. |
 | **Zero unwinding into C** | `panic = "abort"` in both profiles; the facade owns the single `no_std` panic handler. |
 | **138 exported symbols** | Header declarations and archive exports are diffed in CI and must match exactly. |
-| **199 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 100-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
+| **202 Rust #[test] functions** | Crypto round trips, tampering, replay, reordering, wire round trips, FFI ownership rejection, entropy callback reentrancy, queue reuse, DMA stale generations, scheduler bounds. The Lite configuration runs its own 100-test suite. A spec-sheet conformance suite (`validation/tests/spec_sheet.rs`) checks every number in the Specifications section against the code, the header and the benchmark record. |
 | **Known-answer tests for the classical primitives** | HMAC-SHA384 (RFC 4231), X25519 (RFC 7748 section 6.1), ChaCha20 (RFC 8439 keystream, cross-checked with OpenSSL), HKDF-SHA384, the hybrid KDF, and the AEAD framing, with vectors produced by independent implementations. |
 | **Official NIST ACVP sample vectors** | ML-KEM-1024 key generation, encapsulation, decapsulation and both key checks, and ML-DSA-87 key generation and signature verification, copied verbatim from usnistgov/ACVP-Server at a pinned commit; all 120 cases pass. Not a CAVP/CMVP validation. See [VALIDATION.md](VALIDATION.md). |
 | **Cross-implementation agreement with OpenSSL 3.5.8** | ML-KEM-1024 key generation from seed, deterministic encapsulation, decapsulation and implicit rejection, ML-DSA-87 key generation, deterministic signing and verification, and one complete hybrid session (transcript, key split, both packet directions) re-derived independently in Python, all byte-for-byte identical. Regenerate with [`validation/gen_openssl_vectors.sh`](validation/gen_openssl_vectors.sh). These are **not** NIST ACVP vectors. |
 | **Adversarial protocol tests** | Active-attacker tests for reflection, duplication, reordering, window edges, forged tags and sequence numbers, every single-bit flip, truncation, cross-session replay, failed-handshake retry, and a demonstration that an active intermediary can relay an unauthenticated handshake. |
 | **Authenticated handshake tests** | Sixteen active-attacker tests (impersonation, tampering with every transcript field and both tags, wrong trust anchor, salt mismatch, a validly signed but unusable exchange, a valid signature over a wrong tag, role and direction separation, replay, unconfirmed-session refusal, repeated and out-of-order calls, abandoned-handshake recovery) plus unit, C-ABI and C tests; binding, transcript, both confirmation keys and tags, both ML-DSA signatures and the resulting packets are byte-identical to an independent OpenSSL/Python derivation. Unreviewed and not formally analyzed. |
+| **Bounded protocol analysis** | `validation/formal/handshake_model.py` is a small symbolic (Dolev-Yao) model of the authenticated handshake: no attack in ten scenarios, including post-quantum break, classical break, key-compromise impersonation and forward secrecy, and the checker finds the attack in each of three deliberately weakened variants. `attacker_enumeration.rs` runs 600 attacker-choice combinations against the real code and requires the outcome an executable specification predicts. This is **not** ProVerif/Tamarin, not a proof and not a formal verification; see [ANALYSIS.md](ANALYSIS.md). |
 | **Test sensitivity** | `python3 validation/run_mutants.py` applies 23 deliberate faults (authenticated-handshake version 2 and C ABI boundary checks) to a disposable copy and requires the tests to fail; all 23 are killed. An earlier set of 24 faults was run with a script that was not kept and is reported as history only (see VALIDATION.md). |
 | **Clean under ASan + Valgrind** | 0 errors, 0 leaks on the C integration binary. |
 | **Fuzzed** | Four harnesses (`ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz`, `auth_handshake_fuzz`); the first three have retained regression corpora and a 10,000-execution CI job, the authenticated-handshake harness runs 3,000 executions (it signs and verifies ML-DSA per input). |
@@ -427,7 +428,7 @@ The evidence behind each line is in [VALIDATION.md](VALIDATION.md).
 **IMPLEMENTED** — AEAD, X25519, ML-KEM-1024, ML-DSA-87, hybrid KDF and
 directional session keys, wire codecs, FFI surfaces, RTOS primitives, C HAL stubs.
 
-**TESTED** — 199 Rust #[test] functions covering crypto round trips and tampering,
+**TESTED** — 202 Rust #[test] functions covering crypto round trips and tampering,
 known-answer vectors for the classical primitives, wire round trips proving
 semantic equivalence after decode, FFI null/zero-length and overlap handling,
 session re-establishment and replay paths, queue reuse and corruption paths,
@@ -489,6 +490,7 @@ certification or approval conclusion.
 |---|---|
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Design rationale, diagrams, measured layouts, concurrency model |
 | [SECURITY.md](SECURITY.md) | Trust boundaries, threat model, host integration contract |
+| [ANALYSIS.md](ANALYSIS.md) | Protocol analysis: assumptions, claims, bounded model results, state machine, findings (not a formal verification) |
 | [REVIEW.md](REVIEW.md) | Reviewer quickstart and requested review scope |
 | [VALIDATION.md](VALIDATION.md) | Host-side validation record and open external gates |
 | [BENCHMARKS.md](BENCHMARKS.md) | Host benchmark methodology |

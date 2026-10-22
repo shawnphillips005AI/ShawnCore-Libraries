@@ -24,20 +24,20 @@ hardware behavior, certification, production approval, or independent review.
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | PASS | Executed and passed. |
 | `cargo check --target aarch64-unknown-none --workspace --locked` | PASS | Executed and passed; compile check only, not target execution. |
 | `cargo audit` and `cargo audit --file fuzz/Cargo.lock` | PASS | cargo-audit 0.22.2 against 1,348 advisories: no advisories for either lockfile (54 and 52 crates). |
-| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 199 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
+| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 202 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
 
 ## TEST VALIDATION
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 199 #[test] functions passed in both profiles: 128 in `shawncore-pq-crypto` (70 unit, 8 known-answer, 3 regression-vector, 22 adversarial protocol, 4 OpenSSL cross-implementation, 5 ACVP, 16 authenticated handshake), 48 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 22 in the validation harness (host traces, layout contracts, version-drift guards and the 12-test spec-sheet suite). |
+| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 202 #[test] functions passed in both profiles: 131 in `shawncore-pq-crypto` (70 unit, 8 known-answer, 3 regression-vector, 22 adversarial protocol, 4 OpenSSL cross-implementation, 5 ACVP, 16 authenticated handshake, 3 attacker-choice conformance), 48 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 22 in the validation harness (host traces, layout contracts, version-drift guards and the 12-test spec-sheet suite). |
 | `cargo test -p shawncore-pq-crypto --test adversarial_protocol --test openssl_interop --locked` | PASS | 22 active-attacker tests and 3 cross-implementation tests (see the sections below the table). |
 | `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 100 tests (62 unit, 8 known-answer, 22 adversarial protocol, 2 regression-vector, 2 OpenSSL cross-implementation, 4 ACVP); the ML-DSA tests are feature-gated out. |
 | `cargo test -p shawncore-validation --test spec_sheet --locked` | PASS | 12 tests: crypto and wire sizes, replay window (offset 63 accepted, 64 rejected), nonce format, uniform-entropy rejection, entropy queue capacity and mix bound, scheduler/state machine/TCB, DMA pool alignment, token and zeroization behavior, object sizes, the C header surface (function, type and callback counts, no secret-key serialization), and drift checks that the README, ARCHITECTURE, VALIDATION, RELEASE_MANIFEST, CI workflow and BENCHMARKS record state the same numbers. It found a mis-rounded ops/sec figure in the README on its first run. |
-| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (128 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (131 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
 | Repeated lib-test runs | PASS | The `shawncore-pq-crypto` unit-test binary ran 300 consecutive times with a 20 s hang timeout: 0 failures, 0 hangs. Before the test-callback fix the same loop hung in roughly 1 run in 17. |
 | `validation/run_tsan.sh` (nightly ThreadSanitizer) | PASS | Standalone workload of 3 rounds x 100,000 SPSC and ring-buffer transfers completed with no reported data race. |
-| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (128) and `shawncore-rtos-sync` (48) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
+| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (131) and `shawncore-rtos-sync` (48) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
 | `cargo +nightly miri test -p shawncore-rtos-sync` with `-Zmiri-symbolic-alignment-check` | PASS | 48 tests passed (re-run on this revision, including the new RTOS ABI contract tests). With `-Zmiri-strict-provenance` the run stops at the first scheduler test: the scheduler API takes stack addresses as integers (`u64`) and casts them to pointers, which strict provenance rejects by design. Miri was not run on the lattice-heavy ML-KEM/ML-DSA tests or on the OpenSSL interop tests. It ran on all 44 `shawncore-rtos-sync` tests and on 24 `shawncore-pq-crypto` tests (entropy pool and queue, session counters, replay window, key-wipe observation, wire-codec pointer validation, and the null/oversized-length/misalignment FFI tests), all with `-Zmiri-symbolic-alignment-check`; the only diagnostic was the expected integer-to-pointer cast warning from the deliberately bogus never-dereferenced address in `absurd_lengths_are_rejected_before_any_dereference`. The earlier run caught undefined behavior in the test-only cache-flush dispatcher (an integer-to-function-pointer transmute), which is fixed. |
 
 Known-answer tests (`shawncore-pq-crypto/tests/known_answers.rs`) check HMAC-SHA384
@@ -272,6 +272,18 @@ two-party hybrid handshake conducted entirely through wire encodings, an
 authenticated packet exchange, replay rejection, and static-library linkage. It
 is not target C ABI or hardware integration validation.
 
+## Protocol analysis (bounded, not a formal verification)
+
+Method, assumptions, claims and findings are in [ANALYSIS.md](ANALYSIS.md). The results recorded
+here were produced on this revision.
+
+| Command or check | Result | Evidence |
+| --- | --- | --- |
+| `python3 validation/formal/handshake_model.py` | PASS | Bounded symbolic (Dolev-Yao) model of the authenticated handshake with ideal cryptography: no violation of agreement, key agreement or secrecy in ten scenarios (secret and public salt, a second trusted identity, salt mismatch, post-quantum break, classical break, forward secrecy, key-compromise impersonation both ways). Each of three weakened variants (no key confirmation, identities not bound, signature over the first message only) produces a violation, and two removals (ephemeral values from the transcript, `tag_K`) stay safe, which records them as defense in depth. Runs in under a second. It is a hand-written checker, not ProVerif or Tamarin, and covers a fixed finite scenario only. |
+| `cargo test -p shawncore-pq-crypto --test attacker_enumeration` | PASS | The real key-generating side was driven with 576 combinations of ciphertext, X25519 key, tag, signature, salt and `app_info` (genuine, from another session, attacker made, bit flipped, zero) and the real confirming side with 24 combinations of tag, signature and trust anchor. Every outcome matched the specification: acceptance only when everything is genuine, `VerificationFailed` for any altered field, `KeyConfirmationFailed` only for an authentic exchange with a different salt, nothing installed on failure, and the genuine message still completing after any rejected forgery. About 40 s in a debug build. A further test pins the limitation that a second unauthenticated first message evicts a pending handshake. |
+| Dependency and toolchain currency | PASS | All direct dependencies at their latest published versions, `cargo update --dry-run` locks 0 packages, toolchain 1.99.1 is current stable, `cargo audit` clean (2026-10-22). |
+| `python3 validation/check_docs.py` | PASS | Every test name, `shawncore_*` symbol, repository path and Markdown link referenced by the nine documents exists, and no line claims formal verification, a proof, FIPS validation, independent review or hardware qualification without a negation. It cannot judge whether a sentence is true. |
+
 ## C ABI boundary audit
 
 Scope: all 138 exported symbols (72 `shawncore_crypto_*`, 66 `shawncore_rtos_*`, each count including callback registration and the `sizeof`/`alignof` queries), the public
@@ -337,7 +349,7 @@ evidence only for its harness and duration; it is not proof of security.
 | Area | Result | Scope |
 | --- | --- | --- |
 | Unsafe code | REVIEWED | Raw pointers, FFI storage, callback conversion, stack canaries, queue payload access, and DMA byte zeroization were inspected. |
-| FFI | REVIEWED | Null and zero-length conventions, input/output/control/backing overlap checks, opaque lifecycle, alignment, callback ABI, and session-manager aliasing were inspected. The 12.3.11 audit of every `extern "C"` entry point found one missing alignment check (`encapsulate_for_peer`) and one reference-ordering hazard (`scheduler_create_task`); both are fixed with regression coverage for the former. The Phase 4 audit (section "C ABI boundary audit") found five further defects, all fixed with regression tests. No allocator use exists in library code (only test modules use `Box`). |
+| FFI | REVIEWED | Null and zero-length conventions, input/output/control/backing overlap checks, opaque lifecycle, alignment, callback ABI, and session-manager aliasing were inspected. The 12.3.11 audit of every `extern "C"` entry point found one missing alignment check (`encapsulate_for_peer`) and one reference-ordering hazard (`shawncore_rtos_scheduler_create_task`); both are fixed with regression coverage for the former. The Phase 4 audit (section "C ABI boundary audit") found five further defects, all fixed with regression tests. No allocator use exists in library code (only test modules use `Box`). |
 | Concurrency | MODEL PASS | SPSC ownership and Acquire/Release publication were reasoned about under the Rust memory model. No formal model checker was run. |
 | DMA/cache | REVIEWED | Cache callback transitions and the limits of page alignment/atomics were inspected; hardware coherency was not tested. |
 | Crypto | REVIEWED | AEAD lengths/authentication, X25519 checks, 128-byte hybrid KDF, directional key assignment, and cleanup paths were inspected. |
@@ -387,7 +399,7 @@ addresses, and `shawncore-pq-crypto` has only been run under Miri on its entropy
 
 ## Current Source Inventory
 
-The repository contains **199 Rust functions annotated with `#[test]`**. All 199 were
+The repository contains **202 Rust functions annotated with `#[test]`**. All 202 were
 executed and passed in the `cargo test --workspace --all-targets` runs recorded
 above.
 

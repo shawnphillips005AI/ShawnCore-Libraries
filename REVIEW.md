@@ -31,7 +31,7 @@ uses the complementary assignment.
 ## Important Boundaries
 
 - The authenticated handshake (`encapsulate_authenticated`, `finalize_authenticated`,
-  `confirm_peer`, protocol version 2 with explicit key confirmation; ARCHITECTURE.md section 4.5)
+  `confirm_peer`, protocol version 2 with explicit key confirmation; ARCHITECTURE.md section 4.5; analysis, assumptions and findings in ANALYSIS.md)
   is new, unreviewed and the highest-priority review item; SECURITY.md section 10 lists what
   a cryptographer should examine. The legacy handshake is unauthenticated and open to an active
   man-in-the-middle; SECURITY.md section 10 states the design, the evidence and the limits.
@@ -69,9 +69,12 @@ uses the complementary assignment.
   Clang/ASan, Valgrind, and `cargo-audit`.
 
 From the repository root, `bash validation/release_gate.sh` runs the complete
-host gate (format, clippy, tests, ThreadSanitizer, release build, feature-set
-check, Lite tests, bare-metal check, and header/archive checks). The basic Rust
-validation on its own:
+host gate: format, clippy, debug tests, ThreadSanitizer, AddressSanitizer,
+release build, release-profile tests and rustdoc, feature-set check, Lite tests,
+32-bit rejection, OpenSSL vector reproducibility, bare-metal check, header/archive
+symbol parity, header-versus-Rust signature check, the bounded protocol model,
+the documentation reference check, and the C/C++ smoke tests under ASan and
+Valgrind. The basic Rust validation on its own:
 
 ```text
 cargo fmt --all -- --check
@@ -86,6 +89,13 @@ cargo test -p shawncore-validation --test spec_sheet --locked
 cargo test -p shawncore-pq-crypto --test adversarial_protocol --test openssl_interop --locked
 cargo audit && cargo audit --file fuzz/Cargo.lock
 ```
+
+Further evidence, each runnable on its own: `python3 validation/run_mutants.py`
+(23 injected faults must each be detected), `python3 validation/formal/handshake_model.py`
+(bounded symbolic model of the authenticated handshake),
+`cargo test -p shawncore-pq-crypto --test attacker_enumeration` (attacker-choice
+conformance on the real code), `python3 validation/check_header_signatures.py` and
+`python3 validation/check_docs.py`.
 
 Independent evidence: `bash validation/gen_openssl_vectors.sh` (OpenSSL 3.5 or
 later) regenerates the cross-implementation vectors that
