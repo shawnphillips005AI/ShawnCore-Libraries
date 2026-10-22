@@ -10,11 +10,12 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 HEADER="$ROOT/shawncore-ffi/include/shawncore.h"
+TARGET_DIR="${CARGO_TARGET_DIR:-$ROOT/target}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
 cargo build -p shawncore-ffi --release --locked
-HOST_ARCHIVE="$ROOT/target/release/libshawncore_ffi.a"
+HOST_ARCHIVE="$TARGET_DIR/release/libshawncore_ffi.a"
 
 grep -E '^[[:space:]]*[A-Za-z_][A-Za-z0-9_[:space:]*]*[[:space:]]+shawncore_(crypto|rtos)_[A-Za-z0-9_]+[[:space:]]*\(' "$HEADER" \
     | sed -E 's/.*[[:space:]](shawncore_(crypto|rtos)_[A-Za-z0-9_]+)[[:space:]]*\(.*/\1/' \
@@ -26,7 +27,7 @@ diff -u "$TMP/header" "$TMP/archive"
 printf '%s\n' "[archive] header/archive symbols match: $(wc -l < "$TMP/header") symbols"
 
 cargo build -p shawncore-ffi --release --target aarch64-unknown-none --locked
-BARE_ARCHIVE="$ROOT/target/aarch64-unknown-none/release/libshawncore_ffi.a"
+BARE_ARCHIVE="$TARGET_DIR/aarch64-unknown-none/release/libshawncore_ffi.a"
 
 nm -g --defined-only "$BARE_ARCHIVE" | awk 'NF==3 {print $3}' | sort -u > "$TMP/defined"
 nm -u "$BARE_ARCHIVE" | awk 'NF==2 {print $2}' | sort -u > "$TMP/undefined"
