@@ -11,6 +11,38 @@ _Static_assert(sizeof(shawncore_rtos_ew_command) == 24, "EW command ABI changed"
 _Static_assert(sizeof(shawncore_rtos_fft_result) == 64, "FFT ABI changed");
 _Static_assert(_Alignof(shawncore_rtos_fft_result) == 64, "FFT alignment changed");
 
+/* Field offsets are pinned here and, with the same literals, against the Rust types by
+   validation/tests/ffi_layout_contracts.rs::c_header_struct_offsets_match_rust_types. */
+_Static_assert(offsetof(shawncore_rtos_tcb, entry_point) == 0, "TCB entry_point offset");
+_Static_assert(offsetof(shawncore_rtos_tcb, stack_base) == 8, "TCB stack_base offset");
+_Static_assert(offsetof(shawncore_rtos_tcb, stack_size) == 16, "TCB stack_size offset");
+_Static_assert(offsetof(shawncore_rtos_tcb, rsp) == 24, "TCB rsp offset");
+_Static_assert(offsetof(shawncore_rtos_tcb, priority) == 32, "TCB priority offset");
+_Static_assert(offsetof(shawncore_rtos_tcb, stack_canary) == 40, "TCB stack_canary offset");
+_Static_assert(offsetof(shawncore_rtos_telemetry_event, event_id) == 0, "event_id offset");
+_Static_assert(offsetof(shawncore_rtos_telemetry_event, timestamp) == 8, "timestamp offset");
+_Static_assert(offsetof(shawncore_rtos_telemetry_event, payload) == 16, "payload offset");
+_Static_assert(_Alignof(shawncore_rtos_ew_command) == 8, "EW command alignment");
+_Static_assert(offsetof(shawncore_rtos_ew_command, mode) == 0, "EW mode offset");
+_Static_assert(offsetof(shawncore_rtos_ew_command, target_freq) == 8, "EW target_freq offset");
+_Static_assert(offsetof(shawncore_rtos_ew_command, target_bw) == 16, "EW target_bw offset");
+_Static_assert(offsetof(shawncore_rtos_fft_result, snr_db) == 0, "FFT snr_db offset");
+_Static_assert(offsetof(shawncore_rtos_fft_result, center_freq) == 8, "FFT center_freq offset");
+_Static_assert(offsetof(shawncore_rtos_fft_result, bandwidth) == 16, "FFT bandwidth offset");
+_Static_assert(offsetof(shawncore_rtos_fft_result, timestamp) == 24, "FFT timestamp offset");
+
+/* The C view of every header-defined struct must equal what the library reports. */
+static int header_structs_match_the_library(void)
+{
+    return shawncore_rtos_tcb_sizeof() == sizeof(shawncore_rtos_tcb) &&
+           shawncore_rtos_tcb_alignof() == _Alignof(shawncore_rtos_tcb) &&
+           shawncore_rtos_telemetry_event_sizeof() == sizeof(shawncore_rtos_telemetry_event) &&
+           shawncore_rtos_telemetry_event_alignof() == _Alignof(shawncore_rtos_telemetry_event) &&
+           shawncore_rtos_fft_result_sizeof() == sizeof(shawncore_rtos_fft_result) &&
+           shawncore_rtos_fft_result_alignof() == _Alignof(shawncore_rtos_fft_result) &&
+           shawncore_rtos_ringbuffer_ew_slot_sizeof() >= sizeof(shawncore_rtos_ew_command);
+}
+
 static void no_op_cache_callback(const uint8_t *ptr, size_t len)
 {
     (void)ptr;
@@ -364,7 +396,7 @@ int main(void)
         shawncore_crypto_ml_kem_publickey_alignof() == 0 ||
         shawncore_rtos_scheduler_sizeof() == 0 ||
         shawncore_rtos_spsc_fft_slot_sizeof() == 0 ||
-        shawncore_rtos_fft_result_sizeof() != sizeof(shawncore_rtos_fft_result)) {
+        !header_structs_match_the_library()) {
         return 1;
     }
     if (shawncore_crypto_entropy_push(null_chunk) != SHAWNCORE_CRYPTO_INVALID_STATE ||
@@ -386,6 +418,21 @@ int main(void)
     if (shawncore_crypto_ml_kem_publickey_to_bytes(NULL, prk, 1568) != SHAWNCORE_CRYPTO_INVALID_STATE ||
         shawncore_crypto_x25519_publickey_from_bytes(NULL, 32, NULL) != SHAWNCORE_CRYPTO_INVALID_STATE) {
         return 4;
+    }
+
+    /* Boundary contract: lengths past PTRDIFF_MAX are refused before any memory is touched, so
+       the address below (never mapped, never dereferenced) is safe to pass; a zero-length
+       NULL is accepted. */
+    {
+        const uint8_t *unmapped = (const uint8_t *)(uintptr_t)0x7ffffffff000u;
+        uint8_t mac[48];
+        if (shawncore_crypto_hmac_sha384(prk, unmapped, (size_t)INTPTR_MAX + 1u, mac) !=
+                SHAWNCORE_CRYPTO_INVALID_LENGTH ||
+            shawncore_crypto_hkdf_expand_sha384(prk, unmapped, (size_t)INTPTR_MAX + 1u, mac,
+                                                sizeof mac) != SHAWNCORE_CRYPTO_INVALID_LENGTH ||
+            shawncore_crypto_hmac_sha384(prk, NULL, 0, mac) != SHAWNCORE_CRYPTO_SUCCESS) {
+            return 7;
+        }
     }
 
     if (wire_handshake_round_trip() != 0) {

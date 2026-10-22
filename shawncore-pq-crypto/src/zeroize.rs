@@ -40,5 +40,9 @@ pub(crate) fn secure_cache_flush(data: &[u8]) {
 /// `ptr` must be valid for reads of `len` bytes throughout the callback invocation.
 #[inline(always)]
 pub(crate) unsafe fn secure_cache_flush_raw(ptr: *const u8, len: usize) {
+    // An empty slice's pointer is dangling; maintenance on its cache line could fault.
+    if len == 0 {
+        return;
+    }
     host_cache_flush(ptr, len);
 }

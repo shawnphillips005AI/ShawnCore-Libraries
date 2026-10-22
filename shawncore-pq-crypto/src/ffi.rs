@@ -5,13 +5,23 @@
 #![deny(missing_docs)]
 
 //! Foreign Function Interface (FFI) for the Cryptographic Stack.
-//! Defines opaque C-callable boundaries for the Target host OS. The host must
-//! uphold each exported function's documented pointer, lifetime, alignment,
+//!
+//! Defines opaque C-callable boundaries for the target host OS. The host must uphold each
+//! exported function's documented pointer, lifetime, alignment, ownership, and concurrency
+//! preconditions.
 //!
 //! Session objects are not internally serialized. The host must provide exclusive ownership
 //! while invoking operations that mutate a `SessionManager`, including handshake state,
 //! replay counters, packet encryption/decryption state, and explicit zeroization.
-//! ownership, and concurrency preconditions.
+//!
+//! # What is checked and what is not
+//! Before any slice is formed or any cryptography runs, every pointer-plus-length pair is
+//! checked for a null pointer with a nonzero length, a length above `isize::MAX` (the largest
+//! valid Rust slice), a range that wraps the address space, and, per function, a protocol limit
+//! (packet data: the ChaCha20 limit; `app_info`: `u32::MAX`). Overlap of ranges where one is
+//! written is checked with checked arithmetic, and zero-length ranges never overlap. Whether a
+//! non-null address is mapped, live and initialized cannot be determined from the pointer and
+//! remains the caller's guarantee. The same rules are written for C callers in `shawncore.h`.
 
 use crate::aead_wrapper::{aead_decrypt, aead_encrypt, hkdf_expand_sha384, hmac_sha384};
 use crate::entropy_pool::{GLOBAL_ENTROPY_POOL, GLOBAL_ENTROPY_QUEUE};
@@ -264,7 +274,11 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_handshake(
     if !ptr_is_aligned(manager) || !ptr_is_aligned(peer_x25519_pk) || !ptr_is_aligned(ml_kem_ct) {
         return ShawncoreCryptoErr::InvalidState;
     }
-    if (salt.is_null() && salt_len > 0) || (info.is_null() && info_len > 0) {
+    if (salt.is_null() && salt_len > 0)
+        || (info.is_null() && info_len > 0)
+        || !range_ok(salt, salt_len)
+        || !range_ok(info, info_len)
+    {
         return ShawncoreCryptoErr::InvalidLength;
     }
     if ranges_overlap(
@@ -352,7 +366,11 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
     {
         return ShawncoreCryptoErr::InvalidState;
     }
-    if (salt.is_null() && salt_len > 0) || (info.is_null() && info_len > 0) {
+    if (salt.is_null() && salt_len > 0)
+        || (info.is_null() && info_len > 0)
+        || !range_ok(salt, salt_len)
+        || !range_ok(info, info_len)
+    {
         return ShawncoreCryptoErr::InvalidLength;
     }
     if ranges_overlap(
@@ -469,18 +487,25 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_for_peer(
         &[]
     };
 
-    let out_ct_ref = unsafe { &mut *out_ct };
-    let out_my_x25519_pk_ref = unsafe { &mut *out_my_x25519_pk };
+    // Outputs may be uninitialized host storage: write them only on success, never borrow them.
+    let mut ct = Ciphertext1024([0; 1568]);
+    let mut my_pk = X25519Public([0; 32]);
     match manager_ref.encapsulate_for_peer(
         peer_ml_kem_pk_ref,
         peer_x25519_pk_ref,
         entropy_ref,
         salt_slice,
         info_slice,
-        out_ct_ref,
-        out_my_x25519_pk_ref,
+        &mut ct,
+        &mut my_pk,
     ) {
-        Ok(()) => ShawncoreCryptoErr::Success,
+        Ok(()) => {
+            unsafe {
+                core::ptr::write(out_ct, ct);
+                core::ptr::write(out_my_x25519_pk, my_pk);
+            }
+            ShawncoreCryptoErr::Success
+        }
         Err(e) => e.into(),
     }
 }
@@ -565,7 +590,12 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encapsulate_authentica
     {
         return ShawncoreCryptoErr::InvalidState;
     }
-    if (salt.is_null() && salt_len > 0) || (app_info.is_null() && app_info_len > 0) {
+    if (salt.is_null() && salt_len > 0)
+        || (app_info.is_null() && app_info_len > 0)
+        || !range_ok(salt, salt_len)
+        || app_info_len > MAX_APP_INFO_LEN
+        || !range_ok(app_info, app_info_len)
+    {
         return ShawncoreCryptoErr::InvalidLength;
     }
     if writable_regions_overlap(&[
@@ -712,7 +742,12 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_finalize_authenticated
     {
         return ShawncoreCryptoErr::InvalidState;
     }
-    if (salt.is_null() && salt_len > 0) || (app_info.is_null() && app_info_len > 0) {
+    if (salt.is_null() && salt_len > 0)
+        || (app_info.is_null() && app_info_len > 0)
+        || !range_ok(salt, salt_len)
+        || app_info_len > MAX_APP_INFO_LEN
+        || !range_ok(app_info, app_info_len)
+    {
         return ShawncoreCryptoErr::InvalidLength;
     }
     if writable_regions_overlap(&[
@@ -911,6 +946,10 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_encrypt_packet(
         || out_nonce.is_null()
         || out_tag.is_null()
         || (aad.is_null() && aad_len > 0)
+        || !range_ok(aad, aad_len)
+        || !packet_len_valid(data_len)
+        || !range_ok(plaintext, data_len)
+        || !range_ok(ciphertext, data_len)
         || session_encrypt_buffers_overlap(
             manager, aad, aad_len, plaintext, ciphertext, data_len, out_nonce, out_tag,
         )
@@ -969,6 +1008,10 @@ pub unsafe extern "C" fn shawncore_crypto_session_manager_decrypt_packet(
         || tag.is_null()
         || (plaintext.is_null() && data_len > 0)
         || (aad.is_null() && aad_len > 0)
+        || !range_ok(aad, aad_len)
+        || !packet_len_valid(data_len)
+        || !range_ok(ciphertext, data_len)
+        || !range_ok(plaintext, data_len)
         || session_decrypt_buffers_overlap(
             manager, aad, aad_len, ciphertext, data_len, nonce, tag, plaintext,
         )
@@ -1293,6 +1336,9 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_sign(
     if sk.is_null() || (msg.is_null() && msg_len > 0) || out_sig.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !range_ok(msg, msg_len) {
+        return ShawncoreCryptoErr::InvalidLength;
+    }
     if !ptr_is_aligned(sk) || !ptr_is_aligned(out_sig) {
         return ShawncoreCryptoErr::InvalidState;
     }
@@ -1340,6 +1386,9 @@ pub unsafe extern "C" fn shawncore_crypto_ml_dsa_verify(
 ) -> ShawncoreCryptoErr {
     if pk.is_null() || (msg.is_null() && msg_len > 0) || sig.is_null() {
         return ShawncoreCryptoErr::InvalidState;
+    }
+    if !range_ok(msg, msg_len) {
+        return ShawncoreCryptoErr::InvalidLength;
     }
     if !ptr_is_aligned(pk) || !ptr_is_aligned(sig) {
         return ShawncoreCryptoErr::InvalidState;
@@ -1674,12 +1723,42 @@ fn ptr_is_aligned<T>(ptr: *const T) -> bool {
     (ptr as usize).is_multiple_of(core::mem::align_of::<T>())
 }
 
+/// Largest length a Rust slice may have; a larger length cannot describe any valid range.
+const MAX_SLICE_LEN: usize = isize::MAX as usize;
+
+/// The authenticated transcript length-prefixes `app_info` with 32 bits.
+#[cfg(feature = "ml-dsa")]
+const MAX_APP_INFO_LEN: usize = u32::MAX as usize;
+
+/// Whether `len` may be passed to `core::slice::from_raw_parts` at all.
+#[inline]
+fn slice_len_valid(len: usize) -> bool {
+    len <= MAX_SLICE_LEN
+}
+
+/// Whether `ptr`/`len` can describe one slice: the length is within Rust's limit and the range
+/// does not wrap the address space. Whether the memory is mapped and live is the caller's duty.
+#[inline]
+fn range_ok(ptr: *const u8, len: usize) -> bool {
+    slice_len_valid(len) && (len == 0 || (ptr as usize).checked_add(len).is_some())
+}
+
+/// Whether one ChaCha20 key and nonce can process `len` bytes (the 32-bit block counter limit).
+#[inline]
+fn packet_len_valid(len: usize) -> bool {
+    slice_len_valid(len) && len as u64 <= crate::aead_wrapper::CHACHA20_MAX_BYTES
+}
+
 fn ranges_overlap<T, U>(
     first: *const T,
     first_len: usize,
     second: *const U,
     second_len: usize,
 ) -> bool {
+    // A zero-length range denotes no memory, whatever address accompanies it.
+    if first_len == 0 || second_len == 0 {
+        return false;
+    }
     let Some(first_end) = (first as usize).checked_add(first_len) else {
         return true;
     };
@@ -1802,6 +1881,9 @@ pub unsafe extern "C" fn shawncore_crypto_hmac_sha384(
     if key.is_null() || (data.is_null() && data_len > 0) || out_mac.is_null() {
         return ShawncoreCryptoErr::InvalidState;
     }
+    if !range_ok(data, data_len) {
+        return ShawncoreCryptoErr::InvalidLength;
+    }
     if ranges_overlap(out_mac, 48, key, 32) || ranges_overlap(out_mac, 48, data, data_len) {
         return ShawncoreCryptoErr::InvalidLength;
     }
@@ -1838,6 +1920,9 @@ pub unsafe extern "C" fn shawncore_crypto_hkdf_expand_sha384(
 ) -> ShawncoreCryptoErr {
     if prk.is_null() || (info.is_null() && info_len > 0) || (out.is_null() && out_len > 0) {
         return ShawncoreCryptoErr::InvalidState;
+    }
+    if !range_ok(info, info_len) || !range_ok(out, out_len) {
+        return ShawncoreCryptoErr::InvalidLength;
     }
     if ranges_overlap(out, out_len, prk, 48) || ranges_overlap(out, out_len, info, info_len) {
         return ShawncoreCryptoErr::InvalidLength;
@@ -1890,7 +1975,12 @@ pub unsafe extern "C" fn shawncore_crypto_aead_encrypt(
     {
         return ShawncoreCryptoErr::InvalidState;
     }
-    if aad.is_null() && aad_len > 0 {
+    if (aad.is_null() && aad_len > 0)
+        || !range_ok(aad, aad_len)
+        || !packet_len_valid(data_len)
+        || !range_ok(plaintext, data_len)
+        || !range_ok(ciphertext, data_len)
+    {
         return ShawncoreCryptoErr::InvalidLength;
     }
     if aead_encrypt_buffers_overlap(
@@ -1961,7 +2051,12 @@ pub unsafe extern "C" fn shawncore_crypto_aead_decrypt(
     {
         return ShawncoreCryptoErr::InvalidState;
     }
-    if aad.is_null() && aad_len > 0 {
+    if (aad.is_null() && aad_len > 0)
+        || !range_ok(aad, aad_len)
+        || !packet_len_valid(data_len)
+        || !range_ok(ciphertext, data_len)
+        || !range_ok(plaintext, data_len)
+    {
         return ShawncoreCryptoErr::InvalidLength;
     }
     if aead_decrypt_buffers_overlap(
@@ -3232,5 +3327,605 @@ mod authenticated_ffi_tests {
                 bad_len
             );
         });
+    }
+}
+
+/// Variable-length input bounds, zero-length semantics and failure-output behavior of the C ABI.
+#[cfg(test)]
+mod boundary_tests {
+    use super::*;
+    use core::mem::MaybeUninit;
+    use core::sync::atomic::{AtomicBool, Ordering};
+
+    const OVER_SLICE_LIMIT: usize = isize::MAX as usize + 1;
+
+    // High and unmapped: [HIGH, HIGH + 2^63) wraps nothing and overlaps no live object, and it is
+    // never dereferenced once the length bound is enforced.
+    const HIGH: usize = 0x7fff_ffff_ffff_f000;
+
+    fn high() -> *const u8 {
+        HIGH as *const u8
+    }
+
+    #[test]
+    fn length_bounds_are_exact() {
+        assert!(slice_len_valid(0));
+        assert!(slice_len_valid(isize::MAX as usize));
+        assert!(!slice_len_valid(isize::MAX as usize + 1));
+        assert!(!slice_len_valid(usize::MAX));
+        assert!(packet_len_valid(
+            crate::aead_wrapper::CHACHA20_MAX_BYTES as usize
+        ));
+        assert!(!packet_len_valid(
+            crate::aead_wrapper::CHACHA20_MAX_BYTES as usize + 1
+        ));
+        #[cfg(feature = "ml-dsa")]
+        {
+            assert!(MAX_APP_INFO_LEN == u32::MAX as usize);
+        }
+    }
+
+    #[test]
+    fn lengths_beyond_the_slice_limit_are_rejected_before_any_slice_is_formed() {
+        crate::test_support::install_callbacks();
+        let key = [0x11u8; 48];
+        let mut mac = [0u8; 48];
+        let mut manager = MaybeUninit::<SessionManager>::uninit();
+        assert_eq!(
+            unsafe { shawncore_crypto_session_manager_init(manager.as_mut_ptr()) },
+            ShawncoreCryptoErr::Success
+        );
+        let m = manager.as_mut_ptr();
+        let invalid = ShawncoreCryptoErr::InvalidLength;
+
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_hmac_sha384(
+                    key.as_ptr(),
+                    high(),
+                    OVER_SLICE_LIMIT,
+                    mac.as_mut_ptr(),
+                )
+            },
+            invalid,
+            "hmac data_len"
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_hkdf_expand_sha384(
+                    key.as_ptr(),
+                    high(),
+                    OVER_SLICE_LIMIT,
+                    mac.as_mut_ptr(),
+                    mac.len(),
+                )
+            },
+            invalid,
+            "hkdf info_len"
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_hkdf_expand_sha384(
+                    key.as_ptr(),
+                    core::ptr::null(),
+                    0,
+                    high().cast_mut(),
+                    OVER_SLICE_LIMIT,
+                )
+            },
+            invalid,
+            "hkdf out_len"
+        );
+
+        let (enc, macky, nonce) = ([1u8; 32], [2u8; 32], [3u8; 12]);
+        let (mut ct, pt) = ([0u8; 4], [0u8; 4]);
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_aead_encrypt(
+                    enc.as_ptr(),
+                    macky.as_ptr(),
+                    nonce.as_ptr(),
+                    high(),
+                    OVER_SLICE_LIMIT,
+                    pt.as_ptr(),
+                    ct.as_mut_ptr(),
+                    4,
+                    mac.as_mut_ptr(),
+                )
+            },
+            invalid,
+            "aead_encrypt aad_len"
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_aead_decrypt(
+                    enc.as_ptr(),
+                    macky.as_ptr(),
+                    nonce.as_ptr(),
+                    high(),
+                    OVER_SLICE_LIMIT,
+                    pt.as_ptr(),
+                    mac.as_ptr(),
+                    ct.as_mut_ptr(),
+                    4,
+                )
+            },
+            invalid,
+            "aead_decrypt aad_len"
+        );
+
+        let mut out_nonce = [0u8; 12];
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_encrypt_packet(
+                    m,
+                    high(),
+                    OVER_SLICE_LIMIT,
+                    pt.as_ptr(),
+                    ct.as_mut_ptr(),
+                    4,
+                    out_nonce.as_mut_ptr(),
+                    mac.as_mut_ptr(),
+                )
+            },
+            invalid,
+            "encrypt_packet aad_len"
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_decrypt_packet(
+                    m,
+                    high(),
+                    OVER_SLICE_LIMIT,
+                    pt.as_ptr(),
+                    4,
+                    nonce.as_ptr(),
+                    mac.as_ptr(),
+                    ct.as_mut_ptr(),
+                )
+            },
+            invalid,
+            "decrypt_packet aad_len"
+        );
+
+        let x = X25519Public([1; 32]);
+        let kem_ct = Ciphertext1024([2; 1568]);
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_finalize_handshake(
+                    m,
+                    &x,
+                    &kem_ct,
+                    high(),
+                    OVER_SLICE_LIMIT,
+                    core::ptr::null(),
+                    0,
+                )
+            },
+            invalid,
+            "finalize_handshake salt_len"
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_finalize_handshake(
+                    m,
+                    &x,
+                    &kem_ct,
+                    core::ptr::null(),
+                    0,
+                    high(),
+                    OVER_SLICE_LIMIT,
+                )
+            },
+            invalid,
+            "finalize_handshake info_len"
+        );
+    }
+
+    #[cfg(feature = "ml-dsa")]
+    #[test]
+    fn signature_and_authenticated_entry_points_reject_oversized_lengths() {
+        crate::test_support::install_callbacks();
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(|| {
+                crate::test_support::install_callbacks();
+                let (vk, sk) = ml_dsa_keygen(&[0x41; 32]).unwrap();
+                let sig = Signature87([0; 4627]);
+                let mut out_sig = MaybeUninit::<Signature87>::uninit();
+                let invalid = ShawncoreCryptoErr::InvalidLength;
+                assert_eq!(
+                    unsafe {
+                        shawncore_crypto_ml_dsa_sign(
+                            &sk,
+                            high(),
+                            OVER_SLICE_LIMIT,
+                            out_sig.as_mut_ptr(),
+                        )
+                    },
+                    invalid,
+                    "sign msg_len"
+                );
+                assert_eq!(
+                    unsafe { shawncore_crypto_ml_dsa_verify(&vk, high(), OVER_SLICE_LIMIT, &sig) },
+                    invalid,
+                    "verify msg_len"
+                );
+
+                let mut manager = MaybeUninit::<SessionManager>::uninit();
+                assert_eq!(
+                    unsafe { shawncore_crypto_session_manager_init(manager.as_mut_ptr()) },
+                    ShawncoreCryptoErr::Success
+                );
+                let (ek, _) = crate::ml_kem_wrapper::ml_kem_keygen(&[3; 64]).unwrap();
+                let x = X25519Public([9; 32]);
+                let entropy = [0x22u8; 64];
+                let mut ct = MaybeUninit::<Ciphertext1024>::uninit();
+                let mut xe = MaybeUninit::<X25519Public>::uninit();
+                let mut tag = [0u8; 48];
+                let mut out_tag = [0u8; 48];
+                for (name, salt, salt_len, app, app_len) in [
+                    ("salt_len", high(), OVER_SLICE_LIMIT, core::ptr::null(), 0),
+                    (
+                        "app_info_len above the 32-bit transcript prefix",
+                        core::ptr::null(),
+                        0,
+                        high(),
+                        u32::MAX as usize + 1,
+                    ),
+                ] {
+                    assert_eq!(
+                        unsafe {
+                            shawncore_crypto_session_manager_encapsulate_authenticated_v2(
+                                manager.as_mut_ptr(),
+                                &sk,
+                                &vk,
+                                &ek,
+                                &x,
+                                entropy.as_ptr(),
+                                salt,
+                                salt_len,
+                                app,
+                                app_len,
+                                ct.as_mut_ptr(),
+                                xe.as_mut_ptr(),
+                                out_sig.as_mut_ptr(),
+                                tag.as_mut_ptr(),
+                            )
+                        },
+                        invalid,
+                        "encapsulate {name}"
+                    );
+                    assert_eq!(
+                        unsafe {
+                            shawncore_crypto_session_manager_finalize_authenticated_v2(
+                                manager.as_mut_ptr(),
+                                &sk,
+                                &vk,
+                                &x,
+                                ct.as_ptr(),
+                                &sig,
+                                tag.as_ptr(),
+                                salt,
+                                salt_len,
+                                app,
+                                app_len,
+                                out_sig.as_mut_ptr(),
+                                out_tag.as_mut_ptr(),
+                            )
+                        },
+                        invalid,
+                        "finalize {name}"
+                    );
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[cfg(feature = "ml-dsa")]
+    #[test]
+    fn a_range_that_wraps_the_address_space_is_rejected_where_no_overlap_check_exists() {
+        crate::test_support::install_callbacks();
+        std::thread::Builder::new()
+            .stack_size(64 << 20)
+            .spawn(|| {
+                crate::test_support::install_callbacks();
+                let (vk, _) = ml_dsa_keygen(&[0x41; 32]).unwrap();
+                let sig = Signature87([0; 4627]);
+                // 32 bytes starting 16 below the top of the address space cannot be one object.
+                let wrapping = (usize::MAX - 15) as *const u8;
+                assert_eq!(
+                    unsafe { shawncore_crypto_ml_dsa_verify(&vk, wrapping, 32, &sig) },
+                    ShawncoreCryptoErr::InvalidLength
+                );
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
+    fn a_zero_length_range_never_overlaps_anything() {
+        let mut bytes = [0u8; 32];
+        let p = bytes.as_mut_ptr();
+        assert!(!ranges_overlap(p.wrapping_add(16), 0, p, 32));
+        assert!(!ranges_overlap(p, 32, p.wrapping_add(16), 0));
+        assert!(!ranges_overlap(p.wrapping_add(8), 0, p.wrapping_add(8), 0));
+        assert!(ranges_overlap(p, 32, p.wrapping_add(31), 1));
+    }
+
+    #[test]
+    fn a_zero_length_input_may_point_inside_an_output_buffer() {
+        crate::test_support::install_callbacks();
+        let mut region = [0u8; 80];
+        let (key, rest) = region.split_at_mut(32);
+        let out = rest.as_mut_ptr();
+        // Empty data whose (meaningless) pointer lies inside the MAC output must not be an alias.
+        assert_eq!(
+            unsafe { shawncore_crypto_hmac_sha384(key.as_ptr(), out.wrapping_add(8), 0, out) },
+            ShawncoreCryptoErr::Success
+        );
+    }
+
+    #[test]
+    fn the_cache_flush_callback_is_never_called_for_an_empty_range() {
+        static SAW_EMPTY: AtomicBool = AtomicBool::new(false);
+        fn hook(_: *const u8, len: usize) {
+            if len == 0 {
+                SAW_EMPTY.store(true, Ordering::SeqCst);
+            }
+        }
+        let _guard = crate::test_support::hook_guard();
+        crate::test_support::install_callbacks();
+        SAW_EMPTY.store(false, Ordering::SeqCst);
+        crate::test_support::set_cache_flush_hook(Some(hook));
+
+        let (enc, mac_key, nonce) = ([1u8; 32], [2u8; 32], [3u8; 12]);
+        let mut tag = [0u8; 48];
+        crate::aead_wrapper::aead_encrypt(&enc, &mac_key, &nonce, b"", b"", &mut [], &mut tag)
+            .unwrap();
+        crate::aead_wrapper::aead_decrypt(&enc, &mac_key, &nonce, b"", b"", &tag, &mut []).unwrap();
+        crate::test_support::set_cache_flush_hook(None);
+
+        assert!(
+            !SAW_EMPTY.load(Ordering::SeqCst),
+            "a host cache-maintenance callback received a zero-length range"
+        );
+    }
+
+    #[test]
+    fn failed_packet_calls_leave_outputs_as_documented() {
+        crate::test_support::install_callbacks();
+        let mut manager = MaybeUninit::<SessionManager>::uninit();
+        assert_eq!(
+            unsafe { shawncore_crypto_session_manager_init(manager.as_mut_ptr()) },
+            ShawncoreCryptoErr::Success
+        );
+        let m = manager.as_mut_ptr();
+        let (mut ct, mut nonce, mut tag) = ([0xA5u8; 8], [0xA5u8; 12], [0xA5u8; 48]);
+        let pt = [7u8; 8];
+
+        // No session: refused before any output is touched.
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_encrypt_packet(
+                    m,
+                    core::ptr::null(),
+                    0,
+                    pt.as_ptr(),
+                    ct.as_mut_ptr(),
+                    8,
+                    nonce.as_mut_ptr(),
+                    tag.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::InvalidState
+        );
+        assert_eq!((ct, nonce, tag), ([0xA5; 8], [0xA5; 12], [0xA5; 48]));
+
+        let mut plain = [0xA5u8; 8];
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_decrypt_packet(
+                    m,
+                    core::ptr::null(),
+                    0,
+                    pt.as_ptr(),
+                    8,
+                    nonce.as_ptr(),
+                    tag.as_ptr(),
+                    plain.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::InvalidState
+        );
+        assert_eq!(plain, [0xA5; 8]);
+
+        // Raw AEAD with a wrong tag: the plaintext buffer is wiped, never left partially decrypted.
+        let (enc, mac_key, aead_nonce) = ([1u8; 32], [2u8; 32], [3u8; 12]);
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_aead_decrypt(
+                    enc.as_ptr(),
+                    mac_key.as_ptr(),
+                    aead_nonce.as_ptr(),
+                    core::ptr::null(),
+                    0,
+                    pt.as_ptr(),
+                    tag.as_ptr(),
+                    plain.as_mut_ptr(),
+                    8,
+                )
+            },
+            ShawncoreCryptoErr::VerificationFailed
+        );
+        assert_eq!(plain, [0; 8]);
+    }
+
+    /// Pins the error-code rules written in shawncore.h so the header cannot drift from the code.
+    #[test]
+    fn rejected_arguments_return_the_codes_the_header_documents() {
+        crate::test_support::install_callbacks();
+        use ShawncoreCryptoErr::{HkdfError, InvalidLength, InvalidState};
+        let (key, mut out) = ([1u8; 48], [0u8; 48]);
+        let (enc, mac_key, nonce) = ([1u8; 32], [2u8; 32], [3u8; 12]);
+        let (mut buf, data) = ([0u8; 4], [0u8; 4]);
+        let null = core::ptr::null::<u8>();
+        let mut manager = MaybeUninit::<SessionManager>::uninit();
+        assert_eq!(
+            unsafe { shawncore_crypto_session_manager_init(manager.as_mut_ptr()) },
+            ShawncoreCryptoErr::Success
+        );
+        let x = X25519Public([1; 32]);
+        let kem_ct = Ciphertext1024([2; 1568]);
+
+        // NULL data pointer with a nonzero length: INVALID_STATE for the stateless functions.
+        assert_eq!(
+            unsafe { shawncore_crypto_hmac_sha384(key.as_ptr(), null, 1, out.as_mut_ptr()) },
+            InvalidState
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_hkdf_expand_sha384(key.as_ptr(), null, 1, out.as_mut_ptr(), 8)
+            },
+            InvalidState
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_aead_encrypt(
+                    enc.as_ptr(),
+                    mac_key.as_ptr(),
+                    nonce.as_ptr(),
+                    null,
+                    0,
+                    null,
+                    buf.as_mut_ptr(),
+                    4,
+                    out.as_mut_ptr(),
+                )
+            },
+            InvalidState,
+            "plaintext"
+        );
+        // ... but INVALID_LENGTH for aad, salt and info.
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_aead_encrypt(
+                    enc.as_ptr(),
+                    mac_key.as_ptr(),
+                    nonce.as_ptr(),
+                    null,
+                    1,
+                    data.as_ptr(),
+                    buf.as_mut_ptr(),
+                    4,
+                    out.as_mut_ptr(),
+                )
+            },
+            InvalidLength,
+            "aad"
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_finalize_handshake(
+                    manager.as_mut_ptr(),
+                    &x,
+                    &kem_ct,
+                    null,
+                    1,
+                    null,
+                    0,
+                )
+            },
+            InvalidLength,
+            "salt"
+        );
+        // NULL or misaligned object pointers: INVALID_STATE, except the session packet functions.
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_finalize_handshake(
+                    core::ptr::null_mut(),
+                    &x,
+                    &kem_ct,
+                    null,
+                    0,
+                    null,
+                    0,
+                )
+            },
+            InvalidState
+        );
+        let mut nonce_out = [0u8; 12];
+        let misaligned = core::ptr::without_provenance_mut::<SessionManager>(1);
+        for manager_ptr in [core::ptr::null_mut(), misaligned] {
+            assert_eq!(
+                unsafe {
+                    shawncore_crypto_session_manager_encrypt_packet(
+                        manager_ptr,
+                        null,
+                        0,
+                        data.as_ptr(),
+                        buf.as_mut_ptr(),
+                        4,
+                        nonce_out.as_mut_ptr(),
+                        out.as_mut_ptr(),
+                    )
+                },
+                InvalidLength,
+                "packet functions report every rejected argument as INVALID_LENGTH"
+            );
+        }
+        // A request beyond the HKDF output limit is an HKDF error and zeroes the output.
+        let mut long = std::vec![0xAAu8; 255 * 48 + 1];
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_hkdf_expand_sha384(
+                    key.as_ptr(),
+                    null,
+                    0,
+                    long.as_mut_ptr(),
+                    long.len(),
+                )
+            },
+            HkdfError
+        );
+        assert!(long.iter().all(|&byte| byte == 0));
+    }
+
+    #[test]
+    fn repeated_init_zeroize_and_destroy_are_deterministic() {
+        crate::test_support::install_callbacks();
+        let mut manager = MaybeUninit::<SessionManager>::uninit();
+        let m = manager.as_mut_ptr();
+        let mut buf = [0u8; 4];
+        let (mut nonce, mut tag) = ([0u8; 12], [0u8; 48]);
+        let ok = ShawncoreCryptoErr::Success;
+
+        assert_eq!(unsafe { shawncore_crypto_session_manager_init(m) }, ok);
+        assert_eq!(unsafe { shawncore_crypto_session_manager_zeroize(m) }, ok);
+        assert_eq!(unsafe { shawncore_crypto_session_manager_zeroize(m) }, ok);
+        assert_eq!(unsafe { shawncore_crypto_session_manager_destroy(m) }, ok);
+        assert_eq!(unsafe { shawncore_crypto_session_manager_destroy(m) }, ok);
+        assert_eq!(
+            unsafe {
+                shawncore_crypto_session_manager_encrypt_packet(
+                    m,
+                    core::ptr::null(),
+                    0,
+                    [0u8; 4].as_ptr(),
+                    buf.as_mut_ptr(),
+                    4,
+                    nonce.as_mut_ptr(),
+                    tag.as_mut_ptr(),
+                )
+            },
+            ShawncoreCryptoErr::InvalidState,
+            "a destroyed session carries no traffic"
+        );
+        // Re-initialization after destroy yields a fresh, empty manager.
+        assert_eq!(unsafe { shawncore_crypto_session_manager_init(m) }, ok);
+        assert_eq!(unsafe { shawncore_crypto_session_manager_destroy(m) }, ok);
     }
 }

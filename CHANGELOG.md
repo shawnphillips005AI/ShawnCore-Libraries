@@ -9,6 +9,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [12.3.11] — 2026-10-21
 
+### C ABI boundary audit
+- **Fixed** (details and reproductions in VALIDATION.md, "C ABI boundary audit"): lengths above
+  `PTRDIFF_MAX` and ranges that wrap the address space reached `slice::from_raw_parts` in the crypto
+  FFI (`salt`, `info`, `app_info`, `aad`, HMAC data, HKDF input and output, signature messages);
+  `ml_dsa_verify` had no range check at all; an interior zero-length range was counted as an overlap;
+  the crypto library called the host cache-flush callback with an empty range; `dmapool2k_init`
+  validated its backing region as 256 bytes instead of 256 buffers of 2048 bytes.
+- **Behavior changes** (all reject input that was previously undefined behavior or a spurious
+  rejection; none changes a wire or key format or an exported symbol or signature):
+  lengths above `PTRDIFF_MAX`, wrapping ranges, packet and AEAD data above 64 x (2^32 - 1) bytes and
+  `app_info` above `UINT32_MAX` now return `INVALID_LENGTH` before anything is read; a zero-length
+  range never counts as overlapping; the crypto cache-flush callback is never invoked with length
+  zero; an undersized DMA pool backing now returns `INVALID_MEMORY` (previously
+  `ADDRESS_OUT_OF_BOUNDS`) and leaves the control object untouched.
+- **Header:** `ml_dsa_keygen`'s seed is declared as 32 bytes like the other fixed-length inputs
+  (same ABI); the header now documents length limits, the error code per rejection class, which
+  failures write an output, zero-length handling, and the callback contract.
+- **Added:** `validation/check_header_signatures.py` (header versus Rust signatures, in the release
+  gate), `validation/run_mutants.py` (23 reproducible mutants), C struct offset assertions, 10 crypto
+  and 4 RTOS ABI boundary tests, and gate steps for C AddressSanitizer, Valgrind (when installed),
+  release-profile tests and `cargo doc -D warnings`, matching CI.
+- **Corrected evidence claims:** the manifest and README disagreed on the mutation count and the
+  earlier 24 mutants were not reproducible from the repository (now stated); the `cargo package`
+  file count and two fuzz durations were stale.
+
 ### Authenticated handshake, protocol version 2 (new, unreviewed)
 - **Added** (full configuration, `ml-dsa` feature): `encapsulate_authenticated`,
   `finalize_authenticated` and `confirm_peer` on `SessionManager`, the three C functions

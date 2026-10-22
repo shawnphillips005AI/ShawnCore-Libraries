@@ -203,6 +203,30 @@ Callback rules:
 - `shawncore-ffi/../integration/hal_stubs.c` is compile-only scaffolding.
   It does **not** implement cache, interrupt, watchdog, or clock behavior.
 
+What registration does and does not guarantee:
+
+- A registration stores one bare function pointer with a sequentially consistent
+  atomic store, and every call site loads it with acquire ordering. That makes
+  the new pointer visible; it says nothing about the old one. A core or ISR that
+  loaded the previous pointer before the store can still be executing it or enter
+  it afterwards, and the library keeps neither a reference count nor a context
+  argument. Keeping the code of a replaced callback mapped, and stopping every
+  caller first, is the host's responsibility. The only replacement that is safe
+  without quiescence is storing the same function again.
+- The interrupt callbacks work as a pair. Replacing either between a spinlock's
+  disable and its restore hands the saved flags to a different function.
+- A missing required callback is not an error return. The library invokes its
+  own panic hook (if one is registered) and then spins forever, with interrupts
+  masked if it is the restore callback that is missing. Each library has its own
+  hook and registry. In the crypto library the cache-flush callback runs inside
+  `zeroize` and `destroy`, so with it unregistered those calls halt after wiping
+  the transmit key and before wiping the receive key; register it first.
+- The crypto cache-flush callback is never called with a zero-length range, so a
+  host implementation need not guard against the dangling pointer an empty slice
+  carries. The entropy pool releases its interrupt-masking lock before it calls
+  the callback; host callbacks are otherwise called at arbitrary points and must
+  be short, non-blocking and safe in the context (thread or ISR) of the caller.
+
 ### 2. Allocate opaque objects correctly
 
 Rust object layouts are not exposed to C. Query size and alignment at runtime:
@@ -223,6 +247,21 @@ size_t align = shawncore_crypto_session_manager_alignof();
 - Do not copy, move, or memcpy an initialized object.
 - A non-null pointer is not evidence that memory is mapped, writable, owned by
   the caller, or valid for the required lifetime. Those remain host obligations.
+- Variable-length inputs (`salt`, `info`, `app_info`, `aad`, packet and message
+  data, HKDF output) are described by a pointer and a length. Before it reads
+  any of them the library rejects, with `INVALID_LENGTH`, a length above
+  `PTRDIFF_MAX`, a range that wraps the address space, packet data longer than
+  one ChaCha20 key and nonce can process (64 * (2^32 - 1) bytes), and `app_info`
+  longer than `UINT32_MAX`. A nonzero length with a NULL pointer is rejected
+  too. Nothing else about the range can be checked: the host guarantees that a
+  nonzero-length range is entirely valid, initialized (for inputs) and writable
+  (for outputs) memory of that size. The library imposes no other cap on `salt`,
+  `info`, `aad` or message length; time is linear in them, so a host that must
+  bound latency should bound lengths itself.
+- Repeating `shawncore_crypto_session_manager_zeroize` or `_destroy` on an
+  initialized session manager is harmless today and is tested, but the contract
+  is still "destroy once". Calling `_init` on a live manager overwrites it without
+  wiping its keys; destroy it first.
 
 ### 3. Honor the queue role contract
 

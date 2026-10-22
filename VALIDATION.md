@@ -24,21 +24,21 @@ hardware behavior, certification, production approval, or independent review.
 | `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked` | PASS | Executed and passed. |
 | `cargo check --target aarch64-unknown-none --workspace --locked` | PASS | Executed and passed; compile check only, not target execution. |
 | `cargo audit` and `cargo audit --file fuzz/Cargo.lock` | PASS | cargo-audit 0.22.2 against 1,348 advisories: no advisories for either lockfile (54 and 52 crates). |
-| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 184 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
+| MSRV: tests, `aarch64-unknown-none` check and Lite check on Rust 1.88.0 | PASS | All 199 tests pass. 1.88 is the floor set by the `sha2` 0.11 dependency; the crates' own code builds there unchanged. |
 
 ## TEST VALIDATION
 
 | Command | Result | Evidence |
 | --- | --- | --- |
-| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 184 #[test] functions passed in both profiles: 118 in `shawncore-pq-crypto` (60 unit, 8 known-answer, 3 regression-vector, 22 adversarial protocol, 4 OpenSSL cross-implementation, 5 ACVP, 16 authenticated handshake), 44 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 21 in the validation harness (host traces, layout contracts, version-drift guards and the 12-test spec-sheet suite). |
+| `cargo test --workspace --all-targets --locked` (debug and `--release`) | PASS | All 199 #[test] functions passed in both profiles: 128 in `shawncore-pq-crypto` (70 unit, 8 known-answer, 3 regression-vector, 22 adversarial protocol, 4 OpenSSL cross-implementation, 5 ACVP, 16 authenticated handshake), 48 in `shawncore-rtos-sync`, 1 in `shawncore-ffi` (panic-handler guard), 22 in the validation harness (host traces, layout contracts, version-drift guards and the 12-test spec-sheet suite). |
 | `cargo test -p shawncore-pq-crypto --test adversarial_protocol --test openssl_interop --locked` | PASS | 22 active-attacker tests and 3 cross-implementation tests (see the sections below the table). |
-| `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 87 tests (49 unit, 8 known-answer, 22 adversarial protocol, 2 regression-vector, 2 OpenSSL cross-implementation, 4 ACVP); the ML-DSA tests are feature-gated out. |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features lite --locked` | PASS | Lite suite: 100 tests (62 unit, 8 known-answer, 22 adversarial protocol, 2 regression-vector, 2 OpenSSL cross-implementation, 4 ACVP); the ML-DSA tests are feature-gated out. |
 | `cargo test -p shawncore-validation --test spec_sheet --locked` | PASS | 12 tests: crypto and wire sizes, replay window (offset 63 accepted, 64 rejected), nonce format, uniform-entropy rejection, entropy queue capacity and mix bound, scheduler/state machine/TCB, DMA pool alignment, token and zeroization behavior, object sizes, the C header surface (function, type and callback counts, no secret-key serialization), and drift checks that the README, ARCHITECTURE, VALIDATION, RELEASE_MANIFEST, CI workflow and BENCHMARKS record state the same numbers. It found a mis-rounded ops/sec figure in the README on its first run. |
-| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (118 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
+| `cargo test -p shawncore-pq-crypto --no-default-features --features ml-dsa --locked` | PASS | Full crypto suite without `fast-x25519` (128 tests); the RFC 7748 X25519 vectors pass with and without the precomputed tables. |
 | Repeated lib-test runs | PASS | The `shawncore-pq-crypto` unit-test binary ran 300 consecutive times with a 20 s hang timeout: 0 failures, 0 hangs. Before the test-callback fix the same loop hung in roughly 1 run in 17. |
 | `validation/run_tsan.sh` (nightly ThreadSanitizer) | PASS | Standalone workload of 3 rounds x 100,000 SPSC and ring-buffer transfers completed with no reported data race. |
-| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (118) and `shawncore-rtos-sync` (44) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
-| `cargo +nightly miri test -p shawncore-rtos-sync` with `-Zmiri-symbolic-alignment-check` | PASS | 44 tests passed. With `-Zmiri-strict-provenance` the run stops at the first scheduler test: the scheduler API takes stack addresses as integers (`u64`) and casts them to pointers, which strict provenance rejects by design. Miri was not run on the lattice-heavy ML-KEM/ML-DSA tests or on the OpenSSL interop tests. It ran on all 44 `shawncore-rtos-sync` tests and on 24 `shawncore-pq-crypto` tests (entropy pool and queue, session counters, replay window, key-wipe observation, wire-codec pointer validation, and the null/oversized-length/misalignment FFI tests), all with `-Zmiri-symbolic-alignment-check`; the only diagnostic was the expected integer-to-pointer cast warning from the deliberately bogus never-dereferenced address in `absurd_lengths_are_rejected_before_any_dereference`. The earlier run caught undefined behavior in the test-only cache-flush dispatcher (an integer-to-function-pointer transmute), which is fixed. |
+| `validation/run_asan.sh` (nightly, Rust-instrumented AddressSanitizer) | PASS | `shawncore-pq-crypto` (128) and `shawncore-rtos-sync` (48) test targets ran under `-Zsanitizer=address` with no report; leak detection was disabled for these runs. |
+| `cargo +nightly miri test -p shawncore-rtos-sync` with `-Zmiri-symbolic-alignment-check` | PASS | 48 tests passed (re-run on this revision, including the new RTOS ABI contract tests). With `-Zmiri-strict-provenance` the run stops at the first scheduler test: the scheduler API takes stack addresses as integers (`u64`) and casts them to pointers, which strict provenance rejects by design. Miri was not run on the lattice-heavy ML-KEM/ML-DSA tests or on the OpenSSL interop tests. It ran on all 44 `shawncore-rtos-sync` tests and on 24 `shawncore-pq-crypto` tests (entropy pool and queue, session counters, replay window, key-wipe observation, wire-codec pointer validation, and the null/oversized-length/misalignment FFI tests), all with `-Zmiri-symbolic-alignment-check`; the only diagnostic was the expected integer-to-pointer cast warning from the deliberately bogus never-dereferenced address in `absurd_lengths_are_rejected_before_any_dereference`. The earlier run caught undefined behavior in the test-only cache-flush dispatcher (an integer-to-function-pointer transmute), which is fixed. |
 
 Known-answer tests (`shawncore-pq-crypto/tests/known_answers.rs`) check HMAC-SHA384
 against RFC 4231 cases 1 and 2, X25519 against the RFC 7748 section 6.1 vectors,
@@ -166,9 +166,19 @@ the protocol is secure.
 
 ## Test sensitivity (mutation testing)
 
-Thirty-nine deliberate faults (the eight against the superseded first draft are listed for history) were applied one at a time to a disposable copy of the
-source tree (`/tmp`, never the repository) and the relevant tests run. Every
-mutant was killed, and the copy's mutations were reverted after each run.
+Two records exist and they differ in how reproducible they are.
+
+- **Reproducible from this repository:** `python3 validation/run_mutants.py` applies 23
+  deliberate faults, one at a time, to a disposable copy (the working tree is never modified),
+  requires the named tests to fail, and exits non-zero on any survivor or any mutant that does
+  not compile. Fifteen target authenticated handshake version 2, seven the crypto C ABI boundary
+  (length and wrap bounds, zero-length overlap, empty cache-flush ranges), and one the RTOS DMA pool
+  initializer. All 23 are killed on this revision. One more fault, removing the redundant
+  `MAX_APP_INFO_LEN` check in the FFI, is an equivalent mutant (the Rust API returns the same
+  error before reading the range) and is not listed.
+- **Not reproducible from this repository:** the first 24 faults recorded below (including
+  eight against the superseded first handshake draft) were run with an ad-hoc script that was not
+  kept. They are reported as history, not as a result a reader can regenerate.
 
 | Mutant | Killed by |
 | --- | --- |
@@ -196,6 +206,12 @@ mutant was killed, and the copy's mutations were reverted after each run.
 | v2: failed `finalize_authenticated` keeps pending state | `different_salts_are_rejected_during_the_handshake_by_key_confirmation` |
 | v2: `confirm_peer` skips the identity pin | `an_impersonator_of_the_keygen_side_cannot_confirm_the_session` |
 | v2: pending confirmation key not zeroized | `pending_confirmation_key_is_wiped_and_flushed_on_abandon_and_on_failed_confirmation` |
+| ABI: hmac, hkdf or `finalize_handshake` accept a length above `PTRDIFF_MAX` | `lengths_beyond_the_slice_limit_are_rejected_before_any_slice_is_formed` (without the check the process aborts in `slice::from_raw_parts`) |
+| ABI: `ml_dsa_verify` accepts a range that wraps the address space | `a_range_that_wraps_the_address_space_is_rejected_where_no_overlap_check_exists` |
+| ABI: packet length cap removed | `length_bounds_are_exact` |
+| ABI: zero-length range counted as an overlap | `a_zero_length_range_never_overlaps_anything`, `a_zero_length_input_may_point_inside_an_output_buffer` |
+| ABI: cache-flush callback receives an empty range | `the_cache_flush_callback_is_never_called_for_an_empty_range` |
+| ABI: DMA pool backing validated as bytes instead of 2048-byte buffers | `an_absurd_backing_size_is_rejected_and_the_control_object_is_untouched` |
 
 Gaps found and closed: the key-wipe mutant **survived** the pre-existing suite
 (confirmed by running the mutant with the new test skipped), and no test pinned
@@ -256,14 +272,59 @@ two-party hybrid handshake conducted entirely through wire encodings, an
 authenticated packet exchange, replay rejection, and static-library linkage. It
 is not target C ABI or hardware integration validation.
 
+## C ABI boundary audit
+
+Scope: all 138 exported symbols (72 `shawncore_crypto_*`, 66 `shawncore_rtos_*`, each count including callback registration and the `sizeof`/`alignof` queries), the public
+header, callback registration, and the release evidence. Method: source reading of every entry
+point, regression tests written first and observed failing on the unfixed code, then the fix.
+
+| # | Defect (violated invariant) | Evidence before the fix | Fix |
+| --- | --- | --- | --- |
+| 1 | A pointer-plus-length pair with a length above `isize::MAX` reached `slice::from_raw_parts` for `salt`, `info`, `app_info`, `aad`, HMAC data, HKDF `info` and output, and signature messages. A slice may not exceed `isize::MAX`; the existing overlap check only caught ranges that wrap the address space, so lengths between `isize::MAX` and the wrap point passed. | The new test aborted the process in a debug build: `unsafe precondition(s) violated: slice::from_raw_parts requires ... the total size of the slice not to exceed isize::MAX` at the HMAC entry point. | Every pointer-plus-length pair is checked (`range_ok`) before a slice is formed: length at most `PTRDIFF_MAX`, no address wrap, plus per-function protocol limits. |
+| 2 | `ml_dsa_verify` has no overlap check, so a range wrapping the address space reached slice creation. | Test returned `VerificationFailed` instead of `InvalidLength` (the slice had been formed). | Covered by the same `range_ok` check. |
+| 3 | `ranges_overlap` reported a zero-length range whose address lay inside another range as an overlap, rejecting a valid call. | Test failed: `ranges_overlap(p+16, 0, p, 32)` was true. | A zero-length range never overlaps. |
+| 4 | The crypto library called the host cache-flush callback with the dangling pointer of an empty slice and length 0 (AEAD with empty data). A host that rounds to a cache line could fault. | Test failed: the callback saw `len == 0`. | The callback is not called for an empty range. |
+| 5 | `dmapool2k_init` validated the backing region with the element type `u8` (256 bytes) instead of 256 buffers of 2048 bytes, so the real check ran only inside `pool.init`, after the control object had been overwritten, and returned `AddressOutOfBounds`. | Test failed: size 524287 gave `AddressOutOfBounds`. | Validated with the real element type before any write; undersized backing is now `InvalidMemory`. |
+| 6 | Hardening, no failing test possible: the unauthenticated `encapsulate_for_peer` C wrapper took `&mut` references to possibly uninitialized caller storage. | Source review. | Writes go through local values and `ptr::write` on success, as the authenticated functions already did. |
+
+Bounds enforced, with `INVALID_LENGTH` and no side effect on violation: every length at most
+`PTRDIFF_MAX`; packet and AEAD data at most 64 x (2^32 - 1) bytes (ChaCha20 limit for one key and
+nonce, the limit the Rust API already enforced); `app_info` at most `UINT32_MAX` (its transcript
+length prefix). HKDF output above 12,240 bytes keeps its previous behavior (`HKDF_ERROR`, output
+zeroed). No other cap is imposed on `salt`, `info`, `aad` or message length; a latency-bounded host
+should apply its own. Header, `SECURITY.md` and the crate documentation state the rules, the error
+code per rejection class (pinned by `rejected_arguments_return_the_codes_the_header_documents`), and
+the two deliberate cases where a failed call writes its output (a failed MAC check zeroes the
+plaintext buffer; an oversized HKDF request zeroes its output). Those and the other results below
+were produced on this revision:
+
+| Command or check | Result | Evidence |
+| --- | --- | --- |
+| `python3 validation/check_header_signatures.py` | PASS | All 138 header declarations match their Rust `extern "C"` definitions in parameter count, scalar width, pointer constness, pointee type, callback typedef and return type. Negative controls (a dropped `const`, a narrowed length type, a changed return type) are detected. It parses source text and does not compile either side. |
+| C struct offsets | PASS | `integration/c_api_smoke.c` `_Static_assert`s every field offset of the four header structs and compares their size and alignment with the exported `*_sizeof`/`*_alignof`; `ffi_layout_contracts.rs::c_header_struct_offsets_match_rust_types` asserts the same literals against the Rust types. |
+| C smoke, ASan, Valgrind | PASS | The smoke binary now also checks that `INTPTR_MAX + 1` lengths are refused without touching memory and that a zero-length NULL is accepted. ASan with leak detection: no report. Valgrind: 0 errors, 0 bytes in use at exit. |
+| New tests | PASS | 10 crypto ABI boundary tests, 4 RTOS ABI contract tests (null and misaligned codes, value fallbacks, absurd sizes, success-only outputs) and the layout test. |
+| Miri | PASS (partial) | `-Zmiri-symbolic-alignment-check`: the 8 non-lattice boundary tests, plus 17 entropy, session-state and FFI pointer tests, and all 48 RTOS tests; the only diagnostic is the expected integer-to-pointer warning for the deliberately unmapped address. Not run on ML-KEM/ML-DSA-heavy tests. |
+| `python3 validation/run_mutants.py` | PASS | 23 of 23 mutants killed. |
+| `cargo audit` and `cargo audit --file fuzz/Cargo.lock` | PASS | No advisory reported (database of 1,349 advisories fetched at run time, `cargo-audit` 0.22.2). |
+
+Findings that are not defects and remain caller duties: a non-null pointer cannot be proven
+mapped, live, initialized or large enough; a pointer that stays valid for the whole call is the
+host's guarantee. Callback registration publishes one bare function pointer (no context, no
+lifetime management); replacing a callback that another core can still enter is unsafe and needs
+host quiescence, a missing required callback halts the caller after invoking the library's panic
+hook, and each library has its own registry. Both are documented in `SECURITY.md`. Repeating
+`destroy` on a session manager is harmless and tested but not part of the contract; calling `init`
+on a live manager overwrites it without wiping its keys.
+
 ## FUZZING
 
 | Command | Result | Evidence |
 | --- | --- | --- |
 | `cargo check --manifest-path fuzz/Cargo.toml --bin <target> --locked` (4 targets) | PASS | Executed and passed for `ffi_aead_fuzz`, `session_replay_fuzz`, `rtos_stateful_fuzz` and `auth_handshake_fuzz`. |
-| `cd fuzz && cargo +nightly fuzz run auth_handshake_fuzz -- -runs=3000 -max_len=512` | PASS | 3,000 executions (143 s, about 20 exec/s because every input signs and verifies ML-DSA); no crash, timeout or artifact. The harness asserts that arbitrary replies never authenticate, never consume the pending handshake, and never let an unconfirmed session carry traffic. The corpus was not retained. |
+| `cd fuzz && cargo +nightly fuzz run auth_handshake_fuzz -- -runs=3000 -max_len=512` | PASS | 3,000 executions (171 s, about 20 exec/s because every input signs and verifies ML-DSA); no crash, timeout or artifact. The harness asserts that arbitrary replies never authenticate, never consume the pending handshake, and never let an unconfirmed session carry traffic. The corpus was not retained. |
 | `cd fuzz && cargo +nightly fuzz run ffi_aead_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 91 retained corpus files; no crash, timeout or artifact. |
-| `cd fuzz && cargo +nightly fuzz run session_replay_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 256 retained corpus files (544 s); no crash, timeout or artifact. |
+| `cd fuzz && cargo +nightly fuzz run session_replay_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 256 retained corpus files (258 s on the Phase 4 revision); no crash, timeout or artifact. |
 | `cd fuzz && cargo +nightly fuzz run rtos_stateful_fuzz -- -runs=10000 -max_len=512` | PASS | 10,000 executions from the 225 retained corpus files; no crash, timeout or artifact. |
 | `cd fuzz && cargo +nightly fuzz run <ffi_aead_fuzz\|rtos_stateful_fuzz> -- -runs=500000 -max_len=512 -seed=7` | PASS | Extended campaigns: 500,000 executions each (93 s and 48 s); no crash, timeout or artifact. |
 
@@ -276,13 +337,13 @@ evidence only for its harness and duration; it is not proof of security.
 | Area | Result | Scope |
 | --- | --- | --- |
 | Unsafe code | REVIEWED | Raw pointers, FFI storage, callback conversion, stack canaries, queue payload access, and DMA byte zeroization were inspected. |
-| FFI | REVIEWED | Null and zero-length conventions, input/output/control/backing overlap checks, opaque lifecycle, alignment, callback ABI, and session-manager aliasing were inspected. The 12.3.11 audit of every `extern "C"` entry point found one missing alignment check (`encapsulate_for_peer`) and one reference-ordering hazard (`scheduler_create_task`); both are fixed with regression coverage for the former. No allocator use exists in library code (only test modules use `Box`). |
+| FFI | REVIEWED | Null and zero-length conventions, input/output/control/backing overlap checks, opaque lifecycle, alignment, callback ABI, and session-manager aliasing were inspected. The 12.3.11 audit of every `extern "C"` entry point found one missing alignment check (`encapsulate_for_peer`) and one reference-ordering hazard (`scheduler_create_task`); both are fixed with regression coverage for the former. The Phase 4 audit (section "C ABI boundary audit") found five further defects, all fixed with regression tests. No allocator use exists in library code (only test modules use `Box`). |
 | Concurrency | MODEL PASS | SPSC ownership and Acquire/Release publication were reasoned about under the Rust memory model. No formal model checker was run. |
 | DMA/cache | REVIEWED | Cache callback transitions and the limits of page alignment/atomics were inspected; hardware coherency was not tested. |
 | Crypto | REVIEWED | AEAD lengths/authentication, X25519 checks, 128-byte hybrid KDF, directional key assignment, and cleanup paths were inspected. |
 | Session/replay | REVIEWED | Authentication precedes replay-state commitment; re-establishment resets state before replacement keys are installed. |
 | Handshake | REVIEWED | Unauthenticated by design (the plain handshake): no peer identity, key confirmation, or full transcript binding; the authenticated variant adds them. A test shows tampered ciphertext or mismatched `info` is detected only at the first packet. See SECURITY.md section 10. |
-| Package hygiene | PASS | `cargo package --list` for all three crates listed 45 source/metadata files with no generated artifact paths. |
+| Package hygiene | PASS | `cargo package --list` for all three crates listed 54 source/metadata files (28, 19 and 7) with no generated artifact paths. |
 
 ## TARGET/HARDWARE VALIDATION
 
@@ -326,7 +387,7 @@ addresses, and `shawncore-pq-crypto` has only been run under Miri on its entropy
 
 ## Current Source Inventory
 
-The repository contains **184 Rust functions annotated with `#[test]`**. All 184 were
+The repository contains **199 Rust functions annotated with `#[test]`**. All 199 were
 executed and passed in the `cargo test --workspace --all-targets` runs recorded
 above.
 

@@ -11,7 +11,7 @@ cargo: cargo 1.99.1 (5f94df478 2026-08-27)
 
 Repository inventory
 --------------------
-Rust #[test] functions (source inventory): 184
+Rust #[test] functions (source inventory): 199
 Exported C symbols (header/archive parity): 138
 
 Locally verifiable release hygiene
@@ -23,17 +23,16 @@ Dependency advisories (cargo audit, root and fuzz lockfiles): PASS (none reporte
 
 Validation evidence
 -------------------
-Tests: EXECUTED — 184 tests pass in debug and release; 92 in the Lite configuration.
+Tests: EXECUTED — 199 tests pass in debug and release; 100 in the Lite configuration.
 Known-answer tests: EXECUTED — HMAC-SHA384 (RFC 4231), X25519 (RFC 7748), ChaCha20 (RFC 8439 keystream), HKDF-SHA384, hybrid KDF and AEAD framing (independently computed vectors). ML-KEM/ML-DSA: official NIST ACVP sample vectors (ML-KEM-1024 keygen/encap/decap/key checks, ML-DSA-87 keygen/verify; 120 cases), regression vectors, and byte-for-byte agreement with OpenSSL 3.5.8. No CAVP/CMVP validation.
 Cross-implementation: EXECUTED — ML-KEM-1024 keygen/encapsulation/decapsulation/implicit rejection, ML-DSA-87 keygen/deterministic signature/verification and one full session derivation agree with OpenSSL 3.5.8 / an independent Python re-implementation.
 Adversarial protocol tests: EXECUTED — 22 active-attacker tests; the unauthenticated handshake is demonstrated to be relayable by an intermediary.
 Authenticated handshake: IMPLEMENTED AND TESTED — signed-transcript design with explicit key confirmation, protocol version 2 (ARCHITECTURE.md 4.5), 16 attacker tests, unit and C-ABI tests, byte-identical to an independent OpenSSL/Python derivation (including confirmation keys and tags), 15 mutants detected. NOT formally analyzed, NOT independently reviewed.
-Mutation testing: EXECUTED — 24 deliberate faults on a disposable copy, all detected; one pre-existing gap (unobserved key wipe) found and closed.
-Spec sheet: EXECUTED — 12-test conformance suite checks the README Specifications, object sizes, header surface, test counts, platform requirement and performance table against the code and benchmark record.
+Mutation testing: EXECUTED — validation/run_mutants.py, 23 faults on a disposable copy, all detected (reproducible from the archive); an earlier set of 24 faults came from a script that was not kept.
 Platform: 64-bit with native 64-bit atomics required (compile_error! otherwise); 32-bit Cortex-M confirmed unsupported.
 ThreadSanitizer: EXECUTED — standalone SPSC/ring-buffer workload, no reported race.
 Rust AddressSanitizer: EXECUTED — shawncore-pq-crypto and shawncore-rtos-sync test targets, no report.
-Miri: PARTIAL — all 44 shawncore-rtos-sync tests and 24 shawncore-pq-crypto tests (entropy, session counters, key-wipe, FFI pointer validation) pass with symbolic-alignment checks; strict provenance is rejected by the scheduler's integer stack addresses; the lattice-heavy tests were not run under Miri.
+Miri: PARTIAL — all 48 shawncore-rtos-sync tests and 25 shawncore-pq-crypto tests (entropy, session counters, key-wipe, FFI pointer validation) pass with symbolic-alignment checks; strict provenance is rejected by the scheduler's integer stack addresses; the lattice-heavy tests were not run under Miri.
 Fuzzing: EXECUTED — four harnesses; see VALIDATION.md for per-harness campaigns and exact commands (authenticated-handshake harness: 3,000 executions).
 C authenticated handshake: EXECUTED — C smoke test through the exported functions, clean under ASan and Valgrind.
 AddressSanitizer (C smoke): EXECUTED — PASS.

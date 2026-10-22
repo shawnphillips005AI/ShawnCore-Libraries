@@ -203,3 +203,32 @@ fn rtos_ffi_layouts_match_rust_types() {
         "CacheAlignedSlot<EwCommand>",
     );
 }
+
+/// The same literals are `_Static_assert`ed against the C header structs in
+/// integration/c_api_smoke.c; together they pin the C view to the Rust view.
+#[test]
+fn c_header_struct_offsets_match_rust_types() {
+    use core::mem::offset_of;
+
+    assert_eq!(offset_of!(Tcb, entry_point), 0);
+    assert_eq!(offset_of!(Tcb, stack_base), 8);
+    assert_eq!(offset_of!(Tcb, stack_size), 16);
+    assert_eq!(offset_of!(Tcb, rsp), 24);
+    assert_eq!(offset_of!(Tcb, priority), 32);
+    assert_eq!(offset_of!(Tcb, stack_canary), 40);
+
+    assert_eq!(offset_of!(TelemetryEvent, event_id), 0);
+    assert_eq!(offset_of!(TelemetryEvent, timestamp), 8);
+    assert_eq!(offset_of!(TelemetryEvent, payload), 16);
+
+    assert_eq!(core::mem::size_of::<EwCommand>(), 24);
+    assert_eq!(core::mem::align_of::<EwCommand>(), 8);
+    assert_eq!(offset_of!(EwCommand, mode), 0);
+    assert_eq!(offset_of!(EwCommand, target_freq), 8);
+    assert_eq!(offset_of!(EwCommand, target_bw), 16);
+
+    assert_eq!(offset_of!(FftResult, snr_db), 0);
+    assert_eq!(offset_of!(FftResult, center_freq), 8);
+    assert_eq!(offset_of!(FftResult, bandwidth), 16);
+    assert_eq!(offset_of!(FftResult, timestamp), 24);
+}

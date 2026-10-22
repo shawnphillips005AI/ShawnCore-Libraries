@@ -421,7 +421,7 @@ pub unsafe extern "C" fn shawncore_rtos_dmapool2k_init(
     size_in_bytes: usize,
 ) -> ShawncoreRtosErr {
     if pool.is_null()
-        || !valid_dma_region(memory_base, size_in_bytes, 256)
+        || !valid_dma_region(memory_base.cast::<[u8; 2048]>(), size_in_bytes, 256)
         || object_overlaps_backing(pool, memory_base, size_in_bytes)
     {
         return ShawncoreRtosErr::InvalidMemory;
@@ -1468,5 +1468,203 @@ mod ffi_security_tests {
             unsafe { shawncore_rtos_spsc_fft_destroy(fft) },
             ShawncoreRtosErr::Success
         );
+    }
+}
+
+/// Argument rejection, documented fallbacks and success-only outputs of the RTOS C ABI.
+#[cfg(test)]
+mod boundary_contract_tests {
+    use super::*;
+    use crate::ffi_callbacks::{
+        shawncore_rtos_register_cache_flush, shawncore_rtos_register_cache_invalidate,
+    };
+    use core::mem::MaybeUninit;
+    use std::boxed::Box;
+
+    extern "C" fn no_op(_: *const u8, _: usize) {}
+
+    fn install_callbacks() {
+        unsafe {
+            shawncore_rtos_register_cache_flush(Some(no_op));
+            shawncore_rtos_register_cache_invalidate(Some(no_op));
+        }
+    }
+
+    #[repr(align(4096))]
+    struct Page16K([u8; 16384]);
+
+    #[repr(align(4096))]
+    struct DmaBacking([u8; 256 * 2048]);
+
+    #[test]
+    fn null_and_misaligned_arguments_are_rejected_with_the_documented_codes() {
+        let raw = [0u8; 8];
+        let odd = raw.as_ptr().wrapping_add(1);
+        let invalid = ShawncoreRtosErr::InvalidMemory;
+
+        assert_eq!(
+            unsafe { shawncore_rtos_scheduler_init(core::ptr::null_mut()) },
+            invalid
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_scheduler_init(odd.cast::<PerCoreScheduler>().cast_mut()) },
+            invalid
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_state_machine_init(core::ptr::null_mut()) },
+            invalid
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_latency_tracker_mark_start(core::ptr::null(), 1) },
+            invalid
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_state_machine_try_advance(core::ptr::null(), 0) },
+            invalid
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_rtos_dmapool2k_allocate(
+                    core::ptr::null(),
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                    core::ptr::null_mut(),
+                )
+            },
+            invalid
+        );
+        // Functions that return a value rather than a status fall back instead of dereferencing.
+        assert_eq!(unsafe { shawncore_rtos_tcb_get_rsp(core::ptr::null()) }, 0);
+        assert_eq!(unsafe { shawncore_rtos_tcb_get_rsp(odd.cast::<Tcb>()) }, 0);
+        assert_eq!(
+            unsafe { shawncore_rtos_scheduler_tick(core::ptr::null_mut(), 0x1234) },
+            0x1234
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_rtos_scheduler_tick(odd.cast::<PerCoreScheduler>().cast_mut(), 0x1234)
+            },
+            0x1234
+        );
+    }
+
+    #[test]
+    fn invalid_values_are_rejected_without_changing_a_live_object() {
+        let mut scheduler = MaybeUninit::<PerCoreScheduler>::uninit();
+        assert_eq!(
+            unsafe { shawncore_rtos_scheduler_init(scheduler.as_mut_ptr()) },
+            ShawncoreRtosErr::Success
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_scheduler_task_check_in(scheduler.as_mut_ptr(), 16) },
+            ShawncoreRtosErr::InvalidMemory
+        );
+        let mut machine = MaybeUninit::<StateMachine>::uninit();
+        assert_eq!(
+            unsafe { shawncore_rtos_state_machine_init(machine.as_mut_ptr()) },
+            ShawncoreRtosErr::Success
+        );
+        assert_eq!(
+            unsafe { shawncore_rtos_state_machine_try_advance(machine.as_ptr(), 5) },
+            ShawncoreRtosErr::InvalidState
+        );
+        assert_eq!(
+            unsafe {
+                shawncore_rtos_tcb_new(0, 0, 0, 0, 0, MaybeUninit::<Tcb>::uninit().as_mut_ptr())
+            },
+            ShawncoreRtosErr::TaskFault,
+            "a zero entry point is refused"
+        );
+    }
+
+    #[test]
+    fn an_absurd_backing_size_is_rejected_and_the_control_object_is_untouched() {
+        let mut backing = Box::new(DmaBacking([0; 256 * 2048]));
+        let mut control = MaybeUninit::<DmaPool2K>::uninit();
+        unsafe {
+            core::ptr::write_bytes(
+                control.as_mut_ptr().cast::<u8>(),
+                0xA5,
+                core::mem::size_of::<DmaPool2K>(),
+            )
+        };
+        let base = backing.0.as_mut_ptr();
+
+        // The control object is aligned and disjoint, so only the size can cause the rejection.
+        for size in [usize::MAX, 256 * 2048 - 1, 0] {
+            let status = unsafe { shawncore_rtos_dmapool2k_init(control.as_mut_ptr(), base, size) };
+            assert_eq!(status, ShawncoreRtosErr::InvalidMemory, "size {size}");
+        }
+        let after = unsafe {
+            core::slice::from_raw_parts(
+                control.as_ptr().cast::<u8>(),
+                core::mem::size_of::<DmaPool2K>(),
+            )
+        };
+        assert!(
+            after.iter().all(|&byte| byte == 0xA5),
+            "no partial initialization"
+        );
+    }
+
+    #[test]
+    fn exhausted_allocation_and_empty_pop_leave_their_outputs_unchanged() {
+        install_callbacks();
+        let mut backing = Box::new(DmaBacking([0; 256 * 2048]));
+        let mut pool = Box::new(MaybeUninit::<DmaPool2K>::uninit());
+        assert_eq!(
+            unsafe {
+                shawncore_rtos_dmapool2k_init(
+                    pool.as_mut_ptr(),
+                    backing.0.as_mut_ptr(),
+                    backing.0.len(),
+                )
+            },
+            ShawncoreRtosErr::Success
+        );
+        let (mut index, mut generation, mut buffer) = (0usize, 0u64, core::ptr::null_mut::<u8>());
+        for _ in 0..256 {
+            assert_eq!(
+                unsafe {
+                    shawncore_rtos_dmapool2k_allocate(
+                        pool.as_ptr(),
+                        &mut index,
+                        &mut generation,
+                        &mut buffer,
+                    )
+                },
+                ShawncoreRtosErr::Success
+            );
+        }
+        let (mut i, mut g, mut b) = (0xDEAD_usize, 0xBEEF_u64, 0x10 as *mut u8);
+        assert_ne!(
+            unsafe { shawncore_rtos_dmapool2k_allocate(pool.as_ptr(), &mut i, &mut g, &mut b) },
+            ShawncoreRtosErr::Success
+        );
+        assert_eq!((i, g, b as usize), (0xDEAD, 0xBEEF, 0x10));
+
+        let mut slots = Box::new(Page16K([0; 16384]));
+        let slot_bytes = 64 * core::mem::size_of::<SpscQueueTelemetrySlot>();
+        assert!(slot_bytes <= slots.0.len());
+        let mut queue = Box::new(MaybeUninit::<SpscQueueTelemetry>::uninit());
+        assert_eq!(
+            unsafe {
+                shawncore_rtos_spsc_telemetry_init(
+                    queue.as_mut_ptr(),
+                    slots.0.as_mut_ptr().cast(),
+                    slot_bytes,
+                )
+            },
+            ShawncoreRtosErr::Success
+        );
+        let mut event = TelemetryEvent {
+            event_id: 0xA5A5,
+            ..TelemetryEvent::default()
+        };
+        assert_eq!(
+            unsafe { shawncore_rtos_spsc_telemetry_pop(queue.as_ptr(), &mut event) },
+            ShawncoreRtosErr::QueueEmpty
+        );
+        assert_eq!(event.event_id, 0xA5A5);
     }
 }

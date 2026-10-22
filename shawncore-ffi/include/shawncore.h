@@ -12,8 +12,9 @@
  * Host code owns pointer validity, storage lifetime, callback lifetime, and
  * platform cache/DMA maintenance.
  *
- * A pointer paired with a zero length may be NULL; all other data pointers
- * must be non-NULL, correctly aligned, and valid for the complete call.
+ * A pointer paired with a zero length may be NULL, and a zero-length range is
+ * never treated as overlapping anything; all other data pointers must be
+ * non-NULL, correctly aligned, and valid for the complete call.
  * Unless a function explicitly states otherwise, input, output, opaque-control,
  * and backing-storage ranges must be mutually non-overlapping. Queue and DMA
  * initializers require separate control-object and backing-storage allocations.
@@ -21,7 +22,47 @@
  * callbacks only while no operation can invoke them. Registered callbacks must
  * remain valid until all possible invocations have stopped; they must not
  * unwind, throw, longjmp, re-enter a ShawnCore function, or otherwise escape
- * through Rust.
+ * through Rust. Registration publishes only the function pointer: the library
+ * keeps no callback context and cannot extend the lifetime of the code, so
+ * quiescence is the host's duty. Each library (shawncore_crypto_*, shawncore_rtos_*)
+ * has its own registry; register what each one needs. A required callback that is
+ * missing halts the caller after invoking that library's panic hook.
+ * The cache-flush callback is never invoked with a zero-length range.
+ *
+ * What the library can and cannot check. It rejects NULL, misalignment, lengths
+ * outside the limits below, and overlapping ranges, using checked arithmetic. It
+ * cannot tell whether a non-NULL address is mapped, live, initialized, or large
+ * enough: that is the caller's guarantee, and the library never reads or writes
+ * beyond the length it is given. An address range that wraps the address space is
+ * rejected as overlapping.
+ *
+ * Length limits (checked before any memory is read or any cryptography runs;
+ * violation returns *_INVALID_LENGTH and changes nothing):
+ *   - every pointer+length pair: length <= PTRDIFF_MAX (INTPTR_MAX), the largest
+ *     range a Rust slice, or a C object, may have. The caller owns that much valid
+ *     memory whenever the length is nonzero.
+ *   - packet and AEAD data_len: <= 64 * (2^32 - 1) bytes, the ChaCha20 limit for
+ *     one key and nonce. aad_len has no cryptographic limit beyond the above.
+ *   - app_info_len (authenticated handshake): <= UINT32_MAX, the width of its
+ *     transcript length prefix.
+ *   - hkdf_expand_sha384 out_len: up to 255 * 48 = 12240 bytes succeeds; a longer
+ *     request fails with HKDF_ERROR and the output is zeroed. salt, info and msg
+ *     lengths have no protocol limit; processing time is linear in them.
+ *
+ * Error codes. A NULL or misaligned object pointer returns INVALID_STATE (crypto) or
+ * INVALID_MEMORY (rtos). A NULL data pointer paired with a nonzero length returns
+ * INVALID_STATE from hmac, hkdf, ml_dsa sign/verify and for the plaintext, ciphertext and tag
+ * of the raw aead functions, and INVALID_LENGTH for aad and for the handshake salt, info and
+ * app_info. The session
+ * packet functions are the exception: they return INVALID_LENGTH for every rejected argument,
+ * including a NULL or misaligned manager. Overlap, a length outside the limits above, and an
+ * address range that wraps the address space are INVALID_LENGTH everywhere. Functions that
+ * return a value instead of a status return 0 (rtos tcb_get_rsp) or the caller's rsp unchanged
+ * (rtos scheduler_tick) for a NULL or misaligned argument. An output is defined only after
+ * SUCCESS, with two deliberate exceptions: an authenticated decrypt, session or raw, that
+ * fails MAC verification overwrites the plaintext buffer with zeros, and an oversized hkdf
+ * request zeroes its output. A decrypt rejected earlier (no session, replayed or out-of-window
+ * nonce, bad length) leaves the plaintext buffer untouched.
  */
 
 #include <stddef.h>
@@ -198,7 +239,7 @@ size_t shawncore_crypto_ml_dsa_signingkey_alignof(void);
 size_t shawncore_crypto_ml_dsa_signature_sizeof(void);
 size_t shawncore_crypto_ml_dsa_signature_alignof(void);
 shawncore_crypto_err shawncore_crypto_ml_dsa_keygen(
-    const uint8_t *seed,
+    const uint8_t seed[SHAWNCORE_MIN_LEN(32)],
     shawncore_crypto_ml_dsa_publickey *out_pk,
     shawncore_crypto_ml_dsa_signingkey *out_sk);
 shawncore_crypto_err shawncore_crypto_ml_dsa_signingkey_destroy(shawncore_crypto_ml_dsa_signingkey *sk);

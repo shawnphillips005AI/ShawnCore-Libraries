@@ -75,6 +75,11 @@ EXPECTED_FEATURES="default, fast-x25519, lite, ml-dsa"
 
 # 7. Compile the FFI Lite profile explicitly. This catches stale ML-DSA symbols
 #    or feature-forwarding mistakes even when the default build is healthy.
+step "release-profile tests and rustdoc"
+cargo test --workspace --all-targets --release --locked
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --locked
+pass "release-profile tests and rustdoc"
+
 step "Lite FFI check"
 cargo check -p shawncore-ffi --no-default-features --features lite --locked
 pass "Lite FFI check"
@@ -121,8 +126,17 @@ step "archive checks"
 bash "$ROOT/validation/check_archive.sh"
 pass "archive checks"
 
+step "header signatures"
+python3 "$ROOT/validation/check_header_signatures.py"
+pass "header signatures"
+
 step "C and C++ integration"
-make -C "$ROOT/integration" syntax run cxx
+make -C "$ROOT/integration" syntax run cxx asan
+if command -v valgrind >/dev/null 2>&1; then
+    make -C "$ROOT/integration" valgrind
+else
+    step "Valgrind SKIPPED (valgrind not installed)"
+fi
 pass "C and C++ integration"
 
 # 9. Check the gate itself before declaring success.
